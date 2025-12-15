@@ -12,9 +12,6 @@ use std::sync::Arc;
 #[cfg(feature = "extension-module")]
 pub mod python_bindings;
 
-// FFI bindings
-pub mod ffi;
-
 pub fn convert_csf_text_to_parquet(
     csfs_path: &Path,
     output_path: &Path,

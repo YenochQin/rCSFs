@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 
-pub fn convert_csf_text_to_parquet(
+pub fn convert_csfs_to_parquet(
     csfs_path: &Path,
     output_path: &Path,
     max_line_len: usize,

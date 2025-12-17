@@ -2,14 +2,21 @@ use pyo3::prelude::*;
 use pyo3::exceptions::{PyValueError, PyIOError};
 use pyo3::types::{PyDict, PyDictMethods};
 use std::path::Path;
+use std::io::{BufRead, BufReader};
 
-mod convert_csfs;
+mod csfs_conversion;
 
 #[pymodule]
 fn _csfs_loader(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(convert_csf_text_to_parquet, m)?)?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add_function(wrap_pyfunction!(convert_csfs_to_parquet, m)?)?;
     m.add_function(wrap_pyfunction!(get_parquet_metadata, m)?)?;
     m.add_class::<CSFProcessor>()?;
+
+    // Add the new functions defined in .pyi
+    m.add_function(wrap_pyfunction!(convert_csfs, m)?)?;
+    m.add_function(wrap_pyfunction!(csfs_header, m)?)?;
+
     Ok(())
 }
 
@@ -30,7 +37,7 @@ fn _csfs_loader(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// - output_file: 输出文件路径
 /// - header_file: 头部文件路径
 #[pyfunction]
-fn convert_csf_text_to_parquet(
+fn convert_csfs_to_parquet(
     py: Python,
     input_path: String,
     output_path: String,
@@ -51,7 +58,7 @@ fn convert_csf_text_to_parquet(
 
     // 执行转换
     let result = py.detach(|| {
-        convert_csfs::convert_csf_text_to_parquet(
+        csfs_conversion::convert_csfs_to_parquet(
             Path::new(&input_path),
             Path::new(&output_path),
             max_line_len,
@@ -100,7 +107,7 @@ fn get_parquet_metadata(
     input_path: String,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     py.detach(|| {
-        convert_csfs::get_parquet_metadata(Path::new(&input_path))
+        csfs_conversion::get_parquet_metadata(Path::new(&input_path))
             .map_err(|e| PyIOError::new_err(format!("获取 Parquet 文件信息失败: {}", e)))
     })
 }
@@ -165,7 +172,7 @@ impl CSFProcessor {
 
     /// 转换 CSF 文件
     fn convert(&self, py: Python, input_path: String, output_path: String) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-        convert_csf_text_to_parquet(
+        convert_csfs_to_parquet(
             py,
             input_path,
             output_path,
@@ -177,5 +184,60 @@ impl CSFProcessor {
     /// 获取 Parquet 文件元数据
     fn get_metadata(&self, py: Python, input_path: String) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         get_parquet_metadata(py, input_path)
+    }
+}
+
+/// 简化的 CSF 转换函数（与 .pyi 中定义的接口匹配）
+#[pyfunction]
+fn convert_csfs(
+    py: Python,
+    input_path: String,
+    output_path: String,
+    max_line_len: Option<usize>,
+    chunk_size: Option<usize>,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    convert_csfs_to_parquet(py, input_path, output_path, max_line_len, chunk_size)
+}
+
+/// 提取 CSF 文件头部的函数
+#[pyfunction]
+fn csfs_header(
+    py: Python,
+    input_path: String,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    // 读取文件头部（前5行）
+    match std::fs::File::open(&input_path) {
+        Ok(file) => {
+            let reader = BufReader::new(file);
+            let mut lines = Vec::new();
+
+            for (i, line_result) in reader.lines().take(5).enumerate() {
+                match line_result {
+                    Ok(line) => lines.push(line),
+                    Err(e) => {
+                        return Err(PyIOError::new_err(
+                            format!("Error reading line {}: {}", i + 1, e)
+                        ));
+                    }
+                }
+            }
+
+            // 创建结果字典
+            let dict = PyDict::new(py);
+            dict.set_item("header_lines", lines.len())?;
+            dict.set_item("file_path", &input_path)?;
+
+            // 添加每一行到结果中
+            for (i, line) in lines.iter().enumerate() {
+                dict.set_item(format!("line{}", i + 1), line)?;
+            }
+
+            Ok(dict.into())
+        }
+        Err(e) => {
+            Err(PyIOError::new_err(
+                format!("Failed to open file {}: {}", input_path, e)
+            ))
+        }
     }
 }

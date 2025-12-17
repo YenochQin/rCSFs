@@ -42,6 +42,6 @@ lint = [
 ]
 
 [tool.maturin]
-bindings = "pyo3"
+python-source = "python"
 module-name = "csfs_loader._csfs_loader"
 features = ["pyo3/extension-module", "pyo3/generate-import-lib"]

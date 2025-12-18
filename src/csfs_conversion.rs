@@ -6,16 +6,381 @@ use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
+use toml;
+use std::thread;
+use std::sync::Mutex;
+use crossbeam_channel::{bounded, Sender, Receiver};
 
+#[derive(Serialize, Deserialize, Debug)]
+struct HeaderInfo {
+    header_lines: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ConversionStats {
+    pub csf_count: usize,
+    pub total_lines: usize,
+    pub truncated_count: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct HeaderData {
+    header_info: HeaderInfo,
+    conversion_stats: ConversionStats,
+}
+
+#[derive(Debug, Clone)]
+struct ProcessedChunk {
+    chunk_id: usize,
+    line1_values: Vec<String>,
+    line2_values: Vec<String>,
+    line3_values: Vec<String>,
+    csf_count: usize,
+    line_count: usize,
+    truncated_count: usize,
+}
+
+#[derive(Debug)]
+struct WorkChunk {
+    chunk_id: usize,
+    lines: Vec<String>,
+}
+
+
+pub fn convert_csfs_to_parquet_parallel(
+    csfs_path: &Path,
+    output_path: &Path,
+    max_line_len: usize,
+    chunk_size: usize,
+    num_workers: Option<usize>,
+) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
+    let num_workers = num_workers.unwrap_or_else(|| num_cpus::get());
+    let queue_size = num_workers * 2; // Bounded queue to prevent memory explosion
+
+    println!("启动并行处理: {} 个工作线程, 队列大小: {}", num_workers, queue_size);
+    println!("输入文件: {:?}", csfs_path);
+    println!("输出文件: {:?}", output_path);
+
+    // 创建通信通道
+    let (work_sender, work_receiver) = bounded(queue_size);
+    let (result_sender, result_receiver) = bounded(queue_size);
+
+    // 统计信息 (使用 Mutex 保证线程安全)
+    let total_stats = Arc::new(Mutex::new(ConversionStats {
+        csf_count: 0,
+        total_lines: 0,
+        truncated_count: 0,
+    }));
+
+    // --- 1. 读取 Header (5行) ---
+    let input_file = File::open(csfs_path)?;
+    let reader = BufReader::new(input_file);
+    let mut lines_iter = reader.lines();
+
+    let mut headers = Vec::with_capacity(5);
+    println!("读取 Header...");
+    for i in 0..5 {
+        match lines_iter.next() {
+            Some(Ok(line)) => {
+                headers.push(line);
+                println!("  Header {}: {} 字符", i + 1, headers.last().unwrap().len());
+            }
+            Some(Err(e)) => return Err(e.into()),
+            None => {
+                println!("警告: 文件少于 5 行 Header");
+                break;
+            }
+        }
+    }
+
+    // 确保 headers 有 5 行，不足的用空字符串填充
+    while headers.len() < 5 {
+        headers.push(String::new());
+    }
+
+    // --- 2. 启动工作线程 ---
+    let mut worker_handles = Vec::new();
+    for worker_id in 0..num_workers {
+        let work_receiver = work_receiver.clone();
+        let result_sender = result_sender.clone();
+        let max_line_len = max_line_len;
+
+        let handle = thread::spawn(move || {
+            worker_process(work_id, work_receiver, result_sender, max_line_len);
+        });
+
+        worker_handles.push(handle);
+    }
+
+    // Drop sender copies for worker threads
+    drop(work_sender);
+    drop(result_sender);
+
+    // --- 3. 启动文件读取线程 ---
+    let reader_thread = thread::spawn({
+        let work_sender = work_sender;
+        let csfs_path = csfs_path.to_owned();
+        move || {
+            file_reader_thread(csfs_path, chunk_size, work_sender)
+        }
+    });
+
+    // --- 4. 启动写入线程 ---
+    let writer_thread = thread::spawn({
+        let result_receiver = result_receiver;
+        let output_path = output_path.to_owned();
+        let total_stats = total_stats.clone();
+        move || {
+            writer_thread(result_receiver, output_path, total_stats)
+        }
+    });
+
+    // --- 5. 等待所有线程完成 ---
+    reader_thread.join().unwrap()?;
+
+    for handle in worker_handles {
+        handle.join().unwrap();
+    }
+
+    let final_stats = writer_thread.join().unwrap()?;
+
+    // --- 6. 创建 TOML 头部文件 ---
+    let header_data = HeaderData {
+        header_info: HeaderInfo {
+            header_lines: headers,
+        },
+        conversion_stats: final_stats.clone(),
+    };
+
+    let header_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let header_path = header_dir.join("csfs_header.toml");
+    let toml_string = toml::to_string_pretty(&header_data)?;
+    std::fs::write(&header_path, toml_string)?;
+
+    println!("\n并行转换完成！");
+    println!("================ 最终统计 ================");
+    println!("总行数: {}", final_stats.total_lines);
+    println!("CSF 数量: {}", final_stats.csf_count);
+    println!("截断行数: {}", final_stats.truncated_count);
+    println!("输出文件: {:?}", output_path);
+    println!("Header 文件: {:?}", header_path);
+    println!("==========================================");
+
+    Ok(final_stats)
+}
+
+// 工作线程函数
+fn worker_process(
+    worker_id: usize,
+    work_receiver: Receiver<WorkChunk>,
+    result_sender: Sender<ProcessedChunk>,
+    max_line_len: usize,
+) {
+    for work_chunk in work_receiver {
+        let mut line1_values = Vec::with_capacity(work_chunk.lines.len() / 3);
+        let mut line2_values = Vec::with_capacity(work_chunk.lines.len() / 3);
+        let mut line3_values = Vec::with_capacity(work_chunk.lines.len() / 3);
+        let mut csf_count = 0;
+        let mut truncated_count = 0;
+
+        // 处理行，确保是 3 的倍数
+        let full_csfs = work_chunk.lines.len() / 3;
+        for chunk in work_chunk.lines.chunks(3) {
+            if chunk.len() == 3 {
+                // 处理每一行
+                let process_line = |line: &str| -> (String, bool) {
+                    if line.len() > max_line_len {
+                        let truncated = line.chars().take(max_line_len).collect::<String>();
+                        (truncated, true)
+                    } else {
+                        (line.to_string(), false)
+                    }
+                };
+
+                let (line1, trunc1) = process_line(&chunk[0]);
+                let (line2, trunc2) = process_line(&chunk[1]);
+                let (line3, trunc3) = process_line(&chunk[2]);
+
+                line1_values.push(line1);
+                line2_values.push(line2);
+                line3_values.push(line3);
+
+                if trunc1 || trunc2 || trunc3 {
+                    truncated_count += 1;
+                }
+
+                csf_count += 1;
+            }
+        }
+
+        let processed_chunk = ProcessedChunk {
+            chunk_id: work_chunk.chunk_id,
+            line1_values,
+            line2_values,
+            line3_values,
+            csf_count,
+            line_count: work_chunk.lines.len(),
+            truncated_count,
+        };
+
+        result_sender.send(processed_chunk).unwrap();
+    }
+}
+
+// 文件读取线程函数
+fn file_reader_thread(
+    csfs_path: PathBuf,
+    chunk_size: usize,
+    work_sender: Sender<WorkChunk>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let input_file = File::open(&csfs_path)?;
+    let reader = BufReader::new(input_file);
+    let mut lines_iter = reader.lines();
+
+    // 跳过前 5 行 header
+    for _ in 0..5 {
+        if lines_iter.next().is_none() {
+            break;
+        }
+    }
+
+    let mut chunk_id = 0;
+    let mut chunk_lines = Vec::with_capacity(chunk_size);
+
+    println!("开始并行读取 CSF 数据...");
+
+    for line_result in lines_iter {
+        match line_result {
+            Ok(line) => {
+                chunk_lines.push(line);
+
+                if chunk_lines.len() >= chunk_size {
+                    // 发送当前块
+                    let work_chunk = WorkChunk {
+                        chunk_id,
+                        lines: chunk_lines.clone(),
+                    };
+
+                    work_sender.send(work_chunk)?;
+                    chunk_lines.clear();
+                    chunk_id += 1;
+
+                    if chunk_id % 100 == 0 {
+                        println!("已发送 {} 个数据块", chunk_id);
+                    }
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    // 发送剩余的行
+    if !chunk_lines.is_empty() {
+        let work_chunk = WorkChunk {
+            chunk_id,
+            lines: chunk_lines,
+        };
+        work_sender.send(work_chunk)?;
+    }
+
+    println!("文件读取完成，共发送 {} 个数据块", chunk_id + 1);
+    Ok(())
+}
+
+// 写入线程函数
+fn writer_thread(
+    result_receiver: Receiver<ProcessedChunk>,
+    output_path: PathBuf,
+    total_stats: Arc<Mutex<ConversionStats>>,
+) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
+    // 创建 Arrow Schema
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("line1", DataType::Utf8, false),
+        Field::new("line2", DataType::Utf8, false),
+        Field::new("line3", DataType::Utf8, false),
+    ]));
+
+    // 创建 Parquet 写入器
+    let output_file = File::create(&output_path)?;
+    let props = WriterProperties::builder()
+        .set_compression(parquet::basic::Compression::GZIP(
+            parquet::basic::GzipLevel::try_new(4)?
+        ))
+        .build();
+
+    let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
+
+    // 使用有序写入缓冲区
+    let mut write_buffer = std::collections::HashMap::new();
+    let mut next_chunk_id = 0;
+
+    println!("开始有序写入 Parquet 文件...");
+
+    for processed_chunk in result_receiver {
+        write_buffer.insert(processed_chunk.chunk_id, processed_chunk);
+
+        // 按顺序写入连续的块
+        while let Some(chunk) = write_buffer.remove(&next_chunk_id) {
+            // 创建 Arrow 数组
+            let mut line1_builder = StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * 256);
+            let mut line2_builder = StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * 256);
+            let mut line3_builder = StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * 256);
+
+            for i in 0..chunk.csf_count {
+                line1_builder.append_value(&chunk.line1_values[i]);
+                line2_builder.append_value(&chunk.line2_values[i]);
+                line3_builder.append_value(&chunk.line3_values[i]);
+            }
+
+            // 构建 RecordBatch
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(line1_builder.finish()),
+                    Arc::new(line2_builder.finish()),
+                    Arc::new(line3_builder.finish()),
+                ],
+            )?;
+
+            // 写入 Parquet
+            writer.write(&batch)?;
+
+            // 更新统计信息
+            {
+                let mut stats = total_stats.lock().unwrap();
+                stats.csf_count += chunk.csf_count;
+                stats.total_lines += chunk.line_count;
+                stats.truncated_count += chunk.truncated_count;
+            }
+
+            next_chunk_id += 1;
+
+            if next_chunk_id % 50 == 0 {
+                let stats = total_stats.lock().unwrap();
+                println!("已写入 {} 个数据块, {} 个 CSF", next_chunk_id, stats.csf_count);
+            }
+        }
+    }
+
+    // 完成写入
+    writer.close()?;
+
+    // 返回最终统计信息
+    let stats = total_stats.lock().unwrap().clone();
+    println!("Parquet 写入完成，共写入 {} 个数据块", next_chunk_id);
+
+    Ok(stats)
+}
 
 pub fn convert_csfs_to_parquet(
     csfs_path: &Path,
     output_path: &Path,
     max_line_len: usize,
     chunk_size: usize,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
     println!("开始转换，最大行长度: {}", max_line_len);
     println!("输入文件: {:?}", csfs_path);
     println!("输出文件: {:?}", output_path);
@@ -41,11 +406,11 @@ pub fn convert_csfs_to_parquet(
             }
         }
     }
-    
-    // 保存 headers 到单独的文件
-    let header_path = output_path.with_extension("headers.txt");
-    std::fs::write(&header_path, headers.join("\n"))?;
-    println!("Header 已保存到: {:?}", header_path);
+
+    // 确保 headers 有 5 行，不足的用空字符串填充
+    while headers.len() < 5 {
+        headers.push(String::new());
+    }
 
     // --- 2. 创建 Arrow Schema ---
     let schema = Arc::new(Schema::new(vec![
@@ -151,7 +516,25 @@ pub fn convert_csfs_to_parquet(
 
     // 完成写入
     writer.close()?;
-    
+
+    // 创建 TOML 头部数据
+    let header_data = HeaderData {
+        header_info: HeaderInfo {
+            header_lines: headers.clone(),
+        },
+        conversion_stats: ConversionStats {
+            csf_count,
+            total_lines,
+            truncated_count,
+        },
+    };
+
+    // 保存头部数据为 csfs_header.toml 文件
+    let header_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let header_path = header_dir.join("csfs_header.toml");
+    let toml_string = toml::to_string_pretty(&header_data)?;
+    std::fs::write(&header_path, toml_string)?;
+
     // 统计信息
     println!("\n转换完成！");
     println!("================ 统计信息 ================");
@@ -165,7 +548,7 @@ pub fn convert_csfs_to_parquet(
     println!("Header 文件: {:?}", header_path);
     println!("==========================================");
 
-    Ok(())
+    Ok(header_data.conversion_stats)
 }
 
 /// 获取 Parquet 文件基本信息（仅元数据）

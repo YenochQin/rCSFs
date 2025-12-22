@@ -57,8 +57,8 @@ def convert_csfs(
         Dictionary containing conversion statistics and status
     """
     return _csfs_loader.convert_csfs(
-        input_path=input_path,
-        output_path=output_path,
+        input_path=str(input_path),
+        output_path=str(output_path),
         max_line_len=max_line_len,
         chunk_size=chunk_size
     )
@@ -73,7 +73,7 @@ def csfs_header(input_path: str | Path) -> HeaderInfo:
     Returns:
         Header information from the CSF file
     """
-    return _csfs_loader.csfs_header(input_path=input_path)
+    return _csfs_loader.csfs_header(input_path=str(input_path))
 
 def convert_csfs_parallel(
     input_path: str | Path,
@@ -106,8 +106,8 @@ def convert_csfs_parallel(
         - Automatic worker count optimization
     """
     return _csfs_loader.convert_csfs_parallel(
-        input_path=input_path,
-        output_path=output_path,
+        input_path=str(input_path),
+        output_path=str(output_path),
         max_line_len=max_line_len,
         chunk_size=chunk_size,
         num_workers=num_workers

@@ -3,7 +3,7 @@
 !.pixi/config.toml
 pixi.lock
 # Added by cargo
-
+Cargo.lock
 # 编译产物
 /target/
 **/*.so

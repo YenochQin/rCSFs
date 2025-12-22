@@ -158,7 +158,7 @@ impl CSFProcessor {
 /// - error: 错误信息（仅在失败时存在）
 ///
 /// 头部文件格式:
-/// 自动生成 .csfs_header.toml 文件，包含:
+/// 自动生成 [输入文件名前缀]_header.toml 文件，包含:
 /// - header_info: 包含 header_lines 子属性
 ///   - header_lines: 头部行内容列表
 /// - conversion_stats: 转换统计信息
@@ -205,9 +205,13 @@ fn convert_csfs(
             stats.set_item("total_lines", conversion_stats.total_lines)?;
             stats.set_item("truncated_count", conversion_stats.truncated_count)?;
 
-            // 尝试读取 csfs_header.toml 文件路径
+            // 尝试读取 [输入文件名前缀]_header.toml 文件路径
             let output_dir = Path::new(&output_path).parent().unwrap_or_else(|| Path::new("."));
-            let header_path = output_dir.join("csfs_header.toml");
+            let input_file_stem = Path::new(&input_path).file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("csfs");
+            let header_filename = format!("{}_header.toml", input_file_stem);
+            let header_path = output_dir.join(header_filename);
             if header_path.exists() {
                 stats.set_item("header_file", header_path.to_string_lossy())?;
             }
@@ -308,9 +312,13 @@ fn convert_csfs_parallel(
             stats.set_item("total_lines", conversion_stats.total_lines)?;
             stats.set_item("truncated_count", conversion_stats.truncated_count)?;
 
-            // 尝试读取 csfs_header.toml 文件路径
+            // 尝试读取 [输入文件名前缀]_header.toml 文件路径
             let output_dir = Path::new(&output_path).parent().unwrap_or_else(|| Path::new("."));
-            let header_path = output_dir.join("csfs_header.toml");
+            let input_file_stem = Path::new(&input_path).file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("csfs");
+            let header_filename = format!("{}_header.toml", input_file_stem);
+            let header_path = output_dir.join(header_filename);
             if header_path.exists() {
                 stats.set_item("header_file", header_path.to_string_lossy())?;
             }

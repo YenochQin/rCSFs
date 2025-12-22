@@ -1,4 +1,4 @@
-use arrow::array::StringBuilder;
+use arrow::array::{StringBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
@@ -35,6 +35,7 @@ struct HeaderData {
 #[derive(Debug, Clone)]
 struct ProcessedChunk {
     start_csf_index: usize,
+    idx_values: Vec<u64>,
     line1_values: Vec<String>,
     line2_values: Vec<String>,
     line3_values: Vec<String>,
@@ -157,8 +158,13 @@ pub fn convert_csfs_to_parquet_parallel(
         conversion_stats: final_stats.clone(),
     };
 
+    // 使用输入文件名的前缀 + _header.toml
     let header_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
-    let header_path = header_dir.join("csfs_header.toml");
+    let input_file_stem = csfs_path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("csfs");
+    let header_filename = format!("{}_header.toml", input_file_stem);
+    let header_path = header_dir.join(header_filename);
     let toml_string = toml::to_string_pretty(&header_data)?;
     std::fs::write(&header_path, toml_string)?;
 
@@ -182,6 +188,7 @@ fn worker_process(
     max_line_len: usize,
 ) {
     for work_chunk in work_receiver {
+        let mut idx_values = Vec::with_capacity(work_chunk.lines.len() / 3);
         let mut line1_values = Vec::with_capacity(work_chunk.lines.len() / 3);
         let mut line2_values = Vec::with_capacity(work_chunk.lines.len() / 3);
         let mut line3_values = Vec::with_capacity(work_chunk.lines.len() / 3);
@@ -206,6 +213,7 @@ fn worker_process(
                 let (line2, trunc2) = process_line(&chunk[1]);
                 let (line3, trunc3) = process_line(&chunk[2]);
 
+                idx_values.push((work_chunk.start_csf_index + csf_count) as u64);
                 line1_values.push(line1);
                 line2_values.push(line2);
                 line3_values.push(line3);
@@ -220,6 +228,7 @@ fn worker_process(
 
         let processed_chunk = ProcessedChunk {
             start_csf_index: work_chunk.start_csf_index,
+            idx_values,
             line1_values,
             line2_values,
             line3_values,
@@ -321,6 +330,7 @@ fn writer_thread(
 ) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
     // 创建 Arrow Schema
     let schema = Arc::new(Schema::new(vec![
+        Field::new("idx", DataType::UInt64, false),
         Field::new("line1", DataType::Utf8, false),
         Field::new("line2", DataType::Utf8, false),
         Field::new("line3", DataType::Utf8, false),
@@ -352,11 +362,13 @@ fn writer_thread(
                 write_buffer.remove(&start_index);
 
                 // 创建 Arrow 数组
+                let mut idx_builder = UInt64Builder::with_capacity(chunk.csf_count);
                 let mut line1_builder = StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * 256);
                 let mut line2_builder = StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * 256);
                 let mut line3_builder = StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * 256);
 
                 for i in 0..chunk.csf_count {
+                    idx_builder.append_value(chunk.idx_values[i]);
                     line1_builder.append_value(&chunk.line1_values[i]);
                     line2_builder.append_value(&chunk.line2_values[i]);
                     line3_builder.append_value(&chunk.line3_values[i]);
@@ -366,6 +378,7 @@ fn writer_thread(
                 let batch = RecordBatch::try_new(
                     schema.clone(),
                     vec![
+                        Arc::new(idx_builder.finish()),
                         Arc::new(line1_builder.finish()),
                         Arc::new(line2_builder.finish()),
                         Arc::new(line3_builder.finish()),
@@ -445,6 +458,7 @@ pub fn convert_csfs_to_parquet(
 
     // --- 2. 创建 Arrow Schema ---
     let schema = Arc::new(Schema::new(vec![
+        Field::new("idx", DataType::UInt64, false),
         Field::new("line1", DataType::Utf8, false),
         Field::new("line2", DataType::Utf8, false),
         Field::new("line3", DataType::Utf8, false),
@@ -514,12 +528,14 @@ pub fn convert_csfs_to_parquet(
         let lines_to_process = batch_lines.drain(..num_full_csfs * 3).collect::<Vec<_>>();
         
         // 创建 Arrow 数组
+        let mut idx_builder = UInt64Builder::with_capacity(num_full_csfs);
         let mut line1_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
         let mut line2_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
         let mut line3_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
 
-        for chunk in lines_to_process.chunks(3) {
+        for (i, chunk) in lines_to_process.chunks(3).enumerate() {
             if chunk.len() == 3 {
+                idx_builder.append_value((csf_count + i) as u64);
                 line1_builder.append_value(&chunk[0]);
                 line2_builder.append_value(&chunk[1]);
                 line3_builder.append_value(&chunk[2]);
@@ -530,6 +546,7 @@ pub fn convert_csfs_to_parquet(
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
+                Arc::new(idx_builder.finish()),
                 Arc::new(line1_builder.finish()),
                 Arc::new(line2_builder.finish()),
                 Arc::new(line3_builder.finish()),
@@ -560,9 +577,13 @@ pub fn convert_csfs_to_parquet(
         },
     };
 
-    // 保存头部数据为 csfs_header.toml 文件
+    // 保存头部数据为 [输入文件名前缀]_header.toml 文件
     let header_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
-    let header_path = header_dir.join("csfs_header.toml");
+    let input_file_stem = csfs_path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("csfs");
+    let header_filename = format!("{}_header.toml", input_file_stem);
+    let header_path = header_dir.join(header_filename);
     let toml_string = toml::to_string_pretty(&header_data)?;
     std::fs::write(&header_path, toml_string)?;
 

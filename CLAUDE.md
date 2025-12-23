@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 CSFs_loader is a high-performance Rust/Python hybrid library for converting CSF (Configuration State Function) text files to Parquet format. It uses PyO3 bindings to create Python extensions with Rust's performance benefits.
 
+**Key Implementation Details:**
+- Rust edition: 2024 (requires nightly/unstable Rust features)
+- Python support: 3.13 only (strictly pinned in pyproject.toml)
+- Extension module name: `_csfs_loader` (the compiled Rust library)
+- Public package name: `csfs_loader` (Python wrapper in `python/`)
+- Uses pixi for development environment management
+
 ## Build Commands
 
 ### Environment Setup
@@ -14,22 +21,21 @@ CSFs_loader is a high-performance Rust/Python hybrid library for converting CSF 
 pixi install
 pixi shell
 
-# Or use virtual environment
+# Or use virtual environment (requires Python 3.13)
 python -m venv .venv
 source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate  # Windows
 ```
 
 ### Development Build
 ```bash
-# Build in development mode
+# Build Rust extension and install in development mode
 maturin develop
 
-# Build with optimizations
+# Build optimized release version
 maturin build --release
 
-# Install with pip in editable mode
-pip install -e .
+# Verify installation
+python -c "import csfs_loader; print(csfs_loader.__version__)"
 ```
 
 ### Testing and Linting
@@ -37,163 +43,128 @@ pip install -e .
 # Run tests
 pytest
 
-# Type checking
+# Type checking Python code
 mypy python/csfs_loader/
 
-# Linting and formatting
+# Linting
 ruff check python/
+
+# Format code
 ruff format python/
 ```
 
-### Clean Build
+### Clean Build Artifacts
 ```bash
 # Clean Rust artifacts
 cargo clean
 
 # Clean Python build artifacts
 rm -rf build/ dist/ *.egg-info/
+
+# Clean maturin cache
+maturin clean
 ```
 
 ## Code Architecture
 
-### Core Components
+### Module Structure
 
-**Rust Backend (`src/`)**:
-- `lib.rs` - PyO3 module definition and Python bindings
-- `convert_csfs.rs` - Core conversion logic using Arrow/Parquet
-- High-performance file processing with configurable chunking
+The project has a two-tier architecture with Rust backend and Python frontend:
 
-**Python Package (`python/csfs_loader/`)**:
-- `__init__.py` - Python API wrapper and public interface
-- Type stubs (`.pyi`) for IDE support
-- `py.typed` - Marks package as typed for mypy
+**Rust Backend (`src/`):**
+- `lib.rs` - PyO3 module definitions, Python exception mappings, and function exports
+- `csfs_conversion.rs` - Core conversion logic with both sequential and parallel implementations
 
-### Key Features
+**Python Frontend (`python/csfs_loader/`):**
+- `__init__.py` - Public API wrapper that re-exports Rust functions with Python-friendly signatures
+- `_csfs_loader.pyi` - Type stubs for the compiled Rust extension
+- `py.typed` - Marker file indicating this is a typed package for mypy
 
-**Performance Optimizations**:
-- Rust-based file processing for high throughput
-- Configurable line length limits and chunk sizes
-- GZIP compression for Parquet output
-- Batch processing to handle large files efficiently
+### Key Architectural Patterns
 
-**Data Processing**:
-- Extracts 5-line headers from CSF files
-- Processes CSF data in 3-line groups (line1, line2, line3)
-- Separate `.headers.txt` file for metadata
-- Truncation handling for oversized lines
+**Dual Processing Modes:**
+The library provides both sequential and parallel conversion implementations:
+- Sequential (`convert_csfs`): Single-threaded processing in `convert_csfs_to_parquet()`
+- Parallel (`convert_csfs_parallel`): Multi-threaded processing with producer-consumer pattern using `crossbeam-channel`
 
-**Python API**:
-- Functional interface: `convert_csfs_to_parquet()`, `get_parquet_metadata()`
-- Object-oriented interface: `CSFProcessor` class
-- Bilingual error messages (Chinese/English)
+**Header/Data Separation:**
+CSF files have a specific structure:
+- First 5 lines: Header metadata (extracted to `{input_stem}_header.toml`)
+- Remaining lines: CSF data in 3-line groups (line1, line2, line3)
+- Headers are processed first and saved separately from the main Parquet data
 
-## Development Workflow
+**Parallel Processing Architecture:**
+The parallel implementation uses a three-stage pipeline:
+1. **Reader thread**: Chunks input data and sends work items via bounded channel
+2. **Worker threads** (configurable count): Process chunks in parallel, truncating lines to `max_line_len`
+3. **Writer thread**: Receives processed chunks and writes them in CSF index order using `BTreeMap` for sequencing
 
-### Project Structure
+**Data Flow:**
 ```
-CSFs_loader/
-├── src/                    # Rust source code
-│   ├── lib.rs             # PyO3 bindings
-│   └── convert_csfs.rs    # Core conversion logic
-├── python/csfs_loader/    # Python package
-│   ├── __init__.py        # Public API
-│   ├── _csfs_loader.pyi   # Type stubs
-│   └── py.typed          # Type marker
-├── Cargo.toml             # Rust dependencies
-├── pyproject.toml         # Python packaging
-└── pixi.toml             # Development environment
+File Reader → Work Channel → Worker Threads → Result Channel → Writer → Parquet
+                      ↓
+                 Bounded Queue
+                      ↓
+           (prevents memory explosion)
 ```
 
-### Dependencies
+### Critical Dependencies
 
-**Rust Dependencies** (`Cargo.toml`):
-- `pyo3` - Python bindings
-- `arrow` - Columnar data format
-- `parquet` - Parquet file format support
+**Rust:**
+- `pyo3` - Python-Rust bindings and FFI
+- `arrow`/`parquet` - Columnar data format and I/O
+- `crossbeam-channel` - Multi-producer multi-consumer channels for parallel processing
+- `num_cpus` - CPU core detection for worker thread optimization
+- `toml`/`serde` - Header file serialization
 
-**Python Dependencies** (`pyproject.toml`):
-- `maturin` - Rust extension building
-- `pytest` - Testing framework
-- `mypy`, `ruff` - Type checking and linting
+**Python:**
+- `maturin` - Build tool for Rust-Python extensions
+- Build outputs: `.so` files on Linux, `.pyd` on Windows
 
-### Configuration
+### Function/API Mapping
 
-**Build Configuration**:
-- Rust edition: 2024
-- Python support: 3.10+ (optimized for 3.12-3.14)
-- Release profile: Level 3 optimizations with LTO
+**Rust Functions → Python Exports:**
+- `convert_csfs_to_parquet()` → `convert_csfs()` / `CSFProcessor.convert()`
+- `convert_csfs_to_parquet_parallel()` → `convert_csfs_parallel()` / `CSFProcessor.convert_parallel()`
+- `get_parquet_metadata()` → `get_parquet_info()` / `CSFProcessor.get_metadata()`
+- `csfs_header()` → `csfs_header()` (standalone header extraction)
 
-**PyO3 Configuration**:
-- Extension module: `_csfs_loader`
-- Features: `pyo3/extension-module`, `pyo3/generate-import-lib`
+**Class Wrappers:**
+The `CSFProcessor` class in both Rust (`lib.rs`) and Python (`__init__.py`) provides an object-oriented interface with:
+- Configurable `max_line_len` and `chunk_size` properties
+- Validation ensuring parameters are > 0
+- Both sequential and parallel conversion methods
 
-## Common Usage Patterns
+## File Naming Conventions
 
-### Basic Conversion
-```python
-from csfs_loader import convert_csfs_to_parquet
+**Output Files:**
+- Parquet data: User-specified path (e.g., `output.parquet`)
+- Header metadata: `{input_file_stem}_header.toml` (auto-generated in same directory as output)
 
-# Convert CSF file to Parquet
-result = convert_csfs_to_parquet(
-    input_path="input.csf",
-    output_path="output.parquet",
-    max_line_len=256,
-    chunk_size=30000
-)
-```
+**Example:** Converting `data.csf` to `results/output.parquet` generates:
+- `results/output.parquet` (CSF data)
+- `results/data_header.toml` (header metadata)
 
-### Using the Processor Class
-```python
-from csfs_loader import CSFProcessor
+## Threading and Performance Considerations
 
-# Create processor with custom settings
-processor = CSFProcessor(max_line_len=512, chunk_size=50000)
+**Parallel Mode Optimization:**
+- Default `chunk_size` is larger for parallel (50000) vs sequential (100000 in Python wrapper, 30000 in Rust default)
+- Worker count defaults to `num_cpus::get()` but is configurable
+- Bounded channel size = `num_workers * 2` to prevent memory issues
+- Progress logging every 50,000 CSFs written
 
-# Convert multiple files
-for csf_file in csf_files:
-    processor.convert(csf_file, f"{csf_file}.parquet")
-```
+**When to Use Parallel Mode:**
+- Large files (>1M CSF entries)
+- Multi-core systems available
+- Memory-constrained environments (bounded queue prevents OOM)
 
-## Input/Output Patterns
+## CSF File Format Assumptions
 
-### Input Files
-- CSF text files with 5-line headers followed by 3-line CSF entries
-- Variable line lengths (configurable truncation handling)
+The code assumes CSF files follow this structure:
+1. **Lines 1-5**: Header (metadata about the calculation)
+2. **Lines 6+**: CSF entries in groups of exactly 3 lines
+   - Line 1: CSF identifier/configuration
+   - Line 2: Additional parameters
+   - Line 3: More parameters or coefficients
 
-### Output Files
-- `.parquet` - Main data with columns: line1, line2, line3
-- `.headers.txt` - Extracted 5-line header information
-- GZIP compression applied by default
-
-## Performance Guidelines
-
-### Optimization Parameters
-- `max_line_len`: Default 256, increase for long CSF lines
-- `chunk_size`: Default 30000, adjust based on available memory
-- Typical performance: 4-10x speedup over pure Python implementations
-
-### Memory Usage
-- Processes data in configurable chunks to control memory footprint
-- Arrow memory pools for efficient string handling
-- Automatic cleanup between chunks
-
-## Error Handling
-
-### Common Issues
-- File I/O errors (missing files, permissions)
-- Invalid CSF format (incorrect line counts)
-- Memory constraints (reduce chunk_size)
-- Line truncation warnings (increase max_line_len)
-
-### Error Types
-- `PyValueError` - Invalid parameters
-- `PyIOError` - File operation failures
-- Detailed error messages in both English and Chinese
-
-## Integration with GRASP
-
-This utility is designed to work with GRASP atomic physics calculations:
-- Converts GRASP CSF output to efficient Parquet format
-- Preserves header information for downstream processing
-- Enables fast data access for large-scale atomic structure calculations
-- Compatible with GRASP workflow tools and analysis scripts
+**Validation:** The code processes complete 3-line groups, discarding any incomplete final group.

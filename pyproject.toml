@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "csfs_loader"
 description = "High-performance CSF to Parquet conversion library"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 authors = [
     {name = "YenochQin", email = "yenochqin@hotmail.com"},
 ]
@@ -43,3 +43,11 @@ lint = [
 python-source = "python"
 module-name = "csfs_loader._csfs_loader"
 features = ["pyo3/extension-module", "pyo3/generate-import-lib"]
+
+[tool.uv]
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+extra-index-url = ["https://pypi.org/simple"]
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'win32' and (platform_machine == 'AMD64' or platform_machine == 'x86_64')",
+]

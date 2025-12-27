@@ -19,7 +19,7 @@ num_cpus = "1.16.0"
 anyhow = "1.0.100"
 
 [lib]
-name = "rcsfs"
+name = "_rcsfs"
 crate-type = ["cdylib", "rlib", "staticlib"]
 
 [profile.release]

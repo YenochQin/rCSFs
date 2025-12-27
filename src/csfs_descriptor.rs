@@ -954,14 +954,6 @@ impl CSFDescriptorGenerator {
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
-/// Python-exposed function to convert J string to 2J value
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_j_to_double_j(j_str: &str) -> PyResult<i32> {
-    j_to_double_j(j_str)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
-}
-
 /// Python-exposed CSF Descriptor Generator class
 #[cfg(feature = "python")]
 #[pyclass(name = "CSFDescriptorGenerator")]
@@ -1157,7 +1149,6 @@ fn py_generate_descriptors_from_parquet_parallel(
 /// Register the Python module functions and classes
 #[cfg(feature = "python")]
 pub fn register_descriptor_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(py_j_to_double_j, module)?)?;
     module.add_class::<PyCSFDescriptorGenerator>()?;
     module.add_function(wrap_pyfunction!(py_generate_descriptors_from_parquet, module)?)?;
     module.add_function(wrap_pyfunction!(py_generate_descriptors_from_parquet_parallel, module)?)?;

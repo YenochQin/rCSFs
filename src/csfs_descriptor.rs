@@ -156,8 +156,7 @@ pub mod parquet_batch {
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)
             .map_err(|e| format!("Failed to create parquet reader: {}", e))?;
 
-        let schema = builder.schema();
-        eprintln!("Input parquet schema: {}", schema);
+        let _schema = builder.schema();
 
         let mut reader = builder.build()
             .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
@@ -188,13 +187,10 @@ pub mod parquet_batch {
         let mut total_csfs = 0;
         let mut descriptor_count = 0;
 
-        eprintln!("Starting descriptor generation from parquet...");
-
         loop {
             match reader.next() {
                 Some(Ok(batch)) => {
                     let batch_size = batch.num_rows();
-                    eprintln!("Processing batch of {} CSFs (total: {})", batch_size, total_csfs);
 
                     // Get columns by index (parquet schema: idx, line1, line2, line3)
                     let idx_col = batch.column(0)
@@ -224,9 +220,6 @@ pub mod parquet_batch {
                     let mut descriptors_vec = Vec::with_capacity(batch_size);
 
                     for i in 0..batch_size {
-                        if i > 0 && i % 100 == 0 {
-                            eprintln!("  Progress: {}/{} in batch", i, batch_size);
-                        }
                         let line1 = line1_col.value(i);
                         let line2 = line2_col.value(i);
                         let line3 = line3_col.value(i);
@@ -266,8 +259,6 @@ pub mod parquet_batch {
 
                     writer.write(&output_batch)
                         .map_err(|e| format!("Failed to write batch: {}", e))?;
-
-                    eprintln!("  Processed {} descriptors", descriptor_count);
                 }
                 Some(Err(e)) => {
                     return Err(format!("Error reading parquet batch: {}", e));
@@ -279,12 +270,6 @@ pub mod parquet_batch {
         // Step 6: Finalize writer
         writer.close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
-
-        eprintln!("Descriptor generation complete!");
-        eprintln!("  Total CSFs processed: {}", total_csfs);
-        eprintln!("  Descriptors generated: {}", descriptor_count);
-        eprintln!("  Orbital count: {}", orbital_count);
-        eprintln!("  Descriptor size: {}", descriptor_size);
 
         Ok(BatchDescriptorStats {
             input_file: input_parquet.to_string_lossy().to_string(),
@@ -344,11 +329,6 @@ pub mod parquet_batch {
         let orbital_count = peel_subshells.len();
         let descriptor_size = 3 * orbital_count;
 
-        eprintln!("启动并行描述符生成:");
-        eprintln!("  工作线程数: {}", num_workers);
-        eprintln!("  每任务行数: {}", rows_per_task);
-        eprintln!("  轨道数: {}", orbital_count);
-        eprintln!("  描述符大小: {}", descriptor_size);
 
         // Create descriptor generator (shared by all workers)
         let generator = Arc::new(super::CSFDescriptorGenerator::new(peel_subshells.clone()));
@@ -417,9 +397,6 @@ pub mod parquet_batch {
             handle.join().unwrap();
         }
 
-        eprintln!("\n并行描述符生成完成！");
-        eprintln!("  总 CSF 数: {}", csf_count);
-        eprintln!("  生成描述符数: {}", result.descriptor_count);
 
         Ok(BatchDescriptorStats {
             input_file: input_parquet.to_string_lossy().to_string(),
@@ -433,15 +410,12 @@ pub mod parquet_batch {
 
     /// Worker thread for descriptor generation
     fn descriptor_worker(
-        worker_id: usize,
+        _worker_id: usize,
         work_receiver: Receiver<DescriptorWorkItem>,
         result_sender: Sender<DescriptorResult>,
         generator: Arc<super::CSFDescriptorGenerator>,
     ) {
-        eprintln!("Worker {} started", worker_id);
-        let mut work_count = 0usize;
         for work_item in work_receiver {
-            work_count += 1;
             let mut descriptors = Vec::with_capacity(work_item.rows.len());
 
             for (idx, line1, line2, line3) in work_item.rows {
@@ -463,10 +437,8 @@ pub mod parquet_batch {
                 descriptors,
             };
 
-            eprintln!("Worker {} sending result for batch_idx={}, start_row={}, size={}", worker_id, result.batch_idx, result.start_row_in_batch, result.descriptors.len());
             result_sender.send(result).unwrap();
         }
-        eprintln!("Worker {} finished, processed {} work items", worker_id, work_count);
     }
 
     /// Helper to get descriptor size from generator
@@ -493,8 +465,7 @@ pub mod parquet_batch {
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)
             .map_err(|e| format!("Failed to create parquet reader: {}", e))?;
 
-        let schema = builder.schema();
-        eprintln!("Input parquet schema: {}", schema);
+        let _schema = builder.schema();
 
         let mut reader = builder.build()
             .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
@@ -502,13 +473,10 @@ pub mod parquet_batch {
         let mut global_batch_idx = 0usize;
         let mut total_processed = 0usize;
 
-        eprintln!("开始流式处理 parquet 文件...");
-
         loop {
             match reader.next() {
                 Some(Ok(batch)) => {
                     let batch_size = batch.num_rows();
-                    eprintln!("读取批次 {} ({} 行)", global_batch_idx, batch_size);
 
                     // Get columns by index (parquet schema: idx, line1, line2, line3)
                     let idx_col = batch.column(0)
@@ -574,7 +542,6 @@ pub mod parquet_batch {
             }
         }
 
-        eprintln!("读取完成，共 {} 个批次，{} 行", global_batch_idx, total_processed);
         Ok(total_processed)
     }
 
@@ -614,19 +581,13 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         // Collect and write results in order
         ////////////////////////////////////////////////////////////////////////////////
-        eprintln!("开始收集并写入结果...");
 
         let mut pending_results: BTreeMap<(usize, usize), Vec<Vec<f32>>> = BTreeMap::new();
         let mut next_write_idx = (0usize, 0usize); // (batch_idx, start_row_in_batch)
-        let mut total_processed = 0usize;
-        let mut total_written = 0usize;
 
         for result in result_receiver {
             let key = (result.batch_idx, result.start_row_in_batch);
-            let result_size = result.descriptors.len();
             pending_results.insert(key, result.descriptors);
-            total_processed += result_size;
-            eprintln!("Writer received result for batch_idx={}, start_row={}, size={}", result.batch_idx, result.start_row_in_batch, result_size);
 
             // Write consecutive results
             while let Some(descs) = pending_results.remove(&next_write_idx) {
@@ -656,7 +617,6 @@ pub mod parquet_batch {
                     let mut count = descriptor_count.lock().unwrap();
                     *count += descs.len();
                 }
-                total_written += descs.len();
 
                 // Move to next expected result
                 // Key insight: batch splitting always creates (batch_idx, 0) and (batch_idx, rows_per_task)
@@ -681,13 +641,7 @@ pub mod parquet_batch {
                     next_write_idx = (curr_batch_idx + 1, 0);
                 }
             }
-
-            if total_processed > 0 && total_written % 10000 == 0 {
-                eprintln!("进度: {} 描述符已生成并写入", total_written);
-            }
         }
-
-        eprintln!("Writer loop ended. total_processed={}, total_written={}", total_processed, total_written);
 
         ////////////////////////////////////////////////////////////////////////////////
         // Finalize writer
@@ -696,9 +650,6 @@ pub mod parquet_batch {
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
         let desc_count = *descriptor_count.lock().unwrap();
-
-        eprintln!("描述符生成完成！");
-        eprintln!("  生成描述符数: {}", desc_count);
 
         Ok(WriterResult {
             descriptor_count: desc_count,

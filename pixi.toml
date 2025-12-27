@@ -1,7 +1,7 @@
 [workspace]
 authors = ["YenochQin <yenochqin@hotmail.com>"]
 channels = ["conda-forge"]
-name = "CSFs_loader"
+name = "rCSFs"
 platforms = ["linux-64"]
 version = "0.1.0"
 

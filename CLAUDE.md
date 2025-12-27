@@ -4,14 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CSFs_loader is a high-performance Rust/Python hybrid library for converting CSF (Configuration State Function) text files to Parquet format. It uses PyO3 bindings to create Python extensions with Rust's performance benefits.
+rCSFs is a high-performance Rust/Python hybrid library for converting CSF (Configuration State Function) text files to Parquet format. It uses PyO3 bindings to create Python extensions with Rust's performance benefits.
 
 **Key Implementation Details:**
-- Rust edition: 2024 (requires nightly/unstable Rust features)
-- Python support: 3.13 only (strictly pinned in pyproject.toml)
-- Extension module name: `_csfs_loader` (the compiled Rust library)
-- Public package name: `csfs_loader` (Python wrapper in `python/`)
+- Rust edition: 2024 (requires nightly/unstable Rust features, Rust >=1.92.0,<1.93)
+- Python support: 3.13 only (strictly pinned in pyproject.toml: `>=3.13,<3.14`)
+- Extension module name: `_rcsfs` (the compiled Rust library)
+- Public package name: `rcsfs` (Python wrapper in `python/`)
 - Uses pixi for development environment management
+- Repository: https://github.com/YenochQin/rCSFs.git
 
 ## Build Commands
 
@@ -35,7 +36,7 @@ maturin develop
 maturin build --release
 
 # Verify installation
-python -c "import csfs_loader; print(csfs_loader.__version__)"
+python -c "import rcsfs; print(rcsfs.__version__)"
 ```
 
 ### Testing and Linting
@@ -43,8 +44,11 @@ python -c "import csfs_loader; print(csfs_loader.__version__)"
 # Run tests
 pytest
 
+# Run tests with speed benchmarking
+pytest --speed
+
 # Type checking Python code
-mypy python/csfs_loader/
+mypy python/rcsfs/
 
 # Linting
 ruff check python/
@@ -75,9 +79,9 @@ The project has a two-tier architecture with Rust backend and Python frontend:
 - `lib.rs` - PyO3 module definitions, Python exception mappings, and function exports
 - `csfs_conversion.rs` - Core conversion logic with both sequential and parallel implementations
 
-**Python Frontend (`python/csfs_loader/`):**
+**Python Frontend (`python/rcsfs/`):**
 - `__init__.py` - Public API wrapper that re-exports Rust functions with Python-friendly signatures
-- `_csfs_loader.pyi` - Type stubs for the compiled Rust extension
+- `_rcsfs.pyi` - Type stubs for the compiled Rust extension
 - `py.typed` - Marker file indicating this is a typed package for mypy
 
 ### Key Architectural Patterns
@@ -108,6 +112,17 @@ File Reader → Work Channel → Worker Threads → Result Channel → Writer �
            (prevents memory explosion)
 ```
 
+**Parquet Output Schema:**
+The library writes Parquet files with this Arrow schema:
+```rust
+Schema::new(vec![
+    Field::new("idx", DataType::UInt64, false),    // CSF index
+    Field::new("line1", DataType::Utf8, false),    // First line of CSF
+    Field::new("line2", DataType::Utf8, false),    // Second line
+    Field::new("line3", DataType::Utf8, false),    // Third line
+])
+```
+
 ### Critical Dependencies
 
 **Rust:**
@@ -120,6 +135,23 @@ File Reader → Work Channel → Worker Threads → Result Channel → Writer �
 **Python:**
 - `maturin` - Build tool for Rust-Python extensions
 - Build outputs: `.so` files on Linux, `.pyd` on Windows
+
+**Dependency Groups (pyproject.toml):**
+- `dev`: pytest, pytest-pretty, pytest-speed
+- `lint`: mypy, ruff
+
+**Library Crate Types:**
+The `Cargo.toml` configures multiple crate types for flexibility:
+- `cdylib` - C dynamic library (for Python extension module)
+- `rlib` - Rust library (for Rust consumers)
+- `staticlib` - Static library (for static linking)
+
+### Module Naming Disambiguation
+
+This project uses three different names that can be confusing:
+- **Cargo package**: `rCSFs` (with capital S and underscore) - in `Cargo.toml`
+- **Extension module**: `_rcsfs` (with underscore prefix) - the compiled Rust library, defined in `pyproject.toml` as `module-name = "rcsfs._rcsfs"`
+- **Public package**: `rcsfs` (lowercase, no prefix) - the Python wrapper in `python/rcsfs/`
 
 ### Function/API Mapping
 
@@ -134,6 +166,17 @@ The `CSFProcessor` class in both Rust (`lib.rs`) and Python (`__init__.py`) prov
 - Configurable `max_line_len` and `chunk_size` properties
 - Validation ensuring parameters are > 0
 - Both sequential and parallel conversion methods
+
+### Release Build Configuration
+
+The `Cargo.toml` specifies optimized release builds:
+```toml
+[profile.release]
+opt-level = 3        # Maximum optimization
+lto = true          # Link-time optimization
+codegen-units = 1   # Single compilation unit for better optimization
+```
+Always use `maturin build --release` for production deployments.
 
 ## File Naming Conventions
 

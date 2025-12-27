@@ -1,20 +1,24 @@
 [package]
-name = "CSFs_loader"
+name = "rCSFs"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
+[features]
+default = ["python"]
+python = ["dep:pyo3"]
+
 [dependencies]
 arrow = "57.1.0"
 parquet = "57.1.0"
-pyo3 = "0.27.2"
+pyo3 = { version = "0.27.2", optional = true }
 toml = "0.9.8"
 serde = { version = "1.0.215", features = ["derive"] }
 crossbeam-channel = "0.5.13"
 num_cpus = "1.16.0"
 
 [lib]
-name = "csfs_loader"
+name = "rcsfs"
 crate-type = ["cdylib", "rlib", "staticlib"]
 
 [profile.release]

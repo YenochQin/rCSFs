@@ -3,7 +3,7 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "csfs_loader"
+name = "rcsfs"
 description = "High-performance CSF to Parquet conversion library"
 requires-python = ">=3.13,<3.14"
 authors = [
@@ -41,23 +41,23 @@ lint = [
 
 [tool.maturin]
 python-source = "python"
-module-name = "csfs_loader._csfs_loader"
+module-name = "rcsfs._rcsfs"
 features = ["pyo3/extension-module", "pyo3/generate-import-lib"]
 
-[tool.uv]
-index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
-extra-index-url = ["https://pypi.org/simple"]
-required-environments = [
-    "sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "sys_platform == 'win32' and (platform_machine == 'AMD64' or platform_machine == 'x86_64')",
-]
+[[tool.uv.index]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
+
+[[tool.uv.index]]
+name = "aliyun"
+url = "https://mirrors.aliyun.com/pypi/simple/"
 
 [tool.pixi.workspace]
 channels = ["https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"]
 platforms = ["win-64", "linux-64"]
 
 [tool.pixi.pypi-dependencies]
-csfs_loader = { path = ".", editable = true }
+rcsfs = { path = ".", editable = true }
 
 [tool.pixi.environments]
 default = { solve-group = "default" }

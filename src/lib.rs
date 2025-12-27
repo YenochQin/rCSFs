@@ -8,15 +8,19 @@ use std::io::{BufRead, BufReader};
 extern crate num_cpus;
 
 mod csfs_conversion;
+mod csfs_descriptor;
 
 #[pymodule]
-fn _csfs_loader(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(convert_csfs, m)?)?;
     m.add_function(wrap_pyfunction!(convert_csfs_parallel, m)?)?;
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
     m.add_class::<CSFProcessor>()?;
     m.add_function(wrap_pyfunction!(csfs_header, m)?)?;
+
+    // Register CSF descriptor module
+    csfs_descriptor::register_descriptor_module(m)?;
 
     Ok(())
 }

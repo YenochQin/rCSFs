@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import NotRequired, Optional, TypedDict
 
-from . import _csfs_loader
+from . import _rcsfs
 
 __all__ = '__version__', 'convert_csfs', 'convert_csfs_parallel', 'get_parquet_info', 'csfs_header', 'CSFProcessor'
 
@@ -32,8 +32,8 @@ class HeaderInfo(TypedDict):
 
 # Try to get version, fallback if not available
 try:
-    __version__ = _csfs_loader.__version__
-    VERSION = _csfs_loader.__version__
+    __version__ = _rcsfs.__version__
+    VERSION = _rcsfs.__version__
 except AttributeError:
     __version__ = "0.1.0"
     VERSION = "0.1.0"
@@ -56,7 +56,7 @@ def convert_csfs(
     Returns:
         Dictionary containing conversion statistics and status
     """
-    return _csfs_loader.convert_csfs(
+    return _rcsfs.convert_csfs(
         input_path=str(input_path),
         output_path=str(output_path),
         max_line_len=max_line_len,
@@ -73,7 +73,7 @@ def csfs_header(input_path: str | Path) -> HeaderInfo:
     Returns:
         Header information from the CSF file
     """
-    return _csfs_loader.csfs_header(input_path=str(input_path))
+    return _rcsfs.csfs_header(input_path=str(input_path))
 
 def convert_csfs_parallel(
     input_path: str | Path,
@@ -105,7 +105,7 @@ def convert_csfs_parallel(
         - Real-time progress monitoring and statistics
         - Automatic worker count optimization
     """
-    return _csfs_loader.convert_csfs_parallel(
+    return _rcsfs.convert_csfs_parallel(
         input_path=str(input_path),
         output_path=str(output_path),
         max_line_len=max_line_len,
@@ -128,7 +128,7 @@ def get_parquet_info(input_path: str | Path) -> dict:
         - num_columns: Number of columns
         - compression: Compression method used
     """
-    return _csfs_loader.get_parquet_info(input_path=str(input_path))
+    return _rcsfs.get_parquet_info(input_path=str(input_path))
 
 # CSF Processor class for object-oriented interface
 class CSFProcessor:
@@ -151,7 +151,7 @@ class CSFProcessor:
             max_line_len: Maximum line length (default: 256)
             chunk_size: Batch processing size (default: 30000)
         """
-        self._processor = _csfs_loader.CSFProcessor(
+        self._processor = _rcsfs.CSFProcessor(
             max_line_len=max_line_len,
             chunk_size=chunk_size
         )

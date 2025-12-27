@@ -26,3 +26,6 @@ uv.lock
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# test file
+*.ipynb

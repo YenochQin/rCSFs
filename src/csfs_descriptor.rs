@@ -5,22 +5,295 @@
 //! containing electron counts and angular momentum coupling values.
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::fs::read_to_string;
 
-/// Represents the result of a CSF parsing operation
-#[derive(Debug, Clone)]
-pub struct CSFDescriptor {
-    /// The descriptor array: [e_count, middle_J, coupling_J, ...] for each orbital
-    pub values: Vec<f32>,
-    /// Metadata about the parsing operation
-    pub metadata: DescriptorMetadata,
+/// Parquet reading support
+pub mod parquet_batch {
+    use super::*;
+    use std::path::PathBuf;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use arrow::array::{StringArray, UInt64Array};
+
+    /// Read peel subshells from a header TOML file
+    ///
+    /// # Arguments
+    /// * `header_path` - Path to the header TOML file
+    ///
+    /// # Returns
+    /// * `Ok(Vec<String>)` - List of peel subshell names
+    /// * `Err(String)` - Error message if parsing fails
+    pub fn read_peel_subshells_from_header(header_path: &Path) -> Result<Vec<String>, String> {
+        use toml::Value;
+
+        let mut toml_content = read_to_string(header_path)
+            .map_err(|e| format!("Failed to read header file: {}", e))?;
+
+        // Normalize line endings and trim whitespace
+        toml_content = toml_content.replace("\r\n", "\n");
+        let toml_content = toml_content.trim();
+
+        // Parse the TOML content using from_str instead of parse()
+        let toml_value: Value = toml::from_str(toml_content)
+            .map_err(|e| format!("Failed to parse TOML: {}", e))?;
+
+        // Get header_lines from [header_info] section
+        let header_lines = toml_value.get("header_info")
+            .and_then(|v| v.get("header_lines"))
+            .and_then(|v| v.as_array())
+            .ok_or("header_info.header_lines not found in TOML")?;
+
+        // Peel subshells are on line 4 (index 3): "  2s   2p-  2p   3s..."
+        if let Some(line_value) = header_lines.get(3) {
+            let line = line_value.as_str()
+                .ok_or("header_lines[3] is not a string")?;
+
+            // Parse space-separated subshell names
+            let parts: Vec<&str> = line.split_whitespace().collect();
+
+            // Filter valid subshell names (must contain at least one letter)
+            let subshells: Vec<String> = parts
+                .into_iter()
+                .filter(|s| {
+                    s.chars().any(|c| c.is_alphabetic()) &&
+                    s.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '-' || c == '_')
+                })
+                .map(|s| s.to_string())
+                .collect();
+
+            if !subshells.is_empty() {
+                return Ok(subshells);
+            }
+        }
+
+        Err("Could not find peel subshells in header file".to_string())
+    }
+
+    /// Find the header file for a given parquet file
+    ///
+    /// # Arguments
+    /// * `parquet_path` - Path to the parquet file
+    ///
+    /// # Returns
+    /// * `Some(PathBuf)` - Path to the header file if found
+    /// * `None` - No header file found
+    pub fn find_header_file(parquet_path: &Path) -> Option<PathBuf> {
+        let parquet_stem = parquet_path.file_stem()?.to_str()?;
+        let parent_dir = parquet_path.parent()?;
+
+        // Common header file patterns
+        let patterns = std::vec! [
+            format!("{}_header.toml", parquet_stem),
+            format!("{}.toml", parquet_stem),
+            format!("{}_header", parquet_stem),
+        ];
+
+        for pattern in patterns {
+            let header_path = parent_dir.join(&pattern);
+            if header_path.exists() {
+                return Some(header_path);
+            }
+        }
+
+        None
+    }
+
+    /// Result statistics for batch descriptor generation
+    #[derive(Debug)]
+    pub struct BatchDescriptorStats {
+        pub input_file: String,
+        pub output_file: String,
+        pub csf_count: usize,
+        pub descriptor_count: usize,
+        pub orbital_count: usize,
+        pub descriptor_size: usize,
+    }
+
+    /// Generate descriptors from a parquet file and write to a new parquet file
+    ///
+    /// # Arguments
+    /// * `input_parquet` - Path to input parquet file (must have line1, line2, line3 columns)
+    /// * `output_parquet` - Path to output parquet file for descriptors
+    /// * `peel_subshells` - Optional list of subshell names (auto-detected if None)
+    /// * `header_path` - Optional path to header TOML file
+    ///
+    /// # Returns
+    /// * `Ok(BatchDescriptorStats)` - Statistics about the batch operation
+    /// * `Err(String)` - Error message if operation fails
+    pub fn generate_descriptors_from_parquet(
+        input_parquet: &Path,
+        output_parquet: &Path,
+        peel_subshells: Option<Vec<String>>,
+        header_path: Option<PathBuf>,
+    ) -> Result<BatchDescriptorStats, String> {
+        // Step 1: Determine peel_subshells
+        let peel_subshells = match peel_subshells {
+            Some(s) => s,
+            None => {
+                // Try to find and read header file
+                let header = match header_path {
+                    Some(h) => h,
+                    None => find_header_file(input_parquet)
+                        .ok_or("Could not auto-detect header file. Please provide peel_subshells or header_path.")?,
+                };
+                read_peel_subshells_from_header(&header)?
+            }
+        };
+
+        let orbital_count = peel_subshells.len();
+        let descriptor_size = 3 * orbital_count;
+
+        // Step 2: Create descriptor generator
+        let generator = super::CSFDescriptorGenerator::new(peel_subshells.clone());
+
+        // Step 3: Open input parquet file
+        let file = std::fs::File::open(input_parquet)
+            .map_err(|e| format!("Failed to open input parquet: {}", e))?;
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+            .map_err(|e| format!("Failed to create parquet reader: {}", e))?;
+
+        let schema = builder.schema();
+        eprintln!("Input parquet schema: {}", schema);
+
+        let mut reader = builder.build()
+            .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
+
+        // Step 4: Create output parquet writer
+        use parquet::arrow::ArrowWriter;
+        use arrow::datatypes::{Schema, Field, DataType};
+        use std::sync::Arc;
+
+        // Output schema: descriptor columns (one column per descriptor element)
+        let mut fields = Vec::with_capacity(descriptor_size);
+        for i in 0..descriptor_size {
+            fields.push(Field::new(format!("col_{}", i), DataType::Float32, false));
+        }
+        let output_schema = Arc::new(Schema::new(fields));
+
+        let output_file = std::fs::File::create(output_parquet)
+            .map_err(|e| format!("Failed to create output parquet: {}", e))?;
+
+        let props = parquet::file::properties::WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default()))
+            .build();
+
+        let mut writer = ArrowWriter::try_new(output_file, output_schema.clone(), Some(props))
+            .map_err(|e| format!("Failed to create arrow writer: {}", e))?;
+
+        // Step 5: Process each batch
+        let mut total_csfs = 0;
+        let mut descriptor_count = 0;
+
+        eprintln!("Starting descriptor generation from parquet...");
+
+        loop {
+            match reader.next() {
+                Some(Ok(batch)) => {
+                    let batch_size = batch.num_rows();
+                    eprintln!("Processing batch of {} CSFs (total: {})", batch_size, total_csfs);
+
+                    // Get columns by index (parquet schema: idx, line1, line2, line3)
+                    let idx_col = batch.column(0)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or("idx column is not uint64 type")?;
+
+                    let line1_col = batch.column(1)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or("line1 column is not string type")?;
+
+                    let line2_col = batch.column(2)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or("line2 column is not string type")?;
+
+                    let line3_col = batch.column(3)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or("line3 column is not string type")?;
+
+                    // Process each row
+                    use arrow::array::{Float32Array, Array};
+                    use std::sync::Arc;
+
+                    let mut descriptors_vec = Vec::with_capacity(batch_size);
+
+                    for i in 0..batch_size {
+                        if i > 0 && i % 100 == 0 {
+                            eprintln!("  Progress: {}/{} in batch", i, batch_size);
+                        }
+                        let line1 = line1_col.value(i);
+                        let line2 = line2_col.value(i);
+                        let line3 = line3_col.value(i);
+                        let idx = idx_col.value(i);
+
+                        match generator.parse_csf(line1, line2, line3) {
+                            Ok(descriptor) => {
+                                descriptors_vec.push(descriptor);
+                                descriptor_count += 1;
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
+                            }
+                        }
+                    }
+
+                    total_csfs += batch_size;
+
+                    // Convert descriptors to separate Arrow arrays (one per column)
+                    // Each descriptor becomes a row, with each element in its own column
+                    let column_arrays: Vec<Arc<dyn Array>> = (0..descriptor_size)
+                        .map(|col_idx| {
+                            let values: Vec<f32> = descriptors_vec
+                                .iter()
+                                .map(|desc| desc[col_idx])
+                                .collect();
+                            Arc::new(Float32Array::from(values)) as Arc<dyn Array>
+                        })
+                        .collect();
+
+                    // Create output record batch
+                    use arrow::record_batch::RecordBatch;
+                    let output_batch = RecordBatch::try_new(
+                        output_schema.clone(),
+                        column_arrays,
+                    ).map_err(|e| format!("Failed to create output batch: {}", e))?;
+
+                    writer.write(&output_batch)
+                        .map_err(|e| format!("Failed to write batch: {}", e))?;
+
+                    eprintln!("  Processed {} descriptors", descriptor_count);
+                }
+                Some(Err(e)) => {
+                    return Err(format!("Error reading parquet batch: {}", e));
+                }
+                None => break,
+            }
+        }
+
+        // Step 6: Finalize writer
+        writer.close()
+            .map_err(|e| format!("Failed to close writer: {}", e))?;
+
+        eprintln!("Descriptor generation complete!");
+        eprintln!("  Total CSFs processed: {}", total_csfs);
+        eprintln!("  Descriptors generated: {}", descriptor_count);
+        eprintln!("  Orbital count: {}", orbital_count);
+        eprintln!("  Descriptor size: {}", descriptor_size);
+
+        Ok(BatchDescriptorStats {
+            input_file: input_parquet.to_string_lossy().to_string(),
+            output_file: output_parquet.to_string_lossy().to_string(),
+            csf_count: total_csfs,
+            descriptor_count,
+            orbital_count,
+            descriptor_size,
+        })
+    }
 }
 
-#[derive(Debug, Clone)]
-pub struct DescriptorMetadata {
-    pub orbital_count: usize,
-    pub occupied_orbitals: Vec<usize>,
-    pub final_double_j: i32,
-}
 
 /// Convert a J-value string to its doubled integer representation (2J)
 ///
@@ -133,7 +406,7 @@ impl CSFDescriptorGenerator {
     /// * `line3` - Third line: final coupling and total J value
     ///
     /// # Returns
-    /// A CSFDescriptor containing the values and metadata
+    /// A vector of f32 descriptor values
     ///
     /// # CSF Format Example
     /// ```text
@@ -146,7 +419,7 @@ impl CSFDescriptorGenerator {
         line1: &str,
         line2: &str,
         line3: &str,
-    ) -> Result<CSFDescriptor, String> {
+    ) -> Result<Vec<f32>, String> {
         // Initialize descriptor array with zeros
         let mut descriptor = vec![0.0f32; 3 * self.orbital_count];
         let mut occupied_orbitals = Vec::new();
@@ -258,28 +531,7 @@ impl CSFDescriptorGenerator {
             }
         }
 
-        Ok(CSFDescriptor {
-            values: descriptor,
-            metadata: DescriptorMetadata {
-                orbital_count: self.orbital_count,
-                occupied_orbitals,
-                final_double_j: final_double_j,
-            },
-        })
-    }
-
-    /// Parse a CSF and return only the descriptor values (as Vec<f32>)
-    ///
-    /// This is a convenience method that returns just the array values
-    /// without the metadata.
-    pub fn parse_cfl_to_vec(
-        &self,
-        line1: &str,
-        line2: &str,
-        line3: &str,
-    ) -> Result<Vec<f32>, String> {
-        self.parse_csf(line1, line2, line3)
-            .map(|desc| desc.values)
+        Ok(descriptor)
     }
 }
 
@@ -337,7 +589,7 @@ impl PyCSFDescriptorGenerator {
     ///     List of float32 descriptor values
     fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> PyResult<Vec<f32>> {
         self.inner
-            .parse_cfl_to_vec(line1, line2, line3)
+            .parse_csf(line1, line2, line3)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
     }
 
@@ -349,7 +601,7 @@ impl PyCSFDescriptorGenerator {
             ));
         }
         self.inner
-            .parse_cfl_to_vec(&csf_lines[0], &csf_lines[1], &csf_lines[2])
+            .parse_csf(&csf_lines[0], &csf_lines[1], &csf_lines[2])
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
     }
 
@@ -364,7 +616,7 @@ impl PyCSFDescriptorGenerator {
         let mut results = Vec::with_capacity(csf_list.len());
 
         for (idx, csf_lines) in csf_list.into_iter().enumerate() {
-            match self.inner.parse_cfl_to_vec(
+            match self.inner.parse_csf(
                 &csf_lines.get(0).map(|s| s.as_str()).unwrap_or(""),
                 &csf_lines.get(1).map(|s| s.as_str()).unwrap_or(""),
                 &csf_lines.get(2).map(|s| s.as_str()).unwrap_or(""),
@@ -391,11 +643,66 @@ impl PyCSFDescriptorGenerator {
     }
 }
 
+/// Python-exposed function to generate descriptors from parquet file
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (
+    input_parquet,
+    output_parquet,
+    peel_subshells=None,
+    header_path=None
+))]
+fn py_generate_descriptors_from_parquet(
+    py: Python,
+    input_parquet: String,
+    output_parquet: String,
+    peel_subshells: Option<Vec<String>>,
+    header_path: Option<String>,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    use std::path::Path;
+    use pyo3::types::PyDict;
+
+    let header_path_buf = header_path.as_ref().map(|s| Path::new(s).to_path_buf());
+    let input_path = Path::new(&input_parquet).to_path_buf();
+    let output_path = Path::new(&output_parquet).to_path_buf();
+
+    // Release the GIL during the long-running operation
+    let stats = py.detach(
+        || parquet_batch::generate_descriptors_from_parquet(
+            &input_path,
+            &output_path,
+            peel_subshells,
+            header_path_buf,
+        )
+    ).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+    let dict = PyDict::new(py);
+    dict.set_item("success", true)?;
+    dict.set_item("input_file", stats.input_file)?;
+    dict.set_item("output_file", stats.output_file)?;
+    dict.set_item("csf_count", stats.csf_count)?;
+    dict.set_item("descriptor_count", stats.descriptor_count)?;
+    dict.set_item("orbital_count", stats.orbital_count)?;
+    dict.set_item("descriptor_size", stats.descriptor_size)?;
+    Ok(dict.into())
+}
+
+/// Python-exposed function to read peel subshells from header file
+#[cfg(feature = "python")]
+#[pyfunction]
+fn py_read_peel_subshells(header_path: String) -> PyResult<Vec<String>> {
+    use std::path::Path;
+    parquet_batch::read_peel_subshells_from_header(Path::new(&header_path))
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))
+}
+
 /// Register the Python module functions and classes
 #[cfg(feature = "python")]
 pub fn register_descriptor_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(py_j_to_double_j, module)?)?;
     module.add_class::<PyCSFDescriptorGenerator>()?;
+    module.add_function(wrap_pyfunction!(py_generate_descriptors_from_parquet, module)?)?;
+    module.add_function(wrap_pyfunction!(py_read_peel_subshells, module)?)?;
     Ok(())
 }
 

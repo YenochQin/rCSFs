@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "rcsfs"
-description = "High-performance CSF to Parquet conversion library"
+description = "High-performance Rust-powered library for CSF-to-Parquet conversion and ML descriptor generation"
 requires-python = ">=3.13,<3.14"
 authors = [
     {name = "YenochQin", email = "yenochqin@hotmail.com"},

@@ -45,16 +45,6 @@ descriptor = gen.parse_csf(line1, line2, line3)
 # Returns: [2.0, 0.0, 0.0, 4.0, 0.0, 0.0, 6.0, 3.0, 3.0, ...]
 ```
 
-### J-Value Conversion
-
-```python
-from rcsfs import j_to_double_j
-
-j_to_double_j("3/2")  # → 3
-j_to_double_j("2")    # → 4
-j_to_double_j("4-")   # → 8
-```
-
 For detailed documentation, see:
 - CSF File Conversion: See `CSFProcessor` class documentation
 - CSF Descriptor Generation: See `CSFDescriptorGenerator` class documentation
@@ -73,44 +63,22 @@ try:
 except ImportError:
     __version__ = "0.1.0"
 
-# Re-export the Rust extension
-try:
-    from rcsfs._rcsfs import (
-        # CSF file conversion
-        convert_csfs as _convert_csfs,
-        convert_csfs_parallel as _convert_csfs_parallel,
-        get_parquet_info as _get_parquet_info,
-        csfs_header as _csfs_header,
-        CSFProcessor as _CSFProcessor,
+# Import from the Rust extension module
+from ._rcsfs import (
+    # CSF file conversion
+    convert_csfs as _convert_csfs,
+    convert_csfs_parallel as _convert_csfs_parallel,
+    get_parquet_info as _get_parquet_info,
+    CSFProcessor as _CSFProcessor,
 
-        # CSF descriptor generation
-        CSFDescriptorGenerator,
-        py_j_to_double_j,
+    # CSF descriptor generation
+    CSFDescriptorGenerator,
 
-        # Batch descriptor generation
-        py_generate_descriptors_from_parquet as _generate_descriptors_from_parquet,
-        py_generate_descriptors_from_parquet_parallel as _generate_descriptors_from_parquet_parallel,
-        py_read_peel_subshells as _read_peel_subshells,
-    )
-except ImportError:
-    # Fallback for development/testing
-    from _rcsfs import (
-        # CSF file conversion
-        convert_csfs as _convert_csfs,
-        convert_csfs_parallel as _convert_csfs_parallel,
-        get_parquet_info as _get_parquet_info,
-        csfs_header as _csfs_header,
-        CSFProcessor as _CSFProcessor,
-
-        # CSF descriptor generation
-        CSFDescriptorGenerator,
-        py_j_to_double_j,
-
-        # Batch descriptor generation
-        py_generate_descriptors_from_parquet as _generate_descriptors_from_parquet,
-        py_generate_descriptors_from_parquet_parallel as _generate_descriptors_from_parquet_parallel,
-        py_read_peel_subshells as _read_peel_subshells,
-    )
+    # Batch descriptor generation
+    py_generate_descriptors_from_parquet as _generate_descriptors_from_parquet,
+    py_generate_descriptors_from_parquet_parallel as _generate_descriptors_from_parquet_parallel,
+    py_read_peel_subshells as _read_peel_subshells,
+)
 
 
 #///////////////////////////////////////////////////////////////////////////////
@@ -134,17 +102,6 @@ class ConversionStats(TypedDict):
 class ParallelConversionStats(ConversionStats):
     """Statistics returned from parallel CSF conversion operations."""
     num_workers: NotRequired[int]
-
-
-class HeaderInfo(TypedDict):
-    """Header information extracted from CSF files."""
-    header_lines: int
-    file_path: str
-    line1: NotRequired[str]
-    line2: NotRequired[str]
-    line3: NotRequired[str]
-    line4: NotRequired[str]
-    line5: NotRequired[str]
 
 
 #///////////////////////////////////////////////////////////////////////////////
@@ -232,42 +189,6 @@ def get_parquet_info(input_path: Union[str, Path]) -> dict:
         - compression: Compression method used
     """
     return _get_parquet_info(input_path=str(input_path))
-
-
-def csfs_header(input_path: Union[str, Path]) -> HeaderInfo:
-    """
-    Extract header information from CSF file.
-
-    Args:
-        input_path: Path to CSF file
-
-    Returns:
-        Header information from the CSF file
-    """
-    return _csfs_header(input_path=str(input_path))
-
-
-def j_to_double_j(j_str: str) -> int:
-    """
-    Convert a J-value string to its doubled integer representation (2J).
-
-    This is a Python-friendly wrapper around the Rust implementation.
-
-    Args:
-        j_str: J value as string, e.g., "3/2", "2", "5/2", "4-"
-
-    Returns:
-        Integer value of 2J
-
-    Examples:
-        >>> j_to_double_j("3/2")
-        3
-        >>> j_to_double_j("2")
-        4
-        >>> j_to_double_j("4-")
-        8
-    """
-    return py_j_to_double_j(j_str)
 
 
 #///////////////////////////////////////////////////////////////////////////////
@@ -589,12 +510,10 @@ __all__ = [
     "convert_csfs",
     "convert_csfs_parallel",
     "get_parquet_info",
-    "csfs_header",
     "CSFProcessor",
 
     # CSF descriptor generation
     "CSFDescriptorGenerator",
-    "j_to_double_j",
 
     # Batch descriptor generation
     "generate_descriptors_from_parquet",
@@ -604,7 +523,6 @@ __all__ = [
     # Type definitions
     "ConversionStats",
     "ParallelConversionStats",
-    "HeaderInfo",
     "DescriptorGenerationStats",
     "ParallelDescriptorGenerationStats",
 ]

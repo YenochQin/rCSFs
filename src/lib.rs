@@ -2,7 +2,6 @@ use pyo3::prelude::*;
 use pyo3::exceptions::{PyValueError, PyIOError};
 use pyo3::types::{PyDict, PyDictMethods};
 use std::path::Path;
-use std::io::{BufRead, BufReader};
 
 // Import num_cpus for parallel processing
 extern crate num_cpus;
@@ -17,7 +16,6 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(convert_csfs_parallel, m)?)?;
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
     m.add_class::<CSFProcessor>()?;
-    m.add_function(wrap_pyfunction!(csfs_header, m)?)?;
 
     // Register CSF descriptor module
     csfs_descriptor::register_descriptor_module(m)?;
@@ -335,49 +333,6 @@ fn convert_csfs_parallel(
             stats.set_item("success", false)?;
             stats.set_item("error", e.to_string())?;
             Ok(stats.into())
-        }
-    }
-}
-
-/// 提取 CSF 文件头部的函数
-#[pyfunction]
-fn csfs_header(
-    py: Python,
-    input_path: String,
-) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-    // 读取文件头部（前5行）
-    match std::fs::File::open(&input_path) {
-        Ok(file) => {
-            let reader = BufReader::new(file);
-            let mut lines = Vec::new();
-
-            for (i, line_result) in reader.lines().take(5).enumerate() {
-                match line_result {
-                    Ok(line) => lines.push(line),
-                    Err(e) => {
-                        return Err(PyIOError::new_err(
-                            format!("Error reading line {}: {}", i + 1, e)
-                        ));
-                    }
-                }
-            }
-
-            // 创建结果字典
-            let dict = PyDict::new(py);
-            dict.set_item("header_lines", lines.len())?;
-            dict.set_item("file_path", &input_path)?;
-
-            // 添加每一行到结果中
-            for (i, line) in lines.iter().enumerate() {
-                dict.set_item(format!("line{}", i + 1), line)?;
-            }
-
-            Ok(dict.into())
-        }
-        Err(e) => {
-            Err(PyIOError::new_err(
-                format!("Failed to open file {}: {}", input_path, e)
-            ))
         }
     }
 }

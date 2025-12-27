@@ -40,7 +40,7 @@ lint = [
 ]
 
 [tool.maturin]
-python-source = "python"
+python-source = "."
 module-name = "rcsfs._rcsfs"
 features = ["pyo3/extension-module", "pyo3/generate-import-lib"]
 

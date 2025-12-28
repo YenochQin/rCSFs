@@ -8,7 +8,7 @@ version = "0.1.0"
 [tasks]
 
 [dependencies]
-rust = ">=1.92.0,<1.93"
+rust = ">=1.85.0"
 maturin = ">=1.10.2,<2"
 patchelf = ">=0.17.2"
 python = ">=3.13,<3.14"

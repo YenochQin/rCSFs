@@ -6,8 +6,9 @@ use std::path::Path;
 // Import num_cpus for parallel processing
 extern crate num_cpus;
 
-mod csfs_conversion;
-mod csfs_descriptor;
+// Public modules for integration testing
+pub mod csfs_conversion;
+pub mod csfs_descriptor;
 
 #[pymodule]
 fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -24,13 +25,13 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 
-/// 获取 Parquet 文件基本信息和元数据
+/// Get Parquet file basic information and metadata
 ///
-/// 参数:
-/// - input_path: Parquet 文件路径
+/// Args:
+/// - input_path: Path to Parquet file
 ///
-/// 返回:
-/// 包含文件信息和元数据的字典
+/// Returns:
+/// Dictionary containing file information and metadata
 #[pyfunction]
 fn get_parquet_info(
     py: Python,
@@ -38,13 +39,12 @@ fn get_parquet_info(
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     py.detach(|| {
         csfs_conversion::get_parquet_metadata(Path::new(&input_path))
-            .map_err(|e| PyIOError::new_err(format!("获取 Parquet 文件信息失败: {}", e)))
+            .map_err(|e| PyIOError::new_err(format!("Failed to get Parquet file info: {}", e)))
     })
 }
 
-/// CSF 文件处理器类，提供面向对象的接口
+/// CSF file processor class providing an object-oriented interface
 #[pyclass]
-#[derive(Clone)]
 struct CSFProcessor {
     max_line_len: usize,
     chunk_size: usize,
@@ -52,7 +52,7 @@ struct CSFProcessor {
 
 #[pymethods]
 impl CSFProcessor {
-    /// 创建新的 CSF 处理器实例
+    /// Create a new CSF processor instance
     #[new]
     #[pyo3(signature = (max_line_len=256, chunk_size=30000))]
     fn new(max_line_len: Option<usize>, chunk_size: Option<usize>) -> PyResult<Self> {
@@ -60,10 +60,10 @@ impl CSFProcessor {
         let chunk_size = chunk_size.unwrap_or(30000);
 
         if max_line_len == 0 {
-            return Err(PyValueError::new_err("max_line_len 必须大于 0"));
+            return Err(PyValueError::new_err("max_line_len must be greater than 0"));
         }
         if chunk_size == 0 {
-            return Err(PyValueError::new_err("chunk_size 必须大于 0"));
+            return Err(PyValueError::new_err("chunk_size must be greater than 0"));
         }
 
         Ok(CSFProcessor {
@@ -72,27 +72,27 @@ impl CSFProcessor {
         })
     }
 
-    /// 设置最大行长度
+    /// Set maximum line length
     #[setter]
     fn set_max_line_len(&mut self, value: usize) -> PyResult<()> {
         if value == 0 {
-            return Err(PyValueError::new_err("max_line_len 必须大于 0"));
+            return Err(PyValueError::new_err("max_line_len must be greater than 0"));
         }
         self.max_line_len = value;
         Ok(())
     }
 
-    /// 设置批处理大小
+    /// Set batch processing size
     #[setter]
     fn set_chunk_size(&mut self, value: usize) -> PyResult<()> {
         if value == 0 {
-            return Err(PyValueError::new_err("chunk_size 必须大于 0"));
+            return Err(PyValueError::new_err("chunk_size must be greater than 0"));
         }
         self.chunk_size = value;
         Ok(())
     }
 
-    /// 获取当前配置
+    /// Get current configuration
     fn get_config(&self, py: Python) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         let config = PyDict::new(py);
         config.set_item("max_line_len", self.max_line_len)?;
@@ -100,7 +100,7 @@ impl CSFProcessor {
         Ok(config.into())
     }
 
-    /// 转换 CSF 文件（顺序版本）
+    /// Convert CSF file (sequential version)
     fn convert(&self, py: Python, input_path: String, output_path: String) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         convert_csfs(
             py,
@@ -111,10 +111,10 @@ impl CSFProcessor {
         )
     }
 
-    /// 转换 CSF 文件（并行版本，适用于大规模数据）
+    /// Convert CSF file (parallel version, for large-scale data)
     ///
-    /// 参数:
-    /// - num_workers: 工作线程数（可选，默认为 CPU 核心数）
+    /// Args:
+    /// - num_workers: Number of worker threads (optional, defaults to CPU core count)
     fn convert_parallel(
         &self,
         py: Python,
@@ -132,38 +132,38 @@ impl CSFProcessor {
         )
     }
 
-    /// 获取 Parquet 文件信息
+    /// Get Parquet file information
     fn get_metadata(&self, py: Python, input_path: String) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         get_parquet_info(py, input_path)
     }
 }
 
-/// 将 CSF 文本文件转换为 Parquet 格式
+/// Convert CSF text file to Parquet format
 ///
-/// 参数:
-/// - input_path: 输入 CSF 文件路径
-/// - output_path: 输出 Parquet 文件路径
-/// - max_line_len: 最大行长度（默认 256）
-/// - chunk_size: 批处理大小（默认 30000）
+/// Args:
+/// - input_path: Path to input CSF file
+/// - output_path: Path to output Parquet file
+/// - max_line_len: Maximum line length (default: 256)
+/// - chunk_size: Batch processing size (default: 100000)
 ///
-/// 返回:
-/// 包含转换统计信息的字典:
-/// - success: 转换是否成功
-/// - csf_count: CSF 数量
-/// - total_lines: 总行数
-/// - truncated_count: 截断行数
-/// - input_file: 输入文件路径
-/// - output_file: 输出文件路径
-/// - header_file: TOML 头部文件路径
-/// - max_line_len: 使用的最大行长度
-/// - chunk_size: 使用的批处理大小
-/// - error: 错误信息（仅在失败时存在）
+/// Returns:
+/// Dictionary containing conversion statistics:
+/// - success: Whether conversion succeeded
+/// - csf_count: Number of CSFs
+/// - total_lines: Total line count
+/// - truncated_count: Number of truncated lines
+/// - input_file: Input file path
+/// - output_file: Output file path
+/// - header_file: TOML header file path
+/// - max_line_len: Maximum line length used
+/// - chunk_size: Batch processing size used
+/// - error: Error message (only present on failure)
 ///
-/// 头部文件格式:
-/// 自动生成 [输入文件名前缀]_header.toml 文件，包含:
-/// - header_info: 包含 header_lines 子属性
-///   - header_lines: 头部行内容列表
-/// - conversion_stats: 转换统计信息
+/// Header file format:
+/// Automatically generates [input_file_stem]_header.toml file containing:
+/// - header_info: Contains header_lines sub-property
+///   - header_lines: List of header line contents
+/// - conversion_stats: Conversion statistics
 #[pyfunction]
 fn convert_csfs(
     py: Python,
@@ -172,19 +172,19 @@ fn convert_csfs(
     max_line_len: Option<usize>,
     chunk_size: Option<usize>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-    // 设置默认参数
+    // Set default parameters
     let max_line_len = max_line_len.unwrap_or(256);
-    let chunk_size = chunk_size.unwrap_or(30000);
+    let chunk_size = chunk_size.unwrap_or(100000);
 
-    // 参数验证
+    // Parameter validation
     if max_line_len == 0 {
-        return Err(PyValueError::new_err("max_line_len 必须大于 0"));
+        return Err(PyValueError::new_err("max_line_len must be greater than 0"));
     }
     if chunk_size == 0 {
-        return Err(PyValueError::new_err("chunk_size 必须大于 0"));
+        return Err(PyValueError::new_err("chunk_size must be greater than 0"));
     }
 
-    // 执行转换
+    // Execute conversion
     let result = py.detach(|| {
         csfs_conversion::convert_csfs_to_parquet(
             Path::new(&input_path),
@@ -196,7 +196,7 @@ fn convert_csfs(
 
     match result {
         Ok(conversion_stats) => {
-            // 创建结果字典
+            // Create result dictionary
             let stats = PyDict::new(py);
             stats.set_item("success", true)?;
             stats.set_item("input_file", &input_path)?;
@@ -207,7 +207,7 @@ fn convert_csfs(
             stats.set_item("total_lines", conversion_stats.total_lines)?;
             stats.set_item("truncated_count", conversion_stats.truncated_count)?;
 
-            // 尝试读取 [输入文件名前缀]_header.toml 文件路径
+            // Try to read [input_file_stem]_header.toml file path
             let output_dir = Path::new(&output_path).parent().unwrap_or_else(|| Path::new("."));
             let input_file_stem = Path::new(&input_path).file_stem()
                 .and_then(|s| s.to_str())
@@ -221,7 +221,7 @@ fn convert_csfs(
             Ok(stats.into())
         }
         Err(e) => {
-            // 创建错误结果字典
+            // Create error result dictionary
             let stats = PyDict::new(py);
             stats.set_item("success", false)?;
             stats.set_item("error", e.to_string())?;
@@ -230,40 +230,40 @@ fn convert_csfs(
     }
 }
 
-/// 将 CSF 文本文件转换为 Parquet 格式（并行版本，适用于大规模数据）
+/// Convert CSF text file to Parquet format (parallel version, for large-scale data)
 ///
-/// 参数:
-/// - input_path: 输入 CSF 文件路径
-/// - output_path: 输出 Parquet 文件路径
-/// - max_line_len: 最大行长度（默认 256）
-/// - chunk_size: 批处理大小（默认 50000，建议增大以提高并行效率）
-/// - num_workers: 工作线程数（默认为 CPU 核心数）
+/// Args:
+/// - input_path: Path to input CSF file
+/// - output_path: Path to output Parquet file
+/// - max_line_len: Maximum line length (default: 256)
+/// - chunk_size: Batch processing size (default: 50000, larger recommended for better parallel efficiency)
+/// - num_workers: Number of worker threads (default: CPU core count)
 ///
-/// 返回:
-/// 包含转换统计信息的字典:
-/// - success: 转换是否成功
-/// - csf_count: CSF 数量
-/// - total_lines: 总行数
-/// - truncated_count: 截断行数
-/// - input_file: 输入文件路径
-/// - output_file: 输出文件路径
-/// - header_file: TOML 头部文件路径
-/// - max_line_len: 使用的最大行长度
-/// - chunk_size: 使用的批处理大小
-/// - num_workers: 使用的工作线程数
-/// - error: 错误信息（仅在失败时存在）
+/// Returns:
+/// Dictionary containing conversion statistics:
+/// - success: Whether conversion succeeded
+/// - csf_count: Number of CSFs
+/// - total_lines: Total line count
+/// - truncated_count: Number of truncated lines
+/// - input_file: Input file path
+/// - output_file: Output file path
+/// - header_file: TOML header file path
+/// - max_line_len: Maximum line length used
+/// - chunk_size: Batch processing size used
+/// - num_workers: Number of worker threads used
+/// - error: Error message (only present on failure)
 ///
-/// 特性:
-/// - 多线程并行处理，显著提升大规模数据处理速度
-/// - 保持原始 CSF 顺序，确保输出文件顺序一致
-/// - 内存高效，通过有界队列防止内存爆炸
-/// - 实时进度监控和统计信息
-/// - 自动工作线程数优化（默认使用所有 CPU 核心）
+/// Features:
+/// - Multi-threaded parallel processing for significantly faster large-scale data processing
+/// - Maintains original CSF order for consistent output file ordering
+/// - Memory efficient with bounded queues to prevent memory explosion
+/// - Real-time progress monitoring and statistics
+/// - Automatic worker thread optimization (defaults to using all CPU cores)
 ///
-/// 推荐设置:
-/// - 大规模文件（>10M CSF）: chunk_size=100000, num_workers=8+
-/// - 中等规模文件（1-10M CSF）: chunk_size=50000, num_workers=4-8
-/// - 小规模文件（<1M CSF）: 使用 convert_csfs() 即可
+/// Recommended settings:
+/// - Large files (>10M CSF): chunk_size=100000, num_workers=8+
+/// - Medium files (1-10M CSF): chunk_size=50000, num_workers=4-8
+/// - Small files (<1M CSF): use convert_csfs() instead
 #[pyfunction]
 fn convert_csfs_parallel(
     py: Python,
@@ -273,23 +273,23 @@ fn convert_csfs_parallel(
     chunk_size: Option<usize>,
     num_workers: Option<usize>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-    // 设置默认参数（针对并行处理优化）
+    // Set default parameters (optimized for parallel processing)
     let max_line_len = max_line_len.unwrap_or(256);
-    let chunk_size = chunk_size.unwrap_or(50000); // 增大默认 chunk_size
+    let chunk_size = chunk_size.unwrap_or(50000); // Larger default chunk_size for parallel
     let num_workers = num_workers.unwrap_or_else(|| num_cpus::get());
 
-    // 参数验证
+    // Parameter validation
     if max_line_len == 0 {
-        return Err(PyValueError::new_err("max_line_len 必须大于 0"));
+        return Err(PyValueError::new_err("max_line_len must be greater than 0"));
     }
     if chunk_size == 0 {
-        return Err(PyValueError::new_err("chunk_size 必须大于 0"));
+        return Err(PyValueError::new_err("chunk_size must be greater than 0"));
     }
     if num_workers == 0 {
-        return Err(PyValueError::new_err("num_workers 必须大于 0"));
+        return Err(PyValueError::new_err("num_workers must be greater than 0"));
     }
 
-    // 执行并行转换
+    // Execute parallel conversion
     let result = py.detach(|| {
         csfs_conversion::convert_csfs_to_parquet_parallel(
             Path::new(&input_path),
@@ -302,7 +302,7 @@ fn convert_csfs_parallel(
 
     match result {
         Ok(conversion_stats) => {
-            // 创建结果字典
+            // Create result dictionary
             let stats = PyDict::new(py);
             stats.set_item("success", true)?;
             stats.set_item("input_file", &input_path)?;
@@ -314,7 +314,7 @@ fn convert_csfs_parallel(
             stats.set_item("total_lines", conversion_stats.total_lines)?;
             stats.set_item("truncated_count", conversion_stats.truncated_count)?;
 
-            // 尝试读取 [输入文件名前缀]_header.toml 文件路径
+            // Try to read [input_file_stem]_header.toml file path
             let output_dir = Path::new(&output_path).parent().unwrap_or_else(|| Path::new("."));
             let input_file_stem = Path::new(&input_path).file_stem()
                 .and_then(|s| s.to_str())
@@ -328,7 +328,7 @@ fn convert_csfs_parallel(
             Ok(stats.into())
         }
         Err(e) => {
-            // 创建错误结果字典
+            // Create error result dictionary
             let stats = PyDict::new(py);
             stats.set_item("success", false)?;
             stats.set_item("error", e.to_string())?;

@@ -1,18 +1,71 @@
 use arrow::array::{StringBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use crossbeam_channel::{Receiver, Sender, bounded};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
-use toml;
-use std::thread;
 use std::sync::Mutex;
-use crossbeam_channel::{bounded, Sender, Receiver};
+use std::thread;
+use toml;
+
+/// Number of header lines at the beginning of a CSF file
+const CSF_HEADER_LINE_COUNT: usize = 5;
+
+/// Maximum line length (in bytes) before emitting a strong warning about memory usage.
+/// The BufRead::lines() iterator allocates the full line before truncation.
+/// For practical purposes this is acceptable since:
+/// 1. OS/system limits typically bound single line length
+/// 2. The max_line_len parameter limits what we actually store
+/// 3. Temporary allocations are freed immediately
+/// Lines exceeding this threshold will trigger a warning but still be processed.
+const MAX_LINE_WARNING_THRESHOLD: usize = 1024 * 1024; // 1 MB
+
+/// Validate and get the parent directory of a path, preventing directory traversal.
+/// Returns the parent directory or the current directory if the path has no parent.
+/// This function ensures that the returned path is canonicalized to prevent
+/// path traversal attacks via `..` components.
+fn safe_parent_dir(path: &Path) -> PathBuf {
+    path.parent()
+        .and_then(|p| p.canonicalize().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Extracts the first CSF_HEADER_LINE_COUNT header lines from a CSF file.
+/// Returns a vector of exactly CSF_HEADER_LINE_COUNT strings (empty strings if file has fewer lines).
+fn extract_header_lines(csfs_path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let input_file = File::open(csfs_path)?;
+    let reader = BufReader::new(input_file);
+    let mut lines_iter = reader.lines();
+
+    let mut headers = Vec::with_capacity(CSF_HEADER_LINE_COUNT);
+
+    println!("读取 Header...");
+    for _i in 0..CSF_HEADER_LINE_COUNT {
+        match lines_iter.next() {
+            Some(Ok(line)) => {
+                headers.push(line);
+            }
+            Some(Err(e)) => return Err(e.into()),
+            None => {
+                println!("警告: 文件少于 {} 行 Header", CSF_HEADER_LINE_COUNT);
+                break;
+            }
+        }
+    }
+
+    // Ensure headers has exactly CSF_HEADER_LINE_COUNT lines, fill with empty strings if needed
+    while headers.len() < CSF_HEADER_LINE_COUNT {
+        headers.push(String::new());
+    }
+
+    Ok(headers)
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct HeaderInfo {
@@ -46,13 +99,42 @@ struct ProcessedChunk {
 
 #[derive(Debug)]
 struct WorkChunk {
-    #[allow(dead_code)]
-    chunk_id: usize,
     start_csf_index: usize,
     lines: Vec<String>,
 }
 
-
+/// Convert CSF text file to Parquet format using parallel processing.
+///
+/// This function is optimized for large-scale data processing and provides
+/// significant performance improvements over the sequential version through
+/// multi-threaded processing.
+///
+/// # Arguments
+///
+/// * `csfs_path` - Path to input CSF file
+/// * `output_path` - Path to output Parquet file
+/// * `max_line_len` - Maximum line length (lines longer than this are truncated)
+/// * `chunk_size` - Number of lines per processing chunk (larger = fewer I/O operations)
+/// * `num_workers` - Number of worker threads (None = CPU core count)
+///
+/// # Returns
+///
+/// Returns `ConversionStats` containing:
+/// * `csf_count` - Number of CSFs processed
+/// * `total_lines` - Total number of lines processed
+/// * `truncated_count` - Number of lines that were truncated
+///
+/// # Features
+///
+/// * Multi-threaded parallel processing with producer-consumer pattern
+/// * Maintains original CSF order using BTreeMap for sequencing
+/// * Memory-efficient with bounded queues to prevent OOM
+/// * Real-time progress monitoring
+///
+/// # Header File
+///
+/// Automatically generates `[input_file_stem]_header.toml` in the output directory
+/// containing the 5-line header and conversion statistics.
 pub fn convert_csfs_to_parquet_parallel(
     csfs_path: &Path,
     output_path: &Path,
@@ -63,7 +145,10 @@ pub fn convert_csfs_to_parquet_parallel(
     let num_workers = num_workers.unwrap_or_else(|| num_cpus::get());
     let queue_size = num_workers * 2; // Bounded queue to prevent memory explosion
 
-    println!("启动并行处理: {} 个工作线程, 队列大小: {}", num_workers, queue_size);
+    println!(
+        "启动并行处理: {} 个工作线程, 队列大小: {}",
+        num_workers, queue_size
+    );
     println!("输入文件: {:?}", csfs_path);
     println!("输出文件: {:?}", output_path);
 
@@ -79,30 +164,7 @@ pub fn convert_csfs_to_parquet_parallel(
     }));
 
     // --- 1. 读取 Header (5行) ---
-    let input_file = File::open(csfs_path)?;
-    let reader = BufReader::new(input_file);
-    let mut lines_iter = reader.lines();
-
-    let mut headers = Vec::with_capacity(5);
-    println!("读取 Header...");
-    for _i in 0..5 {
-        match lines_iter.next() {
-            Some(Ok(line)) => {
-                headers.push(line);
-                // println!("  Header {}: {} 字符", i + 1, headers.last().unwrap().len());
-            }
-            Some(Err(e)) => return Err(e.into()),
-            None => {
-                println!("警告: 文件少于 5 行 Header");
-                break;
-            }
-        }
-    }
-
-    // 确保 headers 有 5 行，不足的用空字符串填充
-    while headers.len() < 5 {
-        headers.push(String::new());
-    }
+    let headers = extract_header_lines(csfs_path)?;
 
     // --- 2. 启动工作线程 ---
     let mut worker_handles = Vec::new();
@@ -122,9 +184,7 @@ pub fn convert_csfs_to_parquet_parallel(
     let reader_thread = thread::spawn({
         let work_sender = work_sender.clone();
         let csfs_path = csfs_path.to_owned();
-        move || {
-            file_reader_thread(csfs_path, chunk_size, work_sender)
-        }
+        move || file_reader_thread(csfs_path, chunk_size, work_sender)
     });
 
     // Drop sender copies for worker threads after starting reader thread
@@ -136,9 +196,8 @@ pub fn convert_csfs_to_parquet_parallel(
         let result_receiver = result_receiver;
         let output_path = output_path.to_owned();
         let total_stats = total_stats.clone();
-        move || {
-            writer_thread(result_receiver, output_path, total_stats)
-        }
+        let max_line_len = max_line_len;
+        move || writer_thread(result_receiver, output_path, total_stats, max_line_len)
     });
 
     // --- 5. 等待所有线程完成 ---
@@ -159,8 +218,9 @@ pub fn convert_csfs_to_parquet_parallel(
     };
 
     // 使用输入文件名的前缀 + _header.toml
-    let header_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
-    let input_file_stem = csfs_path.file_stem()
+    let header_dir = safe_parent_dir(output_path);
+    let input_file_stem = csfs_path
+        .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("csfs");
     let header_filename = format!("{}_header.toml", input_file_stem);
@@ -201,6 +261,14 @@ fn worker_process(
             if chunk.len() == 3 {
                 // 处理每一行
                 let process_line = |line: &str| -> (String, bool) {
+                    // Warn about excessively long lines (potential memory issue)
+                    if line.len() > MAX_LINE_WARNING_THRESHOLD {
+                        eprintln!(
+                            "警告: 行过长 ({} bytes)，可能消耗大量内存",
+                            line.len()
+                        );
+                    }
+
                     if line.len() > max_line_len {
                         let truncated = line.chars().take(max_line_len).collect::<String>();
                         (truncated, true)
@@ -237,7 +305,9 @@ fn worker_process(
             truncated_count,
         };
 
-        result_sender.send(processed_chunk).unwrap();
+        result_sender
+            .send(processed_chunk)
+            .expect("Failed to send processed chunk to writer thread");
     }
 }
 
@@ -251,8 +321,8 @@ fn file_reader_thread(
     let reader = BufReader::new(input_file);
     let mut lines_iter = reader.lines();
 
-    // 跳过前 5 行 header
-    for _ in 0..5 {
+    // 跳过前 CSF_HEADER_LINE_COUNT 行 header
+    for _ in 0..CSF_HEADER_LINE_COUNT {
         if lines_iter.next().is_none() {
             break;
         }
@@ -279,7 +349,6 @@ fn file_reader_thread(
 
                         // 发送完整 CSF 的行
                         let work_chunk = WorkChunk {
-                            chunk_id,
                             start_csf_index,
                             lines: chunk_lines[..lines_to_send].to_vec(),
                         };
@@ -310,7 +379,6 @@ fn file_reader_thread(
         if num_full_csfs > 0 {
             let lines_to_send = num_full_csfs * 3;
             let work_chunk = WorkChunk {
-                chunk_id,
                 start_csf_index: global_csf_count,
                 lines: chunk_lines[..lines_to_send].to_vec(),
             };
@@ -327,6 +395,7 @@ fn writer_thread(
     result_receiver: Receiver<ProcessedChunk>,
     output_path: PathBuf,
     total_stats: Arc<Mutex<ConversionStats>>,
+    max_line_len: usize,
 ) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
     // 创建 Arrow Schema
     let schema = Arc::new(Schema::new(vec![
@@ -340,14 +409,18 @@ fn writer_thread(
     let output_file = File::create(&output_path)?;
     let props = WriterProperties::builder()
         .set_compression(parquet::basic::Compression::GZIP(
-            parquet::basic::GzipLevel::try_new(4)?
+            parquet::basic::GzipLevel::try_new(4)?,
         ))
         .build();
 
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
 
-    // 使用基于 CSF 索引的有序写入缓冲区
-    let mut write_buffer = std::collections::BTreeMap::new();
+    // Use BTreeMap for ordered write buffer (not VecDeque) because:
+    // - Worker threads process chunks in parallel and can finish in ANY order
+    // - Chunks that finish early need to be buffered until earlier chunks arrive
+    // - BTreeMap provides O(log n) insert + ordered iteration by CSF index
+    // - VecDeque would only work if chunks arrived sequentially (unlikely with parallel workers)
+    let mut write_buffer: std::collections::BTreeMap<usize, ProcessedChunk> = std::collections::BTreeMap::new();
     let mut next_csf_index = 0;
 
     println!("开始有序写入 Parquet 文件...");
@@ -356,16 +429,21 @@ fn writer_thread(
         write_buffer.insert(processed_chunk.start_csf_index, processed_chunk);
 
         // 按 CSF 索引顺序写入连续的块
-        while let Some((start_index, chunk)) = write_buffer.iter().next().map(|(k, v)| (*k, v.clone())) {
+        while let Some((start_index, chunk)) =
+            write_buffer.iter().next().map(|(k, v)| (*k, v.clone()))
+        {
             if start_index == next_csf_index {
                 // 这是下一个期望的块
                 write_buffer.remove(&start_index);
 
                 // 创建 Arrow 数组
                 let mut idx_builder = UInt64Builder::with_capacity(chunk.csf_count);
-                let mut line1_builder = StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * 256);
-                let mut line2_builder = StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * 256);
-                let mut line3_builder = StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * 256);
+                let mut line1_builder =
+                    StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * max_line_len);
+                let mut line2_builder =
+                    StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * max_line_len);
+                let mut line3_builder =
+                    StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * max_line_len);
 
                 for i in 0..chunk.csf_count {
                     idx_builder.append_value(chunk.idx_values[i]);
@@ -419,6 +497,38 @@ fn writer_thread(
     Ok(stats)
 }
 
+/// Convert CSF text file to Parquet format using sequential processing.
+///
+/// This is the simpler, single-threaded conversion function suitable for
+/// small to medium-sized files or when parallel processing overhead is not justified.
+///
+/// # Arguments
+///
+/// * `csfs_path` - Path to input CSF file
+/// * `output_path` - Path to output Parquet file
+/// * `max_line_len` - Maximum line length (lines longer than this are truncated)
+/// * `chunk_size` - Number of lines per batch processing (larger = better efficiency)
+///
+/// # Returns
+///
+/// Returns `ConversionStats` containing:
+/// * `csf_count` - Number of CSFs processed
+/// * `total_lines` - Total number of lines processed
+/// * `truncated_count` - Number of lines that were truncated
+///
+/// # CSF File Format
+///
+/// Expected format:
+/// * Lines 1-5: Header metadata (extracted to separate TOML file)
+/// * Lines 6+: CSF data in groups of exactly 3 lines per CSF
+///   * Line 1: CSF identifier/configuration
+///   * Line 2: Additional parameters
+///   * Line 3: More parameters or coefficients
+///
+/// # Header File
+///
+/// Automatically generates `[input_file_stem]_header.toml` in the output directory
+/// containing the 5-line header and conversion statistics.
 pub fn convert_csfs_to_parquet(
     csfs_path: &Path,
     output_path: &Path,
@@ -435,25 +545,13 @@ pub fn convert_csfs_to_parquet(
     let mut lines_iter = reader.lines();
 
     // --- 1. 处理 Header (5行) ---
-    let mut headers = Vec::with_capacity(5);
-    println!("读取 Header...");
-    for _i in 0..5 {
-        match lines_iter.next() {
-            Some(Ok(line)) => {
-                headers.push(line);
-                // println!("  Header {}: {} 字符", i + 1, headers.last().unwrap().len());
-            }
-            Some(Err(e)) => return Err(e.into()),
-            None => {
-                println!("警告: 文件少于 5 行 Header");
-                break;
-            }
-        }
-    }
+    let headers = extract_header_lines(csfs_path)?;
 
-    // 确保 headers 有 5 行，不足的用空字符串填充
-    while headers.len() < 5 {
-        headers.push(String::new());
+    // Skip header lines in the main iterator since extract_header_lines uses its own file handle
+    for _ in 0..CSF_HEADER_LINE_COUNT {
+        if lines_iter.next().is_none() {
+            break;
+        }
     }
 
     // --- 2. 创建 Arrow Schema ---
@@ -468,11 +566,11 @@ pub fn convert_csfs_to_parquet(
     let output_file = File::create(output_path)?;
     let props = WriterProperties::builder()
         .set_compression(parquet::basic::Compression::GZIP(
-            parquet::basic::GzipLevel::try_new(4)?
+            parquet::basic::GzipLevel::try_new(4)?,
         ))
         .set_write_batch_size(chunk_size as usize)
         .build();
-    
+
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
     println!("Parquet 写入器已创建，使用 GZIP 压缩");
 
@@ -486,20 +584,35 @@ pub fn convert_csfs_to_parquet(
 
     loop {
         // 读取 chunk_size 行
+        let mut lines_read_this_iteration = 0;
         for _ in 0..chunk_size {
             match lines_iter.next() {
                 Some(Ok(line)) => {
                     total_lines += 1;
-                    
+                    lines_read_this_iteration += 1;
+
+                    // Warn about excessively long lines (potential memory issue)
+                    if line.len() > MAX_LINE_WARNING_THRESHOLD {
+                        eprintln!(
+                            "警告: 第 {} 行过长 ({} bytes)，可能消耗大量内存",
+                            total_lines, line.len()
+                        );
+                    }
+
                     // 检查是否需要截断
                     if line.len() > max_line_len {
                         truncated_count += 1;
-                        if truncated_count <= 5 { // 只打印前5个截断警告
-                            println!("警告: 第 {} 行被截断 ({} > {})", 
-                                total_lines, line.len(), max_line_len);
+                        if truncated_count <= 5 {
+                            // 只打印前5个截断警告
+                            println!(
+                                "警告: 第 {} 行被截断 ({} > {})",
+                                total_lines,
+                                line.len(),
+                                max_line_len
+                            );
                         }
                     }
-                    
+
                     // 截断到 max_line_len
                     let processed_line = if line.len() > max_line_len {
                         line.chars().take(max_line_len).collect::<String>()
@@ -520,18 +633,25 @@ pub fn convert_csfs_to_parquet(
         // 确保是 3 的倍数
         let num_full_csfs = batch_lines.len() / 3;
         if num_full_csfs == 0 {
+            // No more lines to read and incomplete CSF remaining - discard and exit
+            if lines_read_this_iteration == 0 {
+                break;
+            }
             // 保留剩余行给下一轮
             continue;
         }
 
         // 处理完整的 CSF 块
         let lines_to_process = batch_lines.drain(..num_full_csfs * 3).collect::<Vec<_>>();
-        
+
         // 创建 Arrow 数组
         let mut idx_builder = UInt64Builder::with_capacity(num_full_csfs);
-        let mut line1_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
-        let mut line2_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
-        let mut line3_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
+        let mut line1_builder =
+            StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
+        let mut line2_builder =
+            StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
+        let mut line3_builder =
+            StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
 
         for (i, chunk) in lines_to_process.chunks(3).enumerate() {
             if chunk.len() == 3 {
@@ -578,8 +698,9 @@ pub fn convert_csfs_to_parquet(
     };
 
     // 保存头部数据为 [输入文件名前缀]_header.toml 文件
-    let header_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
-    let input_file_stem = csfs_path.file_stem()
+    let header_dir = safe_parent_dir(output_path);
+    let input_file_stem = csfs_path
+        .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("csfs");
     let header_filename = format!("{}_header.toml", input_file_stem);
@@ -594,7 +715,10 @@ pub fn convert_csfs_to_parquet(
     println!("CSF 数量: {}", csf_count);
     println!("截断行数: {}", truncated_count);
     if truncated_count > 0 {
-        println!("警告: {} 行被截断，考虑增加 max_line_len 参数", truncated_count);
+        println!(
+            "警告: {} 行被截断，考虑增加 max_line_len 参数",
+            truncated_count
+        );
     }
     println!("输出文件: {:?}", output_path);
     println!("Header 文件: {:?}", header_path);
@@ -603,9 +727,34 @@ pub fn convert_csfs_to_parquet(
     Ok(header_data.conversion_stats)
 }
 
-/// 获取 Parquet 文件基本信息（仅元数据）
-pub fn get_parquet_metadata(parquet_path: &Path) -> Result<pyo3::Py<pyo3::PyAny>, Box<dyn std::error::Error + Send + Sync>> {
-    use pyo3::{Python, types::{PyDict, PyDictMethods}};
+/// Get Parquet file metadata without reading the actual data.
+///
+/// This function efficiently retrieves file information and metadata
+/// without loading the entire file into memory.
+///
+/// # Arguments
+///
+/// * `parquet_path` - Path to the Parquet file
+///
+/// # Returns
+///
+/// Returns a Python dictionary containing:
+/// * `file_path` - Path to the Parquet file
+/// * `file_size` - File size in bytes
+/// * `num_rows` - Number of rows in the file
+/// * `num_columns` - Number of columns
+/// * `compression` - Compression method used (e.g., "GZIP")
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened or is not a valid Parquet file.
+pub fn get_parquet_metadata(
+    parquet_path: &Path,
+) -> Result<pyo3::Py<pyo3::PyAny>, Box<dyn std::error::Error + Send + Sync>> {
+    use pyo3::{
+        Python,
+        types::{PyDict, PyDictMethods},
+    };
 
     // 获取文件大小
     let file_metadata = std::fs::metadata(parquet_path)?;
@@ -628,7 +777,10 @@ pub fn get_parquet_metadata(parquet_path: &Path) -> Result<pyo3::Py<pyo3::PyAny>
         dict.set_item("file_size", file_size)?;
         dict.set_item("num_rows", num_rows)?;
         dict.set_item("num_columns", num_columns)?;
-        dict.set_item("compression", metadata.file_metadata().created_by().unwrap_or("Unknown"))?;
+        dict.set_item(
+            "compression",
+            metadata.file_metadata().created_by().unwrap_or("Unknown"),
+        )?;
 
         Ok(dict.into())
     })

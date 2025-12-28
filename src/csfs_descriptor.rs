@@ -286,7 +286,7 @@ pub mod parquet_batch {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    // Parallel Descriptor Generation (Rayon-based, simplified)
+    // Parallel Descriptor Generation (Rayon-based, optimized)
     ////////////////////////////////////////////////////////////////////////////////
 
     /// Generate descriptors from parquet with parallel processing using rayon
@@ -294,7 +294,7 @@ pub mod parquet_batch {
     /// This implementation:
     /// 1. Loads all data into memory upfront (suitable for files fitting in RAM)
     /// 2. Uses rayon's work-stealing for automatic load balancing
-    /// 3. Maintains strict ordering via index-based writes
+    /// 3. Parallel columnar conversion for optimal performance
     ///
     /// # Arguments
     /// * `input_parquet` - Path to input parquet file
@@ -311,6 +311,7 @@ pub mod parquet_batch {
 
         // Configure rayon thread pool if specified
         if let Some(n) = num_workers {
+            println!("配置 Rayon 线程池，使用 {} 个 worker", n);
             rayon::ThreadPoolBuilder::new()
                 .num_threads(n)
                 .build_global()
@@ -319,7 +320,12 @@ pub mod parquet_batch {
 
         let orbital_count = peel_subshells.len();
         let descriptor_size = 3 * orbital_count;
+        println!("轨道数量: {}, 描述符大小: {}", orbital_count, descriptor_size);
         let generator = std::sync::Arc::new(super::CSFDescriptorGenerator::new(peel_subshells));
+
+        println!("开始生成描述符（Arrow 并行版本）");
+        println!("输入文件: {:?}", input_parquet);
+        println!("输出文件: {:?}", output_parquet);
 
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 1: Load all data from parquet (sequential)
@@ -384,6 +390,7 @@ pub mod parquet_batch {
         }
 
         let total_csfs = all_rows.len();
+        println!("总共需要处理 {} 个 CSF", total_csfs);
 
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 2: Parallel processing with rayon (work-stealing)
@@ -402,14 +409,36 @@ pub mod parquet_batch {
             })
             .collect();
 
+        println!("描述符生成完成: {} 个", descriptors.len());
+
         ////////////////////////////////////////////////////////////////////////////////
-        // Phase 3: Write output parquet (sequential)
+        // Phase 3: 并行转换为列式格式（优化瓶颈）
         ////////////////////////////////////////////////////////////////////////////////
+        println!("转换为列式格式（并行）...");
         use arrow::array::{Array, Int32Array};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use parquet::arrow::ArrowWriter;
         use std::sync::Arc;
+
+        // 预分配列数组
+        let mut column_arrays: Vec<Option<Arc<dyn Array>>> = Vec::with_capacity(descriptor_size);
+        column_arrays.resize_with(descriptor_size, || None);
+
+        let num_rows = descriptors.len();
+        let descriptors_ref = &descriptors;
+
+        // 并行处理列转换（每列独立）
+        (0..descriptor_size).into_par_iter().for_each(|col_idx| {
+            let values: Vec<i32> = descriptors_ref.iter().map(|desc| desc[col_idx]).collect();
+            column_arrays[col_idx] = Some(Arc::new(Int32Array::from(values)) as Arc<dyn Array>);
+        });
+
+        // 收集结果
+        let column_arrays: Vec<Arc<dyn Array>> = column_arrays
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .unwrap();
 
         let mut fields = Vec::with_capacity(descriptor_size);
         for i in 0..descriptor_size {
@@ -417,6 +446,13 @@ pub mod parquet_batch {
         }
         let output_schema = Arc::new(Schema::new(fields));
 
+        let output_batch = RecordBatch::try_new(output_schema, column_arrays)
+            .map_err(|e| format!("Failed to create output batch: {}", e))?;
+
+        ////////////////////////////////////////////////////////////////////////////////
+        // Phase 4: Write output parquet (sequential)
+        ////////////////////////////////////////////////////////////////////////////////
+        println!("开始写入 Parquet 文件（无压缩）...");
         let output_file = std::fs::File::create(output_parquet)
             .map_err(|e| format!("Failed to create output parquet: {}", e))?;
 
@@ -424,19 +460,8 @@ pub mod parquet_batch {
             .set_compression(parquet::basic::Compression::UNCOMPRESSED)
             .build();
 
-        let mut writer = ArrowWriter::try_new(output_file, output_schema.clone(), Some(props))
+        let mut writer = ArrowWriter::try_new(output_file, output_schema, Some(props))
             .map_err(|e| format!("Failed to create arrow writer: {}", e))?;
-
-        // Convert to columnar format
-        let column_arrays: Vec<Arc<dyn Array>> = (0..descriptor_size)
-            .map(|col_idx| {
-                let values: Vec<i32> = descriptors.iter().map(|desc| desc[col_idx]).collect();
-                Arc::new(Int32Array::from(values)) as Arc<dyn Array>
-            })
-            .collect();
-
-        let output_batch = RecordBatch::try_new(output_schema, column_arrays)
-            .map_err(|e| format!("Failed to create output batch: {}", e))?;
 
         writer
             .write(&output_batch)
@@ -446,288 +471,21 @@ pub mod parquet_batch {
             .close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
+        println!("描述符导出完成！");
+        println!("输入 CSF 数量: {}", total_csfs);
+        println!("生成描述符数量: {}", num_rows);
+        println!("轨道数量: {}", orbital_count);
+        println!("描述符大小: {}", descriptor_size);
+
         Ok(BatchDescriptorStats {
             input_file: input_parquet.to_string_lossy().to_string(),
             output_file: output_parquet.to_string_lossy().to_string(),
             csf_count: total_csfs,
-            descriptor_count: total_csfs,
+            descriptor_count: num_rows,
             orbital_count,
             descriptor_size,
         })
     }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-/// Polars DataFrame Export (optional feature)
-//////////////////////////////////////////////////////////////////////////////
-
-/// Export descriptors to Parquet using Polars DataFrame
-///
-/// This is an alternative to the pure Arrow implementation, providing
-/// a more user-friendly API for those familiar with Polars.
-///
-/// # Arguments
-/// * `input_parquet` - Path to input parquet file (must have line1, line2, line3 columns)
-/// * `output_parquet` - Path to output parquet file for descriptors
-/// * `peel_subshells` - Optional list of subshell names (auto-detected if None)
-/// * `header_path` - Optional path to header TOML file
-///
-/// # Returns
-/// * `Ok(BatchDescriptorStats)` - Statistics about the batch operation
-/// * `Err(String)` - Error message if operation fails
-#[cfg(feature = "polars")]
-pub fn export_descriptors_with_polars(
-    input_parquet: &Path,
-    output_parquet: &Path,
-    peel_subshells: Option<Vec<String>>,
-    header_path: Option<std::path::PathBuf>,
-) -> Result<parquet_batch::BatchDescriptorStats, String> {
-    use polars::prelude::*;
-
-    // Step 1: Determine peel_subshells
-    let peel_subshells = match peel_subshells {
-        Some(s) => s,
-        None => {
-            let header = match header_path {
-                Some(h) => h,
-                None => parquet_batch::find_header_file(input_parquet)
-                    .ok_or("Could not auto-detect header file. Please provide peel_subshells or header_path.")?,
-            };
-            parquet_batch::read_peel_subshells_from_header(&header)?
-        }
-    };
-
-    let orbital_count = peel_subshells.len();
-    let descriptor_size = 3 * orbital_count;
-    let generator = CSFDescriptorGenerator::new(peel_subshells.clone());
-
-    // Step 2: Read input parquet using Polars
-    let df = LazyFrame::scan_parquet(
-        input_parquet,
-        ScanArgsParquet::default(),
-    )
-    .map_err(|e| format!("Failed to read input parquet with Polars: {}", e))?
-    .collect()
-    .map_err(|e| format!("Failed to collect LazyFrame: {}", e))?;
-
-    // Step 3: Extract columns and parse descriptors
-    let line1_series = df
-        .column("line1")
-        .map_err(|e| format!("Failed to get line1 column: {}", e))?
-        .str()
-        .map_err(|e| format!("line1 column is not string type: {}", e))?
-        .into_no_null_iter();
-
-    let line2_series = df
-        .column("line2")
-        .map_err(|e| format!("Failed to get line2 column: {}", e))?
-        .str()
-        .map_err(|e| format!("line2 column is not string type: {}", e))?
-        .into_no_null_iter();
-
-    let line3_series = df
-        .column("line3")
-        .map_err(|e| format!("Failed to get line3 column: {}", e))?
-        .str()
-        .map_err(|e| format!("line3 column is not string type: {}", e))?
-        .into_no_null_iter();
-
-    let total_csfs = df.height();
-
-    // Step 4: Parse all descriptors
-    let mut descriptors_vec: Vec<Vec<i32>> = Vec::with_capacity(total_csfs);
-    let mut descriptor_count = 0;
-
-    for ((line1, line2), line3) in line1_series.zip(line2_series).zip(line3_series) {
-        match generator.parse_csf(line1, line2, line3) {
-            Ok(descriptor) => {
-                descriptors_vec.push(descriptor);
-                descriptor_count += 1;
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to parse CSF: {}", e);
-            }
-        }
-    }
-
-    // Step 5: Build Polars DataFrame with columnar data
-    let mut columns: Vec<Column> = Vec::with_capacity(descriptor_size);
-
-    for col_idx in 0..descriptor_size {
-        let values: Vec<i32> = descriptors_vec
-            .iter()
-            .map(|desc| desc[col_idx])
-            .collect();
-        let s = Series::new(format!("col_{}", col_idx).as_str().into(), values);
-        columns.push(Column::Series(s.into()));
-    }
-
-    let output_df = DataFrame::new(columns)
-        .map_err(|e| format!("Failed to create output DataFrame: {}", e))?;
-
-    // Step 6: Write to parquet with compression
-    let _output_path_str = output_parquet
-        .to_str()
-        .ok_or("Invalid output parquet path")?;
-
-    let mut file = std::fs::File::create(output_parquet)
-        .map_err(|e| format!("Failed to create output file: {}", e))?;
-
-    ParquetWriter::new(&mut file)
-        .with_compression(ParquetCompression::Uncompressed)
-        .finish(&mut output_df.clone())
-        .map_err(|e| format!("Failed to write parquet: {}", e))?;
-
-    Ok(parquet_batch::BatchDescriptorStats {
-        input_file: input_parquet.to_string_lossy().to_string(),
-        output_file: output_parquet.to_string_lossy().to_string(),
-        csf_count: total_csfs,
-        descriptor_count,
-        orbital_count,
-        descriptor_size,
-    })
-}
-
-/// Export descriptors to Parquet using Polars DataFrame with parallel processing
-///
-/// This is a parallel version that uses rayon for multi-threaded CSF parsing,
-/// similar to `generate_descriptors_from_parquet_parallel` but with Polars DataFrame output.
-///
-/// # Arguments
-/// * `input_parquet` - Path to input parquet file
-/// * `output_parquet` - Path to output parquet file for descriptors
-/// * `peel_subshells` - List of subshell names
-/// * `num_workers` - Optional number of worker threads (default: CPU core count)
-///
-/// # Returns
-/// * `Ok(BatchDescriptorStats)` - Statistics about the batch operation
-/// * `Err(String)` - Error message if operation fails
-#[cfg(feature = "polars")]
-pub fn export_descriptors_with_polars_parallel(
-    input_parquet: &Path,
-    output_parquet: &Path,
-    peel_subshells: Vec<String>,
-    num_workers: Option<usize>,
-) -> Result<parquet_batch::BatchDescriptorStats, String> {
-    use polars::prelude::*;
-    use rayon::prelude::*;
-    use std::sync::Arc;
-
-    // Configure rayon thread pool if specified
-    if let Some(n) = num_workers {
-        println!("配置 Rayon 线程池，使用 {} 个 worker", n);
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(n)
-            .build_global()
-            .map_err(|e| format!("Failed to configure rayon thread pool: {}", e))?;
-    }
-
-    let orbital_count = peel_subshells.len();
-    let descriptor_size = 3 * orbital_count;
-    println!("轨道数量: {}, 描述符大小: {}", orbital_count, descriptor_size);
-    let generator = Arc::new(CSFDescriptorGenerator::new(peel_subshells));
-
-    println!("开始生成描述符（Polars 并行版本）");
-    println!("输入文件: {:?}", input_parquet);
-    println!("输出文件: {:?}", output_parquet);
-
-    // Step 1: Read input parquet using Polars
-    let df = LazyFrame::scan_parquet(
-        input_parquet,
-        ScanArgsParquet::default(),
-    )
-    .map_err(|e| format!("Failed to read input parquet with Polars: {}", e))?
-    .collect()
-    .map_err(|e| format!("Failed to collect LazyFrame: {}", e))?;
-
-    let total_csfs = df.height();
-    println!("总共需要处理 {} 个 CSF", total_csfs);
-
-    // Step 2: Extract columns as Vec<String> for parallel processing
-    let line1_col = df.column("line1")
-        .map_err(|e| format!("Failed to get line1 column: {}", e))?
-        .str()
-        .map_err(|e| format!("line1 column is not string type: {}", e))?;
-
-    let line2_col = df.column("line2")
-        .map_err(|e| format!("Failed to get line2 column: {}", e))?
-        .str()
-        .map_err(|e| format!("line2 column is not string type: {}", e))?;
-
-    let line3_col = df.column("line3")
-        .map_err(|e| format!("Failed to get line3 column: {}", e))?
-        .str()
-        .map_err(|e| format!("line3 column is not string type: {}", e))?;
-
-    // Collect all rows into owned strings
-    let all_rows: Vec<(String, String, String)> = (0..total_csfs)
-        .map(|i| (
-            line1_col.get(i).unwrap_or("").to_string(),
-            line2_col.get(i).unwrap_or("").to_string(),
-            line3_col.get(i).unwrap_or("").to_string(),
-        ))
-        .collect();
-
-    // Step 3: Parallel parsing with rayon
-    let generator_ref = generator.as_ref();
-    let descriptors: Vec<Vec<i32>> = all_rows
-        .into_par_iter()
-        .enumerate()
-        .map(|(i, (line1, line2, line3))| {
-            let result = match generator_ref.parse_csf(&line1, &line2, &line3) {
-                Ok(desc) => desc,
-                Err(e) => {
-                    eprintln!("Warning: Failed to parse CSF at index {}: {}", i, e);
-                    vec![0i32; descriptor_size]
-                }
-            };
-            result
-        })
-        .collect();
-
-    let descriptor_count = descriptors.len();
-    println!("描述符生成完成: {} 个", descriptor_count);
-
-    // Step 4: Build Polars DataFrame with columnar data
-    let mut columns: Vec<Column> = Vec::with_capacity(descriptor_size);
-
-    for col_idx in 0..descriptor_size {
-        let values: Vec<i32> = descriptors
-            .iter()
-            .map(|desc| desc[col_idx])
-            .collect();
-        let s = Series::new(format!("col_{}", col_idx).as_str().into(), values);
-        columns.push(Column::Series(s.into()));
-    }
-
-    let output_df = DataFrame::new(columns)
-        .map_err(|e| format!("Failed to create output DataFrame: {}", e))?;
-
-    println!("开始写入 Parquet 文件（无压缩）...");
-
-    // Step 5: Write to parquet with compression
-    let mut file = std::fs::File::create(output_parquet)
-        .map_err(|e| format!("Failed to create output file: {}", e))?;
-
-    ParquetWriter::new(&mut file)
-        .with_compression(ParquetCompression::Uncompressed)
-        .finish(&mut output_df.clone())
-        .map_err(|e| format!("Failed to write parquet: {}", e))?;
-
-    println!("描述符导出完成！");
-    println!("输入 CSF 数量: {}", total_csfs);
-    println!("生成描述符数量: {}", descriptor_count);
-    println!("轨道数量: {}", orbital_count);
-    println!("描述符大小: {}", descriptor_size);
-
-    Ok(parquet_batch::BatchDescriptorStats {
-        input_file: input_parquet.to_string_lossy().to_string(),
-        output_file: output_parquet.to_string_lossy().to_string(),
-        csf_count: total_csfs,
-        descriptor_count,
-        orbital_count,
-        descriptor_size,
-    })
 }
 
 /// Convert a J-value string to its doubled integer representation (2J)
@@ -1163,97 +921,6 @@ fn py_generate_descriptors_from_parquet_parallel(
     Ok(dict.into())
 }
 
-/// Python-exposed function to export descriptors using Polars DataFrame
-#[cfg(all(feature = "python", feature = "polars"))]
-#[pyfunction]
-#[pyo3(signature = (
-    input_parquet,
-    output_parquet,
-    peel_subshells=None,
-    header_path=None
-))]
-fn py_export_descriptors_with_polars(
-    py: Python,
-    input_parquet: String,
-    output_parquet: String,
-    peel_subshells: Option<Vec<String>>,
-    header_path: Option<String>,
-) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-    use pyo3::types::PyDict;
-    use std::path::Path;
-
-    let header_path_buf = header_path.as_ref().map(|s| Path::new(s).to_path_buf());
-    let input_path = Path::new(&input_parquet).to_path_buf();
-    let output_path = Path::new(&output_parquet).to_path_buf();
-
-    // Release the GIL during the long-running operation
-    let stats = py
-        .detach(|| {
-            export_descriptors_with_polars(
-                &input_path,
-                &output_path,
-                peel_subshells,
-                header_path_buf,
-            )
-        })
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-
-    let dict = PyDict::new(py);
-    dict.set_item("success", true)?;
-    dict.set_item("input_file", stats.input_file)?;
-    dict.set_item("output_file", stats.output_file)?;
-    dict.set_item("csf_count", stats.csf_count)?;
-    dict.set_item("descriptor_count", stats.descriptor_count)?;
-    dict.set_item("orbital_count", stats.orbital_count)?;
-    dict.set_item("descriptor_size", stats.descriptor_size)?;
-    Ok(dict.into())
-}
-
-/// Python-exposed function to export descriptors using Polars DataFrame (parallel version)
-#[cfg(all(feature = "python", feature = "polars"))]
-#[pyfunction]
-#[pyo3(signature = (
-    input_parquet,
-    output_parquet,
-    peel_subshells,
-    num_workers=None
-))]
-fn py_export_descriptors_with_polars_parallel(
-    py: Python,
-    input_parquet: String,
-    output_parquet: String,
-    peel_subshells: Vec<String>,
-    num_workers: Option<usize>,
-) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-    use pyo3::types::PyDict;
-    use std::path::Path;
-
-    let input_path = Path::new(&input_parquet).to_path_buf();
-    let output_path = Path::new(&output_parquet).to_path_buf();
-
-    // Release the GIL during the long-running operation
-    let stats = py
-        .detach(|| {
-            export_descriptors_with_polars_parallel(
-                &input_path,
-                &output_path,
-                peel_subshells,
-                num_workers,
-            )
-        })
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-
-    let dict = PyDict::new(py);
-    dict.set_item("success", true)?;
-    dict.set_item("input_file", stats.input_file)?;
-    dict.set_item("output_file", stats.output_file)?;
-    dict.set_item("csf_count", stats.csf_count)?;
-    dict.set_item("descriptor_count", stats.descriptor_count)?;
-    dict.set_item("orbital_count", stats.orbital_count)?;
-    dict.set_item("descriptor_size", stats.descriptor_size)?;
-    Ok(dict.into())
-}
-
 /// Register the Python module functions and classes
 #[cfg(feature = "python")]
 pub fn register_descriptor_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1267,19 +934,6 @@ pub fn register_descriptor_module(module: &Bound<'_, PyModule>) -> PyResult<()> 
         module
     )?)?;
     module.add_function(wrap_pyfunction!(py_read_peel_subshells, module)?)?;
-
-    // Register Polars export function if feature is enabled
-    #[cfg(feature = "polars")]
-    {
-        module.add_function(wrap_pyfunction!(
-            py_export_descriptors_with_polars,
-            module
-        )?)?;
-        module.add_function(wrap_pyfunction!(
-            py_export_descriptors_with_polars_parallel,
-            module
-        )?)?;
-    }
 
     Ok(())
 }

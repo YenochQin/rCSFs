@@ -3,9 +3,6 @@ use pyo3::exceptions::{PyValueError, PyIOError};
 use pyo3::types::{PyDict, PyDictMethods};
 use std::path::Path;
 
-// Import num_cpus for parallel processing
-extern crate num_cpus;
-
 // Public modules for integration testing
 pub mod csfs_conversion;
 pub mod csfs_descriptor;
@@ -112,15 +109,11 @@ impl CSFProcessor {
     }
 
     /// Convert CSF file (parallel version, for large-scale data)
-    ///
-    /// Args:
-    /// - num_workers: Number of worker threads (optional, defaults to CPU core count)
     fn convert_parallel(
         &self,
         py: Python,
         input_path: String,
         output_path: String,
-        num_workers: Option<usize>
     ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         convert_csfs_parallel(
             py,
@@ -128,7 +121,6 @@ impl CSFProcessor {
             output_path,
             Some(self.max_line_len),
             Some(self.chunk_size),
-            num_workers,
         )
     }
 
@@ -236,8 +228,7 @@ fn convert_csfs(
 /// - input_path: Path to input CSF file
 /// - output_path: Path to output Parquet file
 /// - max_line_len: Maximum line length (default: 256)
-/// - chunk_size: Batch processing size (default: 50000, larger recommended for better parallel efficiency)
-/// - num_workers: Number of worker threads (default: CPU core count)
+/// - chunk_size: Batch processing size (default: 3000000, larger recommended for better parallel efficiency)
 ///
 /// Returns:
 /// Dictionary containing conversion statistics:
@@ -250,20 +241,14 @@ fn convert_csfs(
 /// - header_file: TOML header file path
 /// - max_line_len: Maximum line length used
 /// - chunk_size: Batch processing size used
-/// - num_workers: Number of worker threads used
 /// - error: Error message (only present on failure)
 ///
 /// Features:
-/// - Multi-threaded parallel processing for significantly faster large-scale data processing
+/// - Multi-threaded parallel processing using rayon (automatically uses all CPU cores)
 /// - Maintains original CSF order for consistent output file ordering
-/// - Memory efficient with bounded queues to prevent memory explosion
-/// - Real-time progress monitoring and statistics
-/// - Automatic worker thread optimization (defaults to using all CPU cores)
+/// - Memory efficient streaming to handle large files
 ///
-/// Recommended settings:
-/// - Large files (>10M CSF): chunk_size=100000, num_workers=8+
-/// - Medium files (1-10M CSF): chunk_size=50000, num_workers=4-8
-/// - Small files (<1M CSF): use convert_csfs() instead
+/// Note: To control the number of worker threads, set the RAYON_NUM_THREADS environment variable.
 #[pyfunction]
 fn convert_csfs_parallel(
     py: Python,
@@ -271,12 +256,10 @@ fn convert_csfs_parallel(
     output_path: String,
     max_line_len: Option<usize>,
     chunk_size: Option<usize>,
-    num_workers: Option<usize>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     // Set default parameters (optimized for parallel processing)
     let max_line_len = max_line_len.unwrap_or(256);
     let chunk_size = chunk_size.unwrap_or(3000000); // 1M CSFs = 3M lines per batch
-    let num_workers = num_workers.unwrap_or_else(|| num_cpus::get());
 
     // Parameter validation
     if max_line_len == 0 {
@@ -284,9 +267,6 @@ fn convert_csfs_parallel(
     }
     if chunk_size == 0 {
         return Err(PyValueError::new_err("chunk_size must be greater than 0"));
-    }
-    if num_workers == 0 {
-        return Err(PyValueError::new_err("num_workers must be greater than 0"));
     }
 
     // Execute parallel conversion
@@ -296,7 +276,6 @@ fn convert_csfs_parallel(
             Path::new(&output_path),
             max_line_len,
             chunk_size,
-            Some(num_workers),
         )
     });
 
@@ -309,7 +288,6 @@ fn convert_csfs_parallel(
             stats.set_item("output_file", &output_path)?;
             stats.set_item("max_line_len", max_line_len)?;
             stats.set_item("chunk_size", chunk_size)?;
-            stats.set_item("num_workers", num_workers)?;
             stats.set_item("csf_count", conversion_stats.csf_count)?;
             stats.set_item("total_lines", conversion_stats.total_lines)?;
             stats.set_item("truncated_count", conversion_stats.truncated_count)?;

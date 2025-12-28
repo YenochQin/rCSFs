@@ -307,15 +307,12 @@ def generate_descriptors_from_parquet_parallel(
     output_parquet: Union[str, Path],
     peel_subshells: list[str],
     num_workers: Optional[int] = None,
-    rows_per_task: Optional[int] = None,
 ) -> ParallelDescriptorGenerationStats:
     """
     Generate CSF descriptors from a parquet file using parallel processing.
 
     This function is optimized for large-scale descriptor generation (tens of millions
-    to billions of CSFs). It combines:
-    1. Streaming batch reading from parquet (memory efficient)
-    2. Multi-threaded parallel processing within each batch (CPU efficient)
+    to billions of CSFs). It uses rayon's work-stealing for automatic load balancing.
 
     Output Schema:
         The output parquet file will have descriptor_size columns (col_0, col_1, ..., col_N),
@@ -327,7 +324,6 @@ def generate_descriptors_from_parquet_parallel(
         output_parquet: Path to output parquet file for descriptors
         peel_subshells: List of subshell names (e.g., ['5s', '4d-', '4d', '5p-', '5p', '6s'])
         num_workers: Number of worker threads (default: CPU core count)
-        rows_per_task: Number of rows per parallel task (default: 1000)
 
     Returns:
         Dictionary containing generation statistics:
@@ -355,28 +351,31 @@ def generate_descriptors_from_parquet_parallel(
         >>> df = pl.read_parquet("descriptors.parquet")
         >>> descriptors = df.to_numpy()  # Shape: (n_csfs, descriptor_size)
 
-        >>> # With custom settings for large files
+        >>> # With custom worker count for large files
         >>> stats = generate_descriptors_from_parquet_parallel(
         ...     "csfs_data.parquet",
         ...     "descriptors.parquet",
         ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s'],
-        ...     num_workers=8,
-        ...     rows_per_task=5000
+        ...     num_workers=8
         ... )
 
     Performance Considerations:
         - For small files (<1M CSFs): use generate_descriptors_from_parquet() instead
-        - For medium files (1-10M CSFs): num_workers=4-8, rows_per_task=1000-2000
-        - For large files (>10M CSFs): num_workers=8+, rows_per_task=5000-10000
+        - For medium files (1-10M CSFs): num_workers=4-8
+        - For large files (>10M CSFs): num_workers=8+
         - More workers = higher CPU usage, faster processing
-        - Larger rows_per_task = less overhead, but may reduce parallelism
+        - Rayon automatically handles work stealing for optimal load balancing
+
+    Note:
+        This implementation loads all data into memory upfront. For 280MB parquet files
+        (typical for 100M+ CSFs), this fits easily in 256GB RAM. The use of rayon's
+        work-stealing ensures optimal CPU utilization without manual task sizing.
     """
     return _generate_descriptors_from_parquet_parallel(
         input_parquet=str(input_parquet),
         output_parquet=str(output_parquet),
         peel_subshells=peel_subshells,
         num_workers=num_workers,
-        rows_per_task=rows_per_task,
     )
 
 

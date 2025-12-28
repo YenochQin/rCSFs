@@ -114,7 +114,6 @@ def py_generate_descriptors_from_parquet_parallel(
     output_parquet: str,
     peel_subshells: list[str],
     num_workers: Optional[int] = None,
-    rows_per_task: Optional[int] = None,
 ) -> ParallelDescriptorGenerationStats: ...
 
 def py_read_peel_subshells(header_path: str) -> list[str]: ...

@@ -609,13 +609,13 @@ pub fn export_descriptors_with_polars_parallel(
     peel_subshells: Vec<String>,
     num_workers: Option<usize>,
 ) -> Result<parquet_batch::BatchDescriptorStats, String> {
-    use indicatif::{ProgressBar, ProgressStyle};
     use polars::prelude::*;
     use rayon::prelude::*;
     use std::sync::Arc;
 
     // Configure rayon thread pool if specified
     if let Some(n) = num_workers {
+        println!("配置 Rayon 线程池，使用 {} 个 worker", n);
         rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .build_global()
@@ -624,7 +624,12 @@ pub fn export_descriptors_with_polars_parallel(
 
     let orbital_count = peel_subshells.len();
     let descriptor_size = 3 * orbital_count;
+    println!("轨道数量: {}, 描述符大小: {}", orbital_count, descriptor_size);
     let generator = Arc::new(CSFDescriptorGenerator::new(peel_subshells));
+
+    println!("开始生成描述符（Polars 并行版本）");
+    println!("输入文件: {:?}", input_parquet);
+    println!("输出文件: {:?}", output_parquet);
 
     // Step 1: Read input parquet using Polars
     let df = LazyFrame::scan_parquet(
@@ -636,16 +641,9 @@ pub fn export_descriptors_with_polars_parallel(
     .map_err(|e| format!("Failed to collect LazyFrame: {}", e))?;
 
     let total_csfs = df.height();
+    println!("总共需要处理 {} 个 CSF", total_csfs);
 
-    // Step 2: Create progress bar
-    let pb = ProgressBar::new(total_csfs as u64);
-    pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} CSFs ({eta})")
-        .unwrap()
-        .progress_chars("##-"));
-    pb.enable_steady_tick(std::time::Duration::from_millis(100));
-
-    // Step 3: Extract columns as Vec<String> for parallel processing
+    // Step 2: Extract columns as Vec<String> for parallel processing
     let line1_col = df.column("line1")
         .map_err(|e| format!("Failed to get line1 column: {}", e))?
         .str()
@@ -670,7 +668,7 @@ pub fn export_descriptors_with_polars_parallel(
         ))
         .collect();
 
-    // Step 4: Parallel parsing with rayon and progress tracking
+    // Step 3: Parallel parsing with rayon
     let generator_ref = generator.as_ref();
     let descriptors: Vec<Vec<i32>> = all_rows
         .into_par_iter()
@@ -683,19 +681,14 @@ pub fn export_descriptors_with_polars_parallel(
                     vec![0i32; descriptor_size]
                 }
             };
-            // Update progress (note: this is not thread-safe but ok for visual feedback)
-            if i % 10000 == 0 {
-                pb.set_position(i as u64);
-            }
             result
         })
         .collect();
 
-    pb.finish_with_message(format!("✅ 完成: {} 描述符已生成", descriptors.len()));
-
     let descriptor_count = descriptors.len();
+    println!("描述符生成完成: {} 个", descriptor_count);
 
-    // Step 5: Build Polars DataFrame with columnar data
+    // Step 4: Build Polars DataFrame with columnar data
     let mut columns: Vec<Column> = Vec::with_capacity(descriptor_size);
 
     for col_idx in 0..descriptor_size {
@@ -710,6 +703,8 @@ pub fn export_descriptors_with_polars_parallel(
     let output_df = DataFrame::new(columns)
         .map_err(|e| format!("Failed to create output DataFrame: {}", e))?;
 
+    println!("开始写入 Parquet 文件（无压缩）...");
+
     // Step 5: Write to parquet with compression
     let mut file = std::fs::File::create(output_parquet)
         .map_err(|e| format!("Failed to create output file: {}", e))?;
@@ -718,6 +713,12 @@ pub fn export_descriptors_with_polars_parallel(
         .with_compression(ParquetCompression::Uncompressed)
         .finish(&mut output_df.clone())
         .map_err(|e| format!("Failed to write parquet: {}", e))?;
+
+    println!("描述符导出完成！");
+    println!("输入 CSF 数量: {}", total_csfs);
+    println!("生成描述符数量: {}", descriptor_count);
+    println!("轨道数量: {}", orbital_count);
+    println!("描述符大小: {}", descriptor_size);
 
     Ok(parquet_batch::BatchDescriptorStats {
         input_file: input_parquet.to_string_lossy().to_string(),

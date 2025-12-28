@@ -178,9 +178,7 @@ pub mod parquet_batch {
             .map_err(|e| format!("Failed to create output parquet: {}", e))?;
 
         let props = parquet::file::properties::WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::ZSTD(
-                parquet::basic::ZstdLevel::default(),
-            ))
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
             .build();
 
         let mut writer = ArrowWriter::try_new(output_file, output_schema.clone(), Some(props))
@@ -423,9 +421,7 @@ pub mod parquet_batch {
             .map_err(|e| format!("Failed to create output parquet: {}", e))?;
 
         let props = parquet::file::properties::WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::ZSTD(
-                parquet::basic::ZstdLevel::default(),
-            ))
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
             .build();
 
         let mut writer = ArrowWriter::try_new(output_file, output_schema.clone(), Some(props))
@@ -578,7 +574,7 @@ pub fn export_descriptors_with_polars(
         .map_err(|e| format!("Failed to create output file: {}", e))?;
 
     ParquetWriter::new(&mut file)
-        .with_compression(ParquetCompression::Zstd(None))
+        .with_compression(ParquetCompression::Uncompressed)
         .finish(&mut output_df.clone())
         .map_err(|e| format!("Failed to write parquet: {}", e))?;
 
@@ -702,7 +698,7 @@ pub fn export_descriptors_with_polars_parallel(
         .map_err(|e| format!("Failed to create output file: {}", e))?;
 
     ParquetWriter::new(&mut file)
-        .with_compression(ParquetCompression::Zstd(None))
+        .with_compression(ParquetCompression::Uncompressed)
         .finish(&mut output_df.clone())
         .map_err(|e| format!("Failed to write parquet: {}", e))?;
 

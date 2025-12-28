@@ -112,20 +112,24 @@ pub mod parquet_batch {
         pub descriptor_size: usize,
     }
 
-    /// Generate descriptors from a parquet file and write to a new parquet file
+    /// Generate descriptors from a parquet file and write to Arrow IPC file
     ///
     /// # Arguments
     /// * `input_parquet` - Path to input parquet file (must have line1, line2, line3 columns)
-    /// * `output_parquet` - Path to output parquet file for descriptors
+    /// * `output_file` - Path to output Arrow IPC/Feather file for descriptors
     /// * `peel_subshells` - Optional list of subshell names (auto-detected if None)
     /// * `header_path` - Optional path to header TOML file
     ///
     /// # Returns
     /// * `Ok(BatchDescriptorStats)` - Statistics about the batch operation
     /// * `Err(String)` - Error message if operation fails
+    ///
+    /// # Output Format
+    /// Arrow IPC (Feather) - columnar format, Polars compatible
+    /// Read with: `polars.read_ipc()` or `pyarrow.feather.read_table()`
     pub fn generate_descriptors_from_parquet(
         input_parquet: &Path,
-        output_parquet: &Path,
+        output_file: &Path,
         peel_subshells: Option<Vec<String>>,
         header_path: Option<PathBuf>,
     ) -> Result<BatchDescriptorStats, String> {
@@ -162,9 +166,9 @@ pub mod parquet_batch {
             .build()
             .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
 
-        // Step 4: Create output parquet writer
+        // Step 4: Create output Arrow IPC writer
         use arrow::datatypes::{DataType, Field, Schema};
-        use parquet::arrow::ArrowWriter;
+        use arrow::ipc::writer::FileWriter;
         use std::sync::Arc;
 
         // Output schema: descriptor columns (one column per descriptor element)
@@ -174,15 +178,11 @@ pub mod parquet_batch {
         }
         let output_schema = Arc::new(Schema::new(fields));
 
-        let output_file = std::fs::File::create(output_parquet)
-            .map_err(|e| format!("Failed to create output parquet: {}", e))?;
+        let output_file_handle = std::fs::File::create(output_file)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
 
-        let props = parquet::file::properties::WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
-            .build();
-
-        let mut writer = ArrowWriter::try_new(output_file, output_schema.clone(), Some(props))
-            .map_err(|e| format!("Failed to create arrow writer: {}", e))?;
+        let mut writer = FileWriter::try_new(output_file_handle, output_schema.as_ref())
+            .map_err(|e| format!("Failed to create IPC writer: {}", e))?;
 
         // Step 5: Process each batch
         let mut total_csfs = 0;
@@ -272,12 +272,12 @@ pub mod parquet_batch {
 
         // Step 6: Finalize writer
         writer
-            .close()
-            .map_err(|e| format!("Failed to close writer: {}", e))?;
+            .finish()
+            .map_err(|e| format!("Failed to finish writer: {}", e))?;
 
         Ok(BatchDescriptorStats {
             input_file: input_parquet.to_string_lossy().to_string(),
-            output_file: output_parquet.to_string_lossy().to_string(),
+            output_file: output_file.to_string_lossy().to_string(),
             csf_count: total_csfs,
             descriptor_count,
             orbital_count,
@@ -286,28 +286,40 @@ pub mod parquet_batch {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    // Parallel Descriptor Generation (Rayon-based, optimized)
+    // Parallel Descriptor Generation (Rayon-based, streaming for low memory)
     ////////////////////////////////////////////////////////////////////////////////
 
     /// Generate descriptors from parquet with parallel processing using rayon
     ///
-    /// This implementation:
-    /// 1. Loads all data into memory upfront (suitable for files fitting in RAM)
-    /// 2. Uses rayon's work-stealing for automatic load balancing
-    /// 3. Parallel columnar conversion for optimal performance
+    /// This implementation uses streaming batch processing to minimize memory usage:
+    /// 1. Read parquet in batches
+    /// 2. Parse CSFs to descriptors in parallel
+    /// 3. Convert descriptors to columnar format in parallel
+    /// 4. Write batch to Arrow IPC/Feather file
+    /// 5. Repeat until all data processed
+    ///
+    /// Output format: Arrow IPC (Feather), which is:
+    /// - Polars compatible (pl.read_ipc())
+    /// - Faster to write than Parquet (no compression overhead)
+    /// - Still columnar and efficient
     ///
     /// # Arguments
     /// * `input_parquet` - Path to input parquet file
-    /// * `output_parquet` - Path to output parquet file
+    /// * `output_file` - Path to output Arrow IPC/Feather file
     /// * `peel_subshells` - List of subshell names
     /// * `num_workers` - Number of worker threads (default: CPU core count)
     pub fn generate_descriptors_from_parquet_parallel(
         input_parquet: &Path,
-        output_parquet: &Path,
+        output_file: &Path,
         peel_subshells: Vec<String>,
         num_workers: Option<usize>,
     ) -> Result<BatchDescriptorStats, String> {
         use rayon::prelude::*;
+        use arrow::ipc::writer::FileWriter;
+        use arrow::array::{Array, Int32Array, UInt64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
 
         // Configure rayon thread pool if specified
         if let Some(n) = num_workers {
@@ -323,12 +335,27 @@ pub mod parquet_batch {
         println!("轨道数量: {}, 描述符大小: {}", orbital_count, descriptor_size);
         let generator = std::sync::Arc::new(super::CSFDescriptorGenerator::new(peel_subshells));
 
-        println!("开始生成描述符（Arrow 并行版本）");
+        println!("开始生成描述符（Arrow IPC 流式并行版本）");
         println!("输入文件: {:?}", input_parquet);
-        println!("输出文件: {:?}", output_parquet);
+        println!("输出文件: {:?}", output_file);
 
         ////////////////////////////////////////////////////////////////////////////////
-        // Phase 1: Load all data from parquet (sequential)
+        // Phase 1: Setup output schema and writer (Arrow IPC/Feather)
+        ////////////////////////////////////////////////////////////////////////////////
+        let mut fields = Vec::with_capacity(descriptor_size);
+        for i in 0..descriptor_size {
+            fields.push(Field::new(format!("col_{}", i), DataType::Int32, false));
+        }
+        let schema = Arc::new(Schema::new(fields));
+
+        let output_file_handle = std::fs::File::create(output_file)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+        let mut writer = FileWriter::try_new(output_file_handle, schema.as_ref())
+            .map_err(|e| format!("Failed to create IPC writer: {}", e))?;
+
+        ////////////////////////////////////////////////////////////////////////////////
+        // Phase 2: Stream processing - read, process, write in batches
         ////////////////////////////////////////////////////////////////////////////////
         let file = std::fs::File::open(input_parquet)
             .map_err(|e| format!("Failed to open input parquet: {}", e))?;
@@ -340,9 +367,10 @@ pub mod parquet_batch {
             .build()
             .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
 
-        // Collect all CSF rows into memory
-        let mut all_rows: Vec<(u64, String, String, String)> = Vec::new();
+        let mut total_csfs = 0;
+        let mut total_descriptors = 0;
 
+        // Process each batch from input parquet
         loop {
             match reader.next() {
                 Some(Ok(batch)) => {
@@ -372,14 +400,55 @@ pub mod parquet_batch {
                         .downcast_ref::<StringArray>()
                         .ok_or("line3 column is not string type")?;
 
-                    // Extract rows with owned strings
-                    for i in 0..batch_size {
-                        all_rows.push((
+                    // Extract rows (borrowed, no allocation)
+                    let batch_rows: Vec<(u64, &str, &str, &str)> = (0..batch_size)
+                        .map(|i| (
                             idx_col.value(i),
-                            line1_col.value(i).to_string(),
-                            line2_col.value(i).to_string(),
-                            line3_col.value(i).to_string(),
-                        ));
+                            line1_col.value(i),
+                            line2_col.value(i),
+                            line3_col.value(i),
+                        ))
+                        .collect();
+
+                    // Parse CSFs to descriptors (parallel)
+                    let generator_ref = generator.as_ref();
+                    let descriptors: Vec<Vec<i32>> = batch_rows
+                        .into_par_iter()
+                        .map(|(idx, line1, line2, line3)| {
+                            match generator_ref.parse_csf(line1, line2, line3) {
+                                Ok(desc) => desc,
+                                Err(e) => {
+                                    eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
+                                    vec![0i32; descriptor_size]
+                                }
+                            }
+                        })
+                        .collect();
+
+                    // Convert descriptors to columnar format (parallel)
+                    let column_arrays: Vec<Arc<dyn Array>> = (0..descriptor_size)
+                        .into_par_iter()
+                        .map(|col_idx| {
+                            let values: Vec<i32> = descriptors.iter().map(|desc| desc[col_idx]).collect();
+                            Arc::new(Int32Array::from(values)) as Arc<dyn Array>
+                        })
+                        .collect();
+
+                    // Write batch to Arrow IPC file
+                    let output_batch = RecordBatch::try_new(schema.clone(), column_arrays)
+                        .map_err(|e| format!("Failed to create output batch: {}", e))?;
+
+                    writer.write(&output_batch)
+                        .map_err(|e| format!("Failed to write batch: {}", e))?;
+
+                    total_csfs += batch_size;
+                    total_descriptors += descriptors.len();
+
+                    // Memory is automatically released after each iteration
+
+                    // Print progress every 10 million CSFs
+                    if total_csfs % 10_000_000 == 0 {
+                        println!("已处理 {} 个 CSF", total_csfs);
                     }
                 }
                 Some(Err(e)) => {
@@ -389,91 +458,24 @@ pub mod parquet_batch {
             }
         }
 
-        let total_csfs = all_rows.len();
-        println!("总共需要处理 {} 个 CSF", total_csfs);
-
         ////////////////////////////////////////////////////////////////////////////////
-        // Phase 2: Parallel processing with rayon (work-stealing)
+        // Phase 3: Finalize writer
         ////////////////////////////////////////////////////////////////////////////////
-        let generator_ref = generator.as_ref();
-        let descriptors: Vec<Vec<i32>> = all_rows
-            .into_par_iter()
-            .map(|(idx, line1, line2, line3)| {
-                match generator_ref.parse_csf(&line1, &line2, &line3) {
-                    Ok(desc) => desc,
-                    Err(e) => {
-                        eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
-                        vec![0i32; descriptor_size]
-                    }
-                }
-            })
-            .collect();
-
-        println!("描述符生成完成: {} 个", descriptors.len());
-
-        ////////////////////////////////////////////////////////////////////////////////
-        // Phase 3: 并行转换为列式格式（优化瓶颈）
-        ////////////////////////////////////////////////////////////////////////////////
-        println!("转换为列式格式（并行）...");
-        use arrow::array::{Array, Int32Array};
-        use arrow::datatypes::{DataType, Field, Schema};
-        use arrow::record_batch::RecordBatch;
-        use parquet::arrow::ArrowWriter;
-        use std::sync::Arc;
-
-        // 并行处理列转换（每列独立），使用 map 收集结果
-        let column_arrays: Vec<Arc<dyn Array>> = (0..descriptor_size)
-            .into_par_iter()
-            .map(|col_idx| {
-                let values: Vec<i32> = descriptors.iter().map(|desc| desc[col_idx]).collect();
-                Arc::new(Int32Array::from(values)) as Arc<dyn Array>
-            })
-            .collect();
-
-        let num_rows = descriptors.len();
-
-        let mut fields = Vec::with_capacity(descriptor_size);
-        for i in 0..descriptor_size {
-            fields.push(Field::new(format!("col_{}", i), DataType::Int32, false));
-        }
-        let output_schema = Arc::new(Schema::new(fields));
-
-        let output_batch = RecordBatch::try_new(output_schema.clone(), column_arrays)
-            .map_err(|e| format!("Failed to create output batch: {}", e))?;
-
-        ////////////////////////////////////////////////////////////////////////////////
-        // Phase 4: Write output parquet (sequential)
-        ////////////////////////////////////////////////////////////////////////////////
-        println!("开始写入 Parquet 文件（无压缩）...");
-        let output_file = std::fs::File::create(output_parquet)
-            .map_err(|e| format!("Failed to create output parquet: {}", e))?;
-
-        let props = parquet::file::properties::WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
-            .build();
-
-        let mut writer = ArrowWriter::try_new(output_file, output_schema, Some(props))
-            .map_err(|e| format!("Failed to create arrow writer: {}", e))?;
-
-        writer
-            .write(&output_batch)
-            .map_err(|e| format!("Failed to write batch: {}", e))?;
-
-        writer
-            .close()
-            .map_err(|e| format!("Failed to close writer: {}", e))?;
+        println!("完成写入 Arrow IPC 文件...");
+        writer.finish()
+            .map_err(|e| format!("Failed to finish writer: {}", e))?;
 
         println!("描述符导出完成！");
         println!("输入 CSF 数量: {}", total_csfs);
-        println!("生成描述符数量: {}", num_rows);
+        println!("生成描述符数量: {}", total_descriptors);
         println!("轨道数量: {}", orbital_count);
         println!("描述符大小: {}", descriptor_size);
 
         Ok(BatchDescriptorStats {
             input_file: input_parquet.to_string_lossy().to_string(),
-            output_file: output_parquet.to_string_lossy().to_string(),
+            output_file: output_file.to_string_lossy().to_string(),
             csf_count: total_csfs,
-            descriptor_count: num_rows,
+            descriptor_count: total_descriptors,
             orbital_count,
             descriptor_size,
         })
@@ -814,18 +816,21 @@ impl PyCSFDescriptorGenerator {
 }
 
 /// Python-exposed function to generate descriptors from parquet file
+///
+/// Output format: Arrow IPC (Feather) file
+/// Read with: polars.read_ipc() or pyarrow.feather.read_table()
 #[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (
     input_parquet,
-    output_parquet,
+    output_file,
     peel_subshells=None,
     header_path=None
 ))]
 fn py_generate_descriptors_from_parquet(
     py: Python,
     input_parquet: String,
-    output_parquet: String,
+    output_file: String,
     peel_subshells: Option<Vec<String>>,
     header_path: Option<String>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
@@ -834,7 +839,7 @@ fn py_generate_descriptors_from_parquet(
 
     let header_path_buf = header_path.as_ref().map(|s| Path::new(s).to_path_buf());
     let input_path = Path::new(&input_parquet).to_path_buf();
-    let output_path = Path::new(&output_parquet).to_path_buf();
+    let output_path = Path::new(&output_file).to_path_buf();
 
     // Release the GIL during the long-running operation
     let stats = py
@@ -869,18 +874,23 @@ fn py_read_peel_subshells(header_path: String) -> PyResult<Vec<String>> {
 }
 
 /// Python-exposed function to generate descriptors from parquet file (parallel version)
+///
+/// Output format: Arrow IPC (Feather) file
+/// Read with: polars.read_ipc() or pyarrow.feather.read_table()
+///
+/// This version uses streaming batch processing for low memory usage.
 #[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (
     input_parquet,
-    output_parquet,
+    output_file,
     peel_subshells,
     num_workers=None
 ))]
 fn py_generate_descriptors_from_parquet_parallel(
     py: Python,
     input_parquet: String,
-    output_parquet: String,
+    output_file: String,
     peel_subshells: Vec<String>,
     num_workers: Option<usize>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
@@ -888,7 +898,7 @@ fn py_generate_descriptors_from_parquet_parallel(
     use std::path::Path;
 
     let input_path = Path::new(&input_parquet).to_path_buf();
-    let output_path = Path::new(&output_parquet).to_path_buf();
+    let output_path = Path::new(&output_file).to_path_buf();
 
     // Release the GIL during the long-running operation
     let stats = py

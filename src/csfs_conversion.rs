@@ -176,7 +176,6 @@ pub fn convert_csfs_to_parquet_parallel(
     let mut csf_count = 0;
     let mut total_lines = 0;
     let mut truncated_count = 0;
-    let mut report_interval = 100000;
 
     println!("开始并行处理 CSF 数据...");
 
@@ -267,12 +266,6 @@ pub fn convert_csfs_to_parquet_parallel(
         writer.write(&batch)?;
 
         csf_count += num_full_csfs;
-
-        // Periodic progress report
-        if csf_count >= report_interval {
-            println!("已处理 {} 个 CSF", csf_count);
-            report_interval += 100000;
-        }
     }
 
     // --- 4. 完成写入 ---

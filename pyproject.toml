@@ -26,13 +26,20 @@ classifiers = [
     "Topic :: Internet",
 ]
 dynamic = ["license", "readme", "version"]
+dependencies = [
+    "maturin>=1.7.8",
+]
 
 [dependency-groups]
 dev = [
-    "maturin>=1.7.8",
     "pytest>=9.0.2",
     "pytest-pretty>=1.2.0",
     "pytest-speed>=0.3.5",
+    "jupyter>=1.0.0",
+    "jupyterlab>=4.0.0",
+    "ipython>=9.8.0",
+    "ipykernel>=7.1.0",
+    "notebook>=7.0.0",
 ]
 lint = [
     "mypy>=1.13.0",

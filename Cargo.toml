@@ -20,6 +20,7 @@ num_cpus = "1.16.0"
 anyhow = "1.0.100"
 rayon = "1.10"
 polars = { version = "0.46", features = ["parquet", "lazy"], optional = true }
+indicatif = "0.17"
 
 [lib]
 name = "_rcsfs"

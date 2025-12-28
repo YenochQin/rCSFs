@@ -609,6 +609,7 @@ pub fn export_descriptors_with_polars_parallel(
     peel_subshells: Vec<String>,
     num_workers: Option<usize>,
 ) -> Result<parquet_batch::BatchDescriptorStats, String> {
+    use indicatif::{ProgressBar, ProgressStyle};
     use polars::prelude::*;
     use rayon::prelude::*;
     use std::sync::Arc;
@@ -636,7 +637,15 @@ pub fn export_descriptors_with_polars_parallel(
 
     let total_csfs = df.height();
 
-    // Step 2: Extract columns as Vec<String> for parallel processing
+    // Step 2: Create progress bar
+    let pb = ProgressBar::new(total_csfs as u64);
+    pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} CSFs ({eta})")
+        .unwrap()
+        .progress_chars("##-"));
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    // Step 3: Extract columns as Vec<String> for parallel processing
     let line1_col = df.column("line1")
         .map_err(|e| format!("Failed to get line1 column: {}", e))?
         .str()
@@ -661,24 +670,32 @@ pub fn export_descriptors_with_polars_parallel(
         ))
         .collect();
 
-    // Step 3: Parallel parsing with rayon
+    // Step 4: Parallel parsing with rayon and progress tracking
     let generator_ref = generator.as_ref();
     let descriptors: Vec<Vec<i32>> = all_rows
         .into_par_iter()
-        .map(|(line1, line2, line3)| {
-            match generator_ref.parse_csf(&line1, &line2, &line3) {
+        .enumerate()
+        .map(|(i, (line1, line2, line3))| {
+            let result = match generator_ref.parse_csf(&line1, &line2, &line3) {
                 Ok(desc) => desc,
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse CSF: {}", e);
+                    eprintln!("Warning: Failed to parse CSF at index {}: {}", i, e);
                     vec![0i32; descriptor_size]
                 }
+            };
+            // Update progress (note: this is not thread-safe but ok for visual feedback)
+            if i % 10000 == 0 {
+                pb.set_position(i as u64);
             }
+            result
         })
         .collect();
 
+    pb.finish_with_message(format!("✅ 完成: {} 描述符已生成", descriptors.len()));
+
     let descriptor_count = descriptors.len();
 
-    // Step 4: Build Polars DataFrame with columnar data
+    // Step 5: Build Polars DataFrame with columnar data
     let mut columns: Vec<Column> = Vec::with_capacity(descriptor_size);
 
     for col_idx in 0..descriptor_size {

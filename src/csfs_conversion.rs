@@ -123,7 +123,16 @@ pub fn convert_csfs_to_parquet_parallel(
     output_path: &Path,
     max_line_len: usize,
     chunk_size: usize,
+    num_workers: Option<usize>,
 ) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
+    // Configure rayon thread pool if num_workers is specified
+    if let Some(n) = num_workers {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global()
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+    }
+
     // --- 1. 读取 Header (5行) ---
     let headers = extract_header_lines(csfs_path)?;
 

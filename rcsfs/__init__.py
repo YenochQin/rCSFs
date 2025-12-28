@@ -152,6 +152,7 @@ def convert_csfs_parallel(
     output_path: Union[str, Path],
     max_line_len: Optional[int] = 256,
     chunk_size: Optional[int] = 3000000,
+    num_workers: Optional[int] = None,
 ) -> ParallelConversionStats:
     """
     Convert CSF text file to Parquet format using parallel processing.
@@ -159,7 +160,7 @@ def convert_csfs_parallel(
     This function is optimized for large-scale data processing. It uses a streaming
     approach with rayon-based parallel processing:
     - Stream: Read file in batches to avoid loading 34GB+ into memory
-    - Parallel: Process each batch with rayon's work-stealing (all cores used)
+    - Parallel: Process each batch with rayon's work-stealing (all cores used by default)
     - Order: Maintain CSF order in output
 
     Args:
@@ -167,19 +168,29 @@ def convert_csfs_parallel(
         output_path: Path to output Parquet file
         max_line_len: Maximum line length (default: 256)
         chunk_size: Number of lines per read batch (default: 3000000)
+        num_workers: Optional number of worker threads (default: CPU core count)
 
     Returns:
         Dictionary containing conversion statistics and status
 
-    Note:
-        Rayon automatically uses all CPU cores. To control thread count, set the
-        RAYON_NUM_THREADS environment variable.
+    Examples:
+        >>> # Use all CPU cores (default)
+        >>> stats = convert_csfs_parallel("input.csf", "output.parquet")
+        >>>
+        >>> # Limit to 8 workers for shared servers
+        >>> stats = convert_csfs_parallel("input.csf", "output.parquet", num_workers=8)
+
+    Performance Considerations:
+        - For single-task environments: omit num_workers (uses all cores)
+        - For multi-task servers: set num_workers to avoid CPU contention
+        - Typical values: num_workers=4-8 for shared servers, None for dedicated
     """
     return _convert_csfs_parallel(
         input_path=str(input_path),
         output_path=str(output_path),
         max_line_len=max_line_len,
         chunk_size=chunk_size,
+        num_workers=num_workers,
     )
 
 
@@ -595,6 +606,7 @@ class CSFProcessor:
         self,
         input_path: Union[str, Path],
         output_path: Union[str, Path],
+        num_workers: Optional[int] = None,
     ) -> ParallelConversionStats:
         """
         Convert CSF file using parallel processing.
@@ -602,6 +614,7 @@ class CSFProcessor:
         Args:
             input_path: Path to input CSF file
             output_path: Path to output Parquet file
+            num_workers: Optional number of worker threads (default: CPU core count)
 
         Returns:
             Conversion statistics and status
@@ -609,6 +622,7 @@ class CSFProcessor:
         return self._processor.convert_parallel(
             input_path=str(input_path),
             output_path=str(output_path),
+            num_workers=num_workers,
         )
 
     def get_metadata(self, input_path: Union[str, Path]) -> dict:

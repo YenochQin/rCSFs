@@ -114,6 +114,7 @@ impl CSFProcessor {
         py: Python,
         input_path: String,
         output_path: String,
+        num_workers: Option<usize>,
     ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
         convert_csfs_parallel(
             py,
@@ -121,6 +122,7 @@ impl CSFProcessor {
             output_path,
             Some(self.max_line_len),
             Some(self.chunk_size),
+            num_workers,
         )
     }
 
@@ -247,15 +249,21 @@ fn convert_csfs(
 /// - Multi-threaded parallel processing using rayon (automatically uses all CPU cores)
 /// - Maintains original CSF order for consistent output file ordering
 /// - Memory efficient streaming to handle large files
-///
-/// Note: To control the number of worker threads, set the RAYON_NUM_THREADS environment variable.
 #[pyfunction]
+#[pyo3(signature = (
+    input_path,
+    output_path,
+    max_line_len=None,
+    chunk_size=None,
+    num_workers=None
+))]
 fn convert_csfs_parallel(
     py: Python,
     input_path: String,
     output_path: String,
     max_line_len: Option<usize>,
     chunk_size: Option<usize>,
+    num_workers: Option<usize>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     // Set default parameters (optimized for parallel processing)
     let max_line_len = max_line_len.unwrap_or(256);
@@ -276,6 +284,7 @@ fn convert_csfs_parallel(
             Path::new(&output_path),
             max_line_len,
             chunk_size,
+            num_workers,
         )
     });
 

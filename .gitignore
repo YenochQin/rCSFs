@@ -29,3 +29,5 @@ uv.lock
 
 # test file
 *.ipynb
+
+.DS_Store

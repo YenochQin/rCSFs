@@ -421,24 +421,16 @@ pub mod parquet_batch {
         use parquet::arrow::ArrowWriter;
         use std::sync::Arc;
 
-        // 预分配列数组
-        let mut column_arrays: Vec<Option<Arc<dyn Array>>> = Vec::with_capacity(descriptor_size);
-        column_arrays.resize_with(descriptor_size, || None);
+        // 并行处理列转换（每列独立），使用 map 收集结果
+        let column_arrays: Vec<Arc<dyn Array>> = (0..descriptor_size)
+            .into_par_iter()
+            .map(|col_idx| {
+                let values: Vec<i32> = descriptors.iter().map(|desc| desc[col_idx]).collect();
+                Arc::new(Int32Array::from(values)) as Arc<dyn Array>
+            })
+            .collect();
 
         let num_rows = descriptors.len();
-        let descriptors_ref = &descriptors;
-
-        // 并行处理列转换（每列独立）
-        (0..descriptor_size).into_par_iter().for_each(|col_idx| {
-            let values: Vec<i32> = descriptors_ref.iter().map(|desc| desc[col_idx]).collect();
-            column_arrays[col_idx] = Some(Arc::new(Int32Array::from(values)) as Arc<dyn Array>);
-        });
-
-        // 收集结果
-        let column_arrays: Vec<Arc<dyn Array>> = column_arrays
-            .into_iter()
-            .collect::<Option<Vec<_>>>()
-            .unwrap();
 
         let mut fields = Vec::with_capacity(descriptor_size);
         for i in 0..descriptor_size {
@@ -446,7 +438,7 @@ pub mod parquet_batch {
         }
         let output_schema = Arc::new(Schema::new(fields));
 
-        let output_batch = RecordBatch::try_new(output_schema, column_arrays)
+        let output_batch = RecordBatch::try_new(output_schema.clone(), column_arrays)
             .map_err(|e| format!("Failed to create output batch: {}", e))?;
 
         ////////////////////////////////////////////////////////////////////////////////

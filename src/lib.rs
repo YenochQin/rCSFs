@@ -54,10 +54,10 @@ struct CSFProcessor {
 impl CSFProcessor {
     /// Create a new CSF processor instance
     #[new]
-    #[pyo3(signature = (max_line_len=256, chunk_size=30000))]
+    #[pyo3(signature = (max_line_len=256, chunk_size=3000000))]
     fn new(max_line_len: Option<usize>, chunk_size: Option<usize>) -> PyResult<Self> {
         let max_line_len = max_line_len.unwrap_or(256);
-        let chunk_size = chunk_size.unwrap_or(30000);
+        let chunk_size = chunk_size.unwrap_or(3000000);
 
         if max_line_len == 0 {
             return Err(PyValueError::new_err("max_line_len must be greater than 0"));
@@ -275,7 +275,7 @@ fn convert_csfs_parallel(
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     // Set default parameters (optimized for parallel processing)
     let max_line_len = max_line_len.unwrap_or(256);
-    let chunk_size = chunk_size.unwrap_or(50000); // Larger default chunk_size for parallel
+    let chunk_size = chunk_size.unwrap_or(3000000); // 1M CSFs = 3M lines per batch
     let num_workers = num_workers.unwrap_or_else(|| num_cpus::get());
 
     // Parameter validation

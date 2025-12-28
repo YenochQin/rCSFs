@@ -1,7 +1,6 @@
 use arrow::array::{StringBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use num_cpus;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
@@ -44,7 +43,6 @@ fn extract_header_lines(csfs_path: &Path) -> Result<Vec<String>, Box<dyn std::er
 
     let mut headers = Vec::with_capacity(CSF_HEADER_LINE_COUNT);
 
-    println!("读取 Header...");
     for _i in 0..CSF_HEADER_LINE_COUNT {
         match lines_iter.next() {
             Some(Ok(line)) => {
@@ -135,15 +133,6 @@ pub fn convert_csfs_to_parquet_parallel(
             .build_global()
             .map_err(|e| format!("Failed to configure rayon: {}", e))?;
     }
-    let num_workers = num_workers.unwrap_or_else(num_cpus::get);
-
-    println!(
-        "启动并行处理: {} 个工作线程 (rayon work-stealing)",
-        num_workers
-    );
-    println!("输入文件: {:?}", csfs_path);
-    println!("输出文件: {:?}", output_path);
-    println!("读取批次大小: {} 行", chunk_size);
 
     // --- 1. 读取 Header (5行) ---
     let headers = extract_header_lines(csfs_path)?;
@@ -180,9 +169,6 @@ pub fn convert_csfs_to_parquet_parallel(
     let mut csf_count = 0;
     let mut total_lines = 0;
     let mut truncated_count = 0;
-    let mut batch_num = 0;
-
-    println!("开始流式处理 (读取 → 并行处理 → 写入)...");
 
     loop {
         // Read a batch of lines
@@ -271,11 +257,6 @@ pub fn convert_csfs_to_parquet_parallel(
         writer.write(&batch)?;
 
         csf_count += num_full_csfs;
-        batch_num += 1;
-
-        if csf_count % 50000 == 0 {
-            println!("已处理 {} 个 CSF (batch #{})", csf_count, batch_num);
-        }
     }
 
     // --- 4. 完成写入 ---
@@ -305,14 +286,7 @@ pub fn convert_csfs_to_parquet_parallel(
     let toml_string = toml::to_string_pretty(&header_data)?;
     std::fs::write(&header_path, toml_string)?;
 
-    println!("\n并行转换完成！");
-    println!("================ 最终统计 ================");
-    println!("总行数: {}", final_stats.total_lines);
-    println!("CSF 数量: {}", final_stats.csf_count);
-    println!("截断行数: {}", final_stats.truncated_count);
-    println!("输出文件: {:?}", output_path);
-    println!("Header 文件: {:?}", header_path);
-    println!("==========================================");
+    println!("转换完成: {} 个 CSF", final_stats.csf_count);
 
     Ok(final_stats)
 }

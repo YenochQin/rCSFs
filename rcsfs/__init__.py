@@ -25,6 +25,9 @@ Or use the functional API:
 from rcsfs import convert_csfs_parallel
 
 convert_csfs_parallel("input.csf", "output.parquet")
+
+# With custom chunk size (default: 3000000 lines = 1M CSFs)
+convert_csfs_parallel("input.csf", "output.parquet", chunk_size=6000000)
 ```
 
 ### CSF Descriptor Generation
@@ -101,7 +104,7 @@ class ConversionStats(TypedDict):
 
 class ParallelConversionStats(ConversionStats):
     """Statistics returned from parallel CSF conversion operations."""
-    num_workers: NotRequired[int]
+    pass  # Inherits all fields from ConversionStats
 
 
 #///////////////////////////////////////////////////////////////////////////////
@@ -138,8 +141,7 @@ def convert_csfs_parallel(
     input_path: Union[str, Path],
     output_path: Union[str, Path],
     max_line_len: Optional[int] = 256,
-    chunk_size: Optional[int] = 50000,
-    num_workers: Optional[int] = None
+    chunk_size: Optional[int] = 3000000,
 ) -> ParallelConversionStats:
     """
     Convert CSF text file to Parquet format using parallel processing.
@@ -154,33 +156,20 @@ def convert_csfs_parallel(
         input_path: Path to input CSF file
         output_path: Path to output Parquet file
         max_line_len: Maximum line length (default: 256)
-        chunk_size: Number of lines per read batch (default: 50000)
-        num_workers: Number of rayon worker threads (default: CPU core count)
+        chunk_size: Number of lines per read batch (default: 3000000)
 
     Returns:
         Dictionary containing conversion statistics and status
 
-    Architecture:
-        File → [Read batch] → [Rayon parallel process] → [Write ordered] → repeat
-
-    Features:
-        - Multi-threaded parallel processing with rayon work-stealing
-        - Maintains original CSF order (par_iter + collect preserves order)
-        - Memory-efficient streaming (don't load entire 34GB into memory)
-        - Real-time progress monitoring and statistics
-        - Automatic worker count optimization
-
-    Performance:
-        - For 34GB source files with 100M+ CSFs
-        - All CPU cores are utilized (not just one)
-        - Uses rayon's work-stealing for automatic load balancing
+    Note:
+        Rayon automatically uses all CPU cores. To control thread count, set the
+        RAYON_NUM_THREADS environment variable.
     """
     return _convert_csfs_parallel(
         input_path=str(input_path),
         output_path=str(output_path),
         max_line_len=max_line_len,
         chunk_size=chunk_size,
-        num_workers=num_workers
     )
 
 
@@ -405,14 +394,14 @@ class CSFProcessor:
     def __init__(
         self,
         max_line_len: Optional[int] = 256,
-        chunk_size: Optional[int] = 30000
+        chunk_size: Optional[int] = 3000000
     ):
         """
         Create a new CSF processor instance.
 
         Args:
             max_line_len: Maximum line length (default: 256)
-            chunk_size: Batch processing size (default: 30000)
+            chunk_size: Batch processing size (default: 3000000)
         """
         self._processor = _CSFProcessor(
             max_line_len=max_line_len,
@@ -476,7 +465,6 @@ class CSFProcessor:
         self,
         input_path: Union[str, Path],
         output_path: Union[str, Path],
-        num_workers: Optional[int] = None
     ) -> ParallelConversionStats:
         """
         Convert CSF file using parallel processing.
@@ -484,7 +472,6 @@ class CSFProcessor:
         Args:
             input_path: Path to input CSF file
             output_path: Path to output Parquet file
-            num_workers: Number of worker threads (default: CPU core count)
 
         Returns:
             Conversion statistics and status
@@ -492,7 +479,6 @@ class CSFProcessor:
         return self._processor.convert_parallel(
             input_path=str(input_path),
             output_path=str(output_path),
-            num_workers=num_workers
         )
 
     def get_metadata(self, input_path: Union[str, Path]) -> dict:

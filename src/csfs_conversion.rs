@@ -96,7 +96,6 @@ struct HeaderData {
 /// * `output_path` - Path to output Parquet file
 /// * `max_line_len` - Maximum line length (lines longer than this are truncated)
 /// * `chunk_size` - Number of lines per read batch (larger = fewer I/O ops but more memory)
-/// * `num_workers` - Number of rayon worker threads (None = CPU core count)
 ///
 /// # Returns
 ///
@@ -112,7 +111,7 @@ struct HeaderData {
 /// ```
 ///
 /// - **Streaming**: Read file in batches (don't load entire 34GB into memory)
-/// - **Parallel**: Each batch processed with rayon's par_iter (all cores used)
+/// - **Parallel**: Each batch processed with rayon's par_iter (all cores used automatically)
 /// - **Ordered**: Results written in CSF order (par_iter + collect preserves order)
 ///
 /// # Header File
@@ -124,16 +123,7 @@ pub fn convert_csfs_to_parquet_parallel(
     output_path: &Path,
     max_line_len: usize,
     chunk_size: usize,
-    num_workers: Option<usize>,
 ) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
-    // Configure rayon thread pool
-    if let Some(n) = num_workers {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(n)
-            .build_global()
-            .map_err(|e| format!("Failed to configure rayon: {}", e))?;
-    }
-
     // --- 1. 读取 Header (5行) ---
     let headers = extract_header_lines(csfs_path)?;
 

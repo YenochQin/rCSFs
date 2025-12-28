@@ -83,6 +83,16 @@ from ._rcsfs import (
     py_read_peel_subshells as _read_peel_subshells,
 )
 
+# Optional: Polars export function (only available if built with polars feature)
+try:
+    from ._rcsfs import (
+        py_export_descriptors_with_polars as _export_descriptors_with_polars,
+        py_export_descriptors_with_polars_parallel as _export_descriptors_with_polars_parallel,
+    )
+    _POLARS_AVAILABLE = True
+except ImportError:
+    _POLARS_AVAILABLE = False
+
 
 #///////////////////////////////////////////////////////////////////////////////
 # Type Definitions
@@ -379,6 +389,126 @@ def generate_descriptors_from_parquet_parallel(
     )
 
 
+def export_descriptors_with_polars(
+    input_parquet: Union[str, Path],
+    output_parquet: Union[str, Path],
+    peel_subshells: Optional[list[str]] = None,
+    header_path: Optional[Union[str, Path]] = None,
+) -> DescriptorGenerationStats:
+    """
+    Export CSF descriptors to Parquet using Polars DataFrame (experimental).
+
+    This is an alternative implementation that uses Polars DataFrame for descriptor
+    generation and export. It provides similar functionality to generate_descriptors_from_parquet
+    but uses Polars' LazyFrame API for data processing.
+
+    **Note:** This function is only available if the package was built with the
+    `polars` feature enabled. Use `rcsfs._POLARS_AVAILABLE` to check availability.
+
+    Args:
+        input_parquet: Path to input parquet file (must have line1, line2, line3 columns)
+        output_parquet: Path to output parquet file for descriptors
+        peel_subshells: Optional list of subshell names (auto-detected if None)
+        header_path: Optional path to header TOML file for peel_subshells
+
+    Returns:
+        Dictionary containing generation statistics
+
+    Raises:
+        ImportError: If the package was not built with the `polars` feature
+
+    Examples:
+        >>> # Check if Polars export is available
+        >>> import rcsfs
+        >>> if rcsfs._POLARS_AVAILABLE:
+        ...     stats = rcsfs.export_descriptors_with_polars(
+        ...         "csfs_data.parquet",
+        ...         "descriptors.parquet"
+        ...     )
+        ... else:
+        ...     # Fallback to standard Arrow-based export
+        ...     stats = rcsfs.generate_descriptors_from_parquet(
+        ...         "csfs_data.parquet",
+        ...         "descriptors.parquet"
+        ...     )
+    """
+    if not _POLARS_AVAILABLE:
+        raise ImportError(
+            "Polars export is not available. The package was built without the 'polars' feature. "
+            "Rebuild with: maturin develop --features polars"
+        )
+    return _export_descriptors_with_polars(
+        input_parquet=str(input_parquet),
+        output_parquet=str(output_parquet),
+        peel_subshells=peel_subshells,
+        header_path=str(header_path) if header_path else None,
+    )
+
+
+
+def export_descriptors_with_polars_parallel(
+    input_parquet: Union[str, Path],
+    output_parquet: Union[str, Path],
+    peel_subshells: list[str],
+    num_workers: Optional[int] = None,
+) -> ParallelDescriptorGenerationStats:
+    """
+    Export CSF descriptors to Parquet using Polars DataFrame with parallel processing (experimental).
+
+    This is a parallel version of export_descriptors_with_polars that uses rayon for
+    multi-threaded CSF parsing. It is optimized for large-scale descriptor generation.
+
+    **Note:** This function is only available if the package was built with the
+    `polars` feature enabled. Use `rcsfs._POLARS_AVAILABLE` to check availability.
+
+    Args:
+        input_parquet: Path to input parquet file (must have line1, line2, line3 columns)
+        output_parquet: Path to output parquet file for descriptors
+        peel_subshells: List of subshell names (e.g., ["5s", "4d-", "4d", "5p-", "5p", "6s"])
+        num_workers: Optional number of worker threads (default: CPU core count)
+
+    Returns:
+        Dictionary containing generation statistics
+
+    Raises:
+        ImportError: If the package was not built with the `polars` feature
+
+    Examples:
+        >>> # Check if Polars export is available
+        >>> import rcsfs
+        >>> if rcsfs._POLARS_AVAILABLE:
+        ...     stats = rcsfs.export_descriptors_with_polars_parallel(
+        ...         "csfs_data.parquet",
+        ...         "descriptors.parquet",
+        ...         peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
+        ...         num_workers=8
+        ...     )
+        ... else:
+        ...     # Fallback to standard Arrow-based parallel export
+        ...     stats = rcsfs.generate_descriptors_from_parquet_parallel(
+        ...         "csfs_data.parquet",
+        ...         "descriptors.parquet",
+        ...         peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
+        ...         num_workers=8
+        ...     )
+
+    Performance Considerations:
+        - For small files (<1M CSFs): use export_descriptors_with_polars() instead
+        - For medium files (1-10M CSFs): num_workers=4-8
+        - For large files (>10M CSFs): num_workers=8+
+        - More workers = higher CPU usage, faster processing
+    """
+    if not _POLARS_AVAILABLE:
+        raise ImportError(
+            "Polars export is not available. The package was built without the 'polars' feature. "
+            "Rebuild with: maturin develop --features polars"
+        )
+    return _export_descriptors_with_polars_parallel(
+        input_parquet=str(input_parquet),
+        output_parquet=str(output_parquet),
+        peel_subshells=peel_subshells,
+        num_workers=num_workers,
+    )
 #///////////////////////////////////////////////////////////////////////////////
 # CSFProcessor Wrapper Class (with property accessors)
 #///////////////////////////////////////////////////////////////////////////////
@@ -502,6 +632,9 @@ __all__ = [
     # Version
     "__version__",
 
+    # Feature flags
+    "_POLARS_AVAILABLE",
+
     # CSF file conversion
     "convert_csfs",
     "convert_csfs_parallel",
@@ -514,6 +647,8 @@ __all__ = [
     # Batch descriptor generation
     "generate_descriptors_from_parquet",
     "generate_descriptors_from_parquet_parallel",
+    "export_descriptors_with_polars",  # Experimental Polars-based export
+    "export_descriptors_with_polars_parallel",  # Experimental Polars-based parallel export
     "read_peel_subshells",
 
     # Type definitions

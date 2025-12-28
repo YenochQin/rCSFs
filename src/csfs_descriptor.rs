@@ -5,15 +5,15 @@
 //! containing electron counts and angular momentum coupling values.
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::fs::read_to_string;
+use std::path::Path;
 
 /// Parquet reading support
 pub mod parquet_batch {
     use super::*;
-    use std::path::PathBuf;
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use arrow::array::{StringArray, UInt64Array};
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use std::path::PathBuf;
 
     /// Read peel subshells from a header TOML file
     ///
@@ -34,18 +34,20 @@ pub mod parquet_batch {
         let toml_content = toml_content.trim();
 
         // Parse the TOML content using from_str instead of parse()
-        let toml_value: Value = toml::from_str(toml_content)
-            .map_err(|e| format!("Failed to parse TOML: {}", e))?;
+        let toml_value: Value =
+            toml::from_str(toml_content).map_err(|e| format!("Failed to parse TOML: {}", e))?;
 
         // Get header_lines from [header_info] section
-        let header_lines = toml_value.get("header_info")
+        let header_lines = toml_value
+            .get("header_info")
             .and_then(|v| v.get("header_lines"))
             .and_then(|v| v.as_array())
             .ok_or("header_info.header_lines not found in TOML")?;
 
         // Peel subshells are on line 4 (index 3): "  2s   2p-  2p   3s..."
         if let Some(line_value) = header_lines.get(3) {
-            let line = line_value.as_str()
+            let line = line_value
+                .as_str()
                 .ok_or("header_lines[3] is not a string")?;
 
             // Parse space-separated subshell names
@@ -55,8 +57,9 @@ pub mod parquet_batch {
             let subshells: Vec<String> = parts
                 .into_iter()
                 .filter(|s| {
-                    s.chars().any(|c| c.is_alphabetic()) &&
-                    s.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '-' || c == '_')
+                    s.chars().any(|c| c.is_alphabetic())
+                        && s.chars()
+                            .all(|c| c.is_alphanumeric() || c == '+' || c == '-' || c == '_')
                 })
                 .map(|s| s.to_string())
                 .collect();
@@ -82,7 +85,7 @@ pub mod parquet_batch {
         let parent_dir = parquet_path.parent()?;
 
         // Common header file patterns
-        let patterns = std::vec! [
+        let patterns = std::vec![
             format!("{}_header.toml", parquet_stem),
             format!("{}.toml", parquet_stem),
             format!("{}_header", parquet_stem),
@@ -155,18 +158,19 @@ pub mod parquet_batch {
 
         let _schema = builder.schema();
 
-        let mut reader = builder.build()
+        let mut reader = builder
+            .build()
             .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
 
         // Step 4: Create output parquet writer
+        use arrow::datatypes::{DataType, Field, Schema};
         use parquet::arrow::ArrowWriter;
-        use arrow::datatypes::{Schema, Field, DataType};
         use std::sync::Arc;
 
         // Output schema: descriptor columns (one column per descriptor element)
         let mut fields = Vec::with_capacity(descriptor_size);
         for i in 0..descriptor_size {
-            fields.push(Field::new(format!("col_{}", i), DataType::Float32, false));
+            fields.push(Field::new(format!("col_{}", i), DataType::Int32, false));
         }
         let output_schema = Arc::new(Schema::new(fields));
 
@@ -174,7 +178,9 @@ pub mod parquet_batch {
             .map_err(|e| format!("Failed to create output parquet: {}", e))?;
 
         let props = parquet::file::properties::WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default()))
+            .set_compression(parquet::basic::Compression::ZSTD(
+                parquet::basic::ZstdLevel::default(),
+            ))
             .build();
 
         let mut writer = ArrowWriter::try_new(output_file, output_schema.clone(), Some(props))
@@ -190,28 +196,32 @@ pub mod parquet_batch {
                     let batch_size = batch.num_rows();
 
                     // Get columns by index (parquet schema: idx, line1, line2, line3)
-                    let idx_col = batch.column(0)
+                    let idx_col = batch
+                        .column(0)
                         .as_any()
                         .downcast_ref::<UInt64Array>()
                         .ok_or("idx column is not uint64 type")?;
 
-                    let line1_col = batch.column(1)
+                    let line1_col = batch
+                        .column(1)
                         .as_any()
                         .downcast_ref::<StringArray>()
                         .ok_or("line1 column is not string type")?;
 
-                    let line2_col = batch.column(2)
+                    let line2_col = batch
+                        .column(2)
                         .as_any()
                         .downcast_ref::<StringArray>()
                         .ok_or("line2 column is not string type")?;
 
-                    let line3_col = batch.column(3)
+                    let line3_col = batch
+                        .column(3)
                         .as_any()
                         .downcast_ref::<StringArray>()
                         .ok_or("line3 column is not string type")?;
 
                     // Process each row
-                    use arrow::array::{Float32Array, Array};
+                    use arrow::array::{Array, Int32Array};
                     use std::sync::Arc;
 
                     let mut descriptors_vec = Vec::with_capacity(batch_size);
@@ -239,22 +249,20 @@ pub mod parquet_batch {
                     // Each descriptor becomes a row, with each element in its own column
                     let column_arrays: Vec<Arc<dyn Array>> = (0..descriptor_size)
                         .map(|col_idx| {
-                            let values: Vec<f32> = descriptors_vec
-                                .iter()
-                                .map(|desc| desc[col_idx])
-                                .collect();
-                            Arc::new(Float32Array::from(values)) as Arc<dyn Array>
+                            let values: Vec<i32> =
+                                descriptors_vec.iter().map(|desc| desc[col_idx]).collect();
+                            Arc::new(Int32Array::from(values)) as Arc<dyn Array>
                         })
                         .collect();
 
                     // Create output record batch
                     use arrow::record_batch::RecordBatch;
-                    let output_batch = RecordBatch::try_new(
-                        output_schema.clone(),
-                        column_arrays,
-                    ).map_err(|e| format!("Failed to create output batch: {}", e))?;
+                    let output_batch =
+                        RecordBatch::try_new(output_schema.clone(), column_arrays)
+                            .map_err(|e| format!("Failed to create output batch: {}", e))?;
 
-                    writer.write(&output_batch)
+                    writer
+                        .write(&output_batch)
                         .map_err(|e| format!("Failed to write batch: {}", e))?;
                 }
                 Some(Err(e)) => {
@@ -265,7 +273,8 @@ pub mod parquet_batch {
         }
 
         // Step 6: Finalize writer
-        writer.close()
+        writer
+            .close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
         Ok(BatchDescriptorStats {
@@ -323,7 +332,8 @@ pub mod parquet_batch {
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)
             .map_err(|e| format!("Failed to create parquet reader: {}", e))?;
 
-        let mut reader = builder.build()
+        let mut reader = builder
+            .build()
             .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
 
         // Collect all CSF rows into memory
@@ -334,22 +344,26 @@ pub mod parquet_batch {
                 Some(Ok(batch)) => {
                     let batch_size = batch.num_rows();
 
-                    let idx_col = batch.column(0)
+                    let idx_col = batch
+                        .column(0)
                         .as_any()
                         .downcast_ref::<UInt64Array>()
                         .ok_or("idx column is not uint64 type")?;
 
-                    let line1_col = batch.column(1)
+                    let line1_col = batch
+                        .column(1)
                         .as_any()
                         .downcast_ref::<StringArray>()
                         .ok_or("line1 column is not string type")?;
 
-                    let line2_col = batch.column(2)
+                    let line2_col = batch
+                        .column(2)
                         .as_any()
                         .downcast_ref::<StringArray>()
                         .ok_or("line2 column is not string type")?;
 
-                    let line3_col = batch.column(3)
+                    let line3_col = batch
+                        .column(3)
                         .as_any()
                         .downcast_ref::<StringArray>()
                         .ok_or("line3 column is not string type")?;
@@ -377,14 +391,14 @@ pub mod parquet_batch {
         // Phase 2: Parallel processing with rayon (work-stealing)
         ////////////////////////////////////////////////////////////////////////////////
         let generator_ref = generator.as_ref();
-        let descriptors: Vec<Vec<f32>> = all_rows
+        let descriptors: Vec<Vec<i32>> = all_rows
             .into_par_iter()
             .map(|(idx, line1, line2, line3)| {
                 match generator_ref.parse_csf(&line1, &line2, &line3) {
                     Ok(desc) => desc,
                     Err(e) => {
                         eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
-                        vec![0.0f32; descriptor_size]
+                        vec![0i32; descriptor_size]
                     }
                 }
             })
@@ -393,15 +407,15 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 3: Write output parquet (sequential)
         ////////////////////////////////////////////////////////////////////////////////
-        use parquet::arrow::ArrowWriter;
-        use arrow::datatypes::{Schema, Field, DataType};
-        use arrow::array::{Float32Array, Array};
+        use arrow::array::{Array, Int32Array};
+        use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
         use std::sync::Arc;
 
         let mut fields = Vec::with_capacity(descriptor_size);
         for i in 0..descriptor_size {
-            fields.push(Field::new(format!("col_{}", i), DataType::Float32, false));
+            fields.push(Field::new(format!("col_{}", i), DataType::Int32, false));
         }
         let output_schema = Arc::new(Schema::new(fields));
 
@@ -409,7 +423,9 @@ pub mod parquet_batch {
             .map_err(|e| format!("Failed to create output parquet: {}", e))?;
 
         let props = parquet::file::properties::WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::default()))
+            .set_compression(parquet::basic::Compression::ZSTD(
+                parquet::basic::ZstdLevel::default(),
+            ))
             .build();
 
         let mut writer = ArrowWriter::try_new(output_file, output_schema.clone(), Some(props))
@@ -418,20 +434,20 @@ pub mod parquet_batch {
         // Convert to columnar format
         let column_arrays: Vec<Arc<dyn Array>> = (0..descriptor_size)
             .map(|col_idx| {
-                let values: Vec<f32> = descriptors.iter()
-                    .map(|desc| desc[col_idx])
-                    .collect();
-                Arc::new(Float32Array::from(values)) as Arc<dyn Array>
+                let values: Vec<i32> = descriptors.iter().map(|desc| desc[col_idx]).collect();
+                Arc::new(Int32Array::from(values)) as Arc<dyn Array>
             })
             .collect();
 
         let output_batch = RecordBatch::try_new(output_schema, column_arrays)
             .map_err(|e| format!("Failed to create output batch: {}", e))?;
 
-        writer.write(&output_batch)
+        writer
+            .write(&output_batch)
             .map_err(|e| format!("Failed to write batch: {}", e))?;
 
-        writer.close()
+        writer
+            .close()
             .map_err(|e| format!("Failed to close writer: {}", e))?;
 
         Ok(BatchDescriptorStats {
@@ -445,6 +461,260 @@ pub mod parquet_batch {
     }
 }
 
+//////////////////////////////////////////////////////////////////////////////
+/// Polars DataFrame Export (optional feature)
+//////////////////////////////////////////////////////////////////////////////
+
+/// Export descriptors to Parquet using Polars DataFrame
+///
+/// This is an alternative to the pure Arrow implementation, providing
+/// a more user-friendly API for those familiar with Polars.
+///
+/// # Arguments
+/// * `input_parquet` - Path to input parquet file (must have line1, line2, line3 columns)
+/// * `output_parquet` - Path to output parquet file for descriptors
+/// * `peel_subshells` - Optional list of subshell names (auto-detected if None)
+/// * `header_path` - Optional path to header TOML file
+///
+/// # Returns
+/// * `Ok(BatchDescriptorStats)` - Statistics about the batch operation
+/// * `Err(String)` - Error message if operation fails
+#[cfg(feature = "polars")]
+pub fn export_descriptors_with_polars(
+    input_parquet: &Path,
+    output_parquet: &Path,
+    peel_subshells: Option<Vec<String>>,
+    header_path: Option<std::path::PathBuf>,
+) -> Result<parquet_batch::BatchDescriptorStats, String> {
+    use polars::prelude::*;
+
+    // Step 1: Determine peel_subshells
+    let peel_subshells = match peel_subshells {
+        Some(s) => s,
+        None => {
+            let header = match header_path {
+                Some(h) => h,
+                None => parquet_batch::find_header_file(input_parquet)
+                    .ok_or("Could not auto-detect header file. Please provide peel_subshells or header_path.")?,
+            };
+            parquet_batch::read_peel_subshells_from_header(&header)?
+        }
+    };
+
+    let orbital_count = peel_subshells.len();
+    let descriptor_size = 3 * orbital_count;
+    let generator = CSFDescriptorGenerator::new(peel_subshells.clone());
+
+    // Step 2: Read input parquet using Polars
+    let df = LazyFrame::scan_parquet(
+        input_parquet,
+        ScanArgsParquet::default(),
+    )
+    .map_err(|e| format!("Failed to read input parquet with Polars: {}", e))?
+    .collect()
+    .map_err(|e| format!("Failed to collect LazyFrame: {}", e))?;
+
+    // Step 3: Extract columns and parse descriptors
+    let line1_series = df
+        .column("line1")
+        .map_err(|e| format!("Failed to get line1 column: {}", e))?
+        .str()
+        .map_err(|e| format!("line1 column is not string type: {}", e))?
+        .into_no_null_iter();
+
+    let line2_series = df
+        .column("line2")
+        .map_err(|e| format!("Failed to get line2 column: {}", e))?
+        .str()
+        .map_err(|e| format!("line2 column is not string type: {}", e))?
+        .into_no_null_iter();
+
+    let line3_series = df
+        .column("line3")
+        .map_err(|e| format!("Failed to get line3 column: {}", e))?
+        .str()
+        .map_err(|e| format!("line3 column is not string type: {}", e))?
+        .into_no_null_iter();
+
+    let total_csfs = df.height();
+
+    // Step 4: Parse all descriptors
+    let mut descriptors_vec: Vec<Vec<i32>> = Vec::with_capacity(total_csfs);
+    let mut descriptor_count = 0;
+
+    for ((line1, line2), line3) in line1_series.zip(line2_series).zip(line3_series) {
+        match generator.parse_csf(line1, line2, line3) {
+            Ok(descriptor) => {
+                descriptors_vec.push(descriptor);
+                descriptor_count += 1;
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to parse CSF: {}", e);
+            }
+        }
+    }
+
+    // Step 5: Build Polars DataFrame with columnar data
+    let mut columns: Vec<Column> = Vec::with_capacity(descriptor_size);
+
+    for col_idx in 0..descriptor_size {
+        let values: Vec<i32> = descriptors_vec
+            .iter()
+            .map(|desc| desc[col_idx])
+            .collect();
+        let s = Series::new(format!("col_{}", col_idx).as_str().into(), values);
+        columns.push(Column::Series(s.into()));
+    }
+
+    let output_df = DataFrame::new(columns)
+        .map_err(|e| format!("Failed to create output DataFrame: {}", e))?;
+
+    // Step 6: Write to parquet with compression
+    let _output_path_str = output_parquet
+        .to_str()
+        .ok_or("Invalid output parquet path")?;
+
+    let mut file = std::fs::File::create(output_parquet)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+    ParquetWriter::new(&mut file)
+        .with_compression(ParquetCompression::Zstd(None))
+        .finish(&mut output_df.clone())
+        .map_err(|e| format!("Failed to write parquet: {}", e))?;
+
+    Ok(parquet_batch::BatchDescriptorStats {
+        input_file: input_parquet.to_string_lossy().to_string(),
+        output_file: output_parquet.to_string_lossy().to_string(),
+        csf_count: total_csfs,
+        descriptor_count,
+        orbital_count,
+        descriptor_size,
+    })
+}
+
+/// Export descriptors to Parquet using Polars DataFrame with parallel processing
+///
+/// This is a parallel version that uses rayon for multi-threaded CSF parsing,
+/// similar to `generate_descriptors_from_parquet_parallel` but with Polars DataFrame output.
+///
+/// # Arguments
+/// * `input_parquet` - Path to input parquet file
+/// * `output_parquet` - Path to output parquet file for descriptors
+/// * `peel_subshells` - List of subshell names
+/// * `num_workers` - Optional number of worker threads (default: CPU core count)
+///
+/// # Returns
+/// * `Ok(BatchDescriptorStats)` - Statistics about the batch operation
+/// * `Err(String)` - Error message if operation fails
+#[cfg(feature = "polars")]
+pub fn export_descriptors_with_polars_parallel(
+    input_parquet: &Path,
+    output_parquet: &Path,
+    peel_subshells: Vec<String>,
+    num_workers: Option<usize>,
+) -> Result<parquet_batch::BatchDescriptorStats, String> {
+    use polars::prelude::*;
+    use rayon::prelude::*;
+    use std::sync::Arc;
+
+    // Configure rayon thread pool if specified
+    if let Some(n) = num_workers {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global()
+            .map_err(|e| format!("Failed to configure rayon thread pool: {}", e))?;
+    }
+
+    let orbital_count = peel_subshells.len();
+    let descriptor_size = 3 * orbital_count;
+    let generator = Arc::new(CSFDescriptorGenerator::new(peel_subshells));
+
+    // Step 1: Read input parquet using Polars
+    let df = LazyFrame::scan_parquet(
+        input_parquet,
+        ScanArgsParquet::default(),
+    )
+    .map_err(|e| format!("Failed to read input parquet with Polars: {}", e))?
+    .collect()
+    .map_err(|e| format!("Failed to collect LazyFrame: {}", e))?;
+
+    let total_csfs = df.height();
+
+    // Step 2: Extract columns as Vec<String> for parallel processing
+    let line1_col = df.column("line1")
+        .map_err(|e| format!("Failed to get line1 column: {}", e))?
+        .str()
+        .map_err(|e| format!("line1 column is not string type: {}", e))?;
+
+    let line2_col = df.column("line2")
+        .map_err(|e| format!("Failed to get line2 column: {}", e))?
+        .str()
+        .map_err(|e| format!("line2 column is not string type: {}", e))?;
+
+    let line3_col = df.column("line3")
+        .map_err(|e| format!("Failed to get line3 column: {}", e))?
+        .str()
+        .map_err(|e| format!("line3 column is not string type: {}", e))?;
+
+    // Collect all rows into owned strings
+    let all_rows: Vec<(String, String, String)> = (0..total_csfs)
+        .map(|i| (
+            line1_col.get(i).unwrap_or("").to_string(),
+            line2_col.get(i).unwrap_or("").to_string(),
+            line3_col.get(i).unwrap_or("").to_string(),
+        ))
+        .collect();
+
+    // Step 3: Parallel parsing with rayon
+    let generator_ref = generator.as_ref();
+    let descriptors: Vec<Vec<i32>> = all_rows
+        .into_par_iter()
+        .map(|(line1, line2, line3)| {
+            match generator_ref.parse_csf(&line1, &line2, &line3) {
+                Ok(desc) => desc,
+                Err(e) => {
+                    eprintln!("Warning: Failed to parse CSF: {}", e);
+                    vec![0i32; descriptor_size]
+                }
+            }
+        })
+        .collect();
+
+    let descriptor_count = descriptors.len();
+
+    // Step 4: Build Polars DataFrame with columnar data
+    let mut columns: Vec<Column> = Vec::with_capacity(descriptor_size);
+
+    for col_idx in 0..descriptor_size {
+        let values: Vec<i32> = descriptors
+            .iter()
+            .map(|desc| desc[col_idx])
+            .collect();
+        let s = Series::new(format!("col_{}", col_idx).as_str().into(), values);
+        columns.push(Column::Series(s.into()));
+    }
+
+    let output_df = DataFrame::new(columns)
+        .map_err(|e| format!("Failed to create output DataFrame: {}", e))?;
+
+    // Step 5: Write to parquet with compression
+    let mut file = std::fs::File::create(output_parquet)
+        .map_err(|e| format!("Failed to create output file: {}", e))?;
+
+    ParquetWriter::new(&mut file)
+        .with_compression(ParquetCompression::Zstd(None))
+        .finish(&mut output_df.clone())
+        .map_err(|e| format!("Failed to write parquet: {}", e))?;
+
+    Ok(parquet_batch::BatchDescriptorStats {
+        input_file: input_parquet.to_string_lossy().to_string(),
+        output_file: output_parquet.to_string_lossy().to_string(),
+        csf_count: total_csfs,
+        descriptor_count,
+        orbital_count,
+        descriptor_size,
+    })
+}
 
 /// Convert a J-value string to its doubled integer representation (2J)
 ///
@@ -467,10 +737,6 @@ pub mod parquet_batch {
 /// ```
 pub fn j_to_double_j(j_str: &str) -> Result<i32, String> {
     let trimmed = j_str.trim();
-
-    if trimmed.is_empty() {
-        return Ok(0); // Empty string represents 0
-    }
 
     // Handle fractional J values (e.g., "3/2" -> 3)
     if let Some(slash_pos) = trimmed.find('/') {
@@ -498,7 +764,6 @@ pub fn j_to_double_j(j_str: &str) -> Result<i32, String> {
 /// # Returns
 /// Vector of string chunks
 fn chunk_string(s: &str, chunk_size: usize) -> Vec<&str> {
-    assert!(chunk_size > 0, "chunk_size must be greater than 0");
     s.as_bytes()
         .chunks(chunk_size)
         .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
@@ -558,7 +823,7 @@ impl CSFDescriptorGenerator {
     /// * `line3` - Third line: final coupling and total J value
     ///
     /// # Returns
-    /// A vector of f32 descriptor values
+    /// A vector of i32 descriptor values
     ///
     /// # CSF Format Example
     /// ```text
@@ -566,14 +831,9 @@ impl CSFDescriptorGenerator {
     /// line2: "                   3/2      "
     /// line3: "                        4-  "
     /// ```
-    pub fn parse_csf(
-        &self,
-        line1: &str,
-        line2: &str,
-        line3: &str,
-    ) -> Result<Vec<f32>, String> {
+    pub fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> Result<Vec<i32>, String> {
         // Initialize descriptor array with zeros
-        let mut descriptor = vec![0.0f32; 3 * self.orbital_count];
+        let mut descriptor = vec![0i32; 3 * self.orbital_count];
         let mut occupied_orbitals = Vec::new();
 
         // Step 1: Preprocess the three lines
@@ -585,17 +845,19 @@ impl CSFDescriptorGenerator {
 
         // Extract coupling line (remove first 4 and last 5 characters)
         let coupling_line_raw = line3.trim_end();
-        let coupling_start = if coupling_line_raw.len() > 5 { 4 } else { 0 };
-        let coupling_end = if coupling_line_raw.len() > 5 { coupling_line_raw.len() - 5 } else { coupling_line_raw.len() };
-        let coupling_line = format!("{:<width$}",
-            &coupling_line_raw[coupling_start..coupling_end],
-            width = line_length
-        );
+        let coupling_trimmed = coupling_line_raw
+            .get(4..coupling_line_raw.len().saturating_sub(5))
+            .unwrap_or(coupling_line_raw);
+        let coupling_line = format!("{:<width$}", coupling_trimmed, width = line_length);
 
         // Step 2: Extract final J value from the end of line3
-        let final_j_start = if coupling_line_raw.len() > 5 { coupling_line_raw.len() - 5 } else { 0 };
-        let final_j_end = if coupling_line_raw.len() > 1 { coupling_line_raw.len() - 1 } else { coupling_line_raw.len() };
-        let final_j_str = &coupling_line_raw[final_j_start..final_j_end];
+        // Extract final J value from the end of line3 (last 5 chars, minus 1 trailing char)
+        let final_j_str = coupling_line_raw
+            .get(
+                coupling_line_raw.len().saturating_sub(5)
+                    ..coupling_line_raw.len().saturating_sub(1),
+            )
+            .unwrap_or("");
         let final_double_j = j_to_double_j(final_j_str)?;
 
         // Step 3: Chunk lines into 9-character blocks
@@ -604,21 +866,24 @@ impl CSFDescriptorGenerator {
         let coupling_list = chunk_string(&coupling_line, 9);
 
         // Step 4: Process each subshell block
-        for (i, ((subshell_charges, middle_item), coupling_item)) in
-            subshell_list.iter().zip(middle_list.iter()).zip(coupling_list.iter()).enumerate()
+        for (i, ((subshell_charges, middle_item), coupling_item)) in subshell_list
+            .iter()
+            .zip(middle_list.iter())
+            .zip(coupling_list.iter())
+            .enumerate()
         {
             // Extract subshell name (first 5 characters, trimmed)
-            let subshell = subshell_charges.get(0..5)
+            let subshell = subshell_charges
+                .get(0..5)
                 .map(|s: &str| s.trim())
                 .unwrap_or("")
                 .to_string();
 
             // Extract electron number (characters 6-8, i.e., indices 6 and 7)
-            let subshell_electron_num: f32 = if subshell_charges.len() >= 8 {
-                subshell_charges[6..8].trim().parse()
-                    .unwrap_or(0.0)
+            let subshell_electron_num: i32 = if subshell_charges.len() >= 8 {
+                subshell_charges[6..8].trim().parse().unwrap_or(0)
             } else {
-                0.0
+                0
             };
 
             // Check if this is the last subshell
@@ -657,8 +922,8 @@ impl CSFDescriptorGenerator {
                 // Ensure we don't go out of bounds
                 if descriptor_idx + 3 <= descriptor.len() {
                     descriptor[descriptor_idx] = subshell_electron_num;
-                    descriptor[descriptor_idx + 1] = temp_middle_item as f32;
-                    descriptor[descriptor_idx + 2] = temp_coupling_item as f32;
+                    descriptor[descriptor_idx + 1] = temp_middle_item;
+                    descriptor[descriptor_idx + 2] = temp_coupling_item;
 
                     occupied_orbitals.push(orbs_idx);
                 }
@@ -669,17 +934,14 @@ impl CSFDescriptorGenerator {
         }
 
         // Step 6: Fill unoccupied orbitals with final J value (position 2)
-        let all_orbitals: std::collections::HashSet<_> =
-            (0..self.orbital_count).collect();
-        let occupied: std::collections::HashSet<_> =
-            occupied_orbitals.iter().cloned().collect();
-        let remaining: Vec<_> =
-            all_orbitals.difference(&occupied).cloned().collect();
+        let all_orbitals: std::collections::HashSet<_> = (0..self.orbital_count).collect();
+        let occupied: std::collections::HashSet<_> = occupied_orbitals.iter().cloned().collect();
+        let remaining: Vec<_> = all_orbitals.difference(&occupied).cloned().collect();
 
         for idx in remaining {
             let descriptor_idx = idx * 3 + 2;
             if descriptor_idx < descriptor.len() {
-                descriptor[descriptor_idx] = final_double_j as f32;
+                descriptor[descriptor_idx] = final_double_j;
             }
         }
 
@@ -730,15 +992,15 @@ impl PyCSFDescriptorGenerator {
     ///     line3: Third line of CSF (final coupling and total J)
     ///
     /// Returns:
-    ///     List of float32 descriptor values
-    fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> PyResult<Vec<f32>> {
+    ///     List of int32 descriptor values
+    fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> PyResult<Vec<i32>> {
         self.inner
             .parse_csf(line1, line2, line3)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
     }
 
     /// Parse CSF from a list of 3 strings (Python list format)
-    fn parse_csf_from_list(&self, csf_lines: Vec<String>) -> PyResult<Vec<f32>> {
+    fn parse_csf_from_list(&self, csf_lines: Vec<String>) -> PyResult<Vec<i32>> {
         if csf_lines.len() != 3 {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "csf_lines must contain exactly 3 elements",
@@ -756,7 +1018,7 @@ impl PyCSFDescriptorGenerator {
     ///
     /// Returns:
     ///     List of descriptor arrays
-    fn batch_parse_csfs(&self, csf_list: Vec<Vec<String>>) -> PyResult<Vec<Vec<f32>>> {
+    fn batch_parse_csfs(&self, csf_list: Vec<Vec<String>>) -> PyResult<Vec<Vec<i32>>> {
         let mut results = Vec::with_capacity(csf_list.len());
 
         for (idx, csf_lines) in csf_list.into_iter().enumerate() {
@@ -770,7 +1032,7 @@ impl PyCSFDescriptorGenerator {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
                         "Error parsing CSF at index {}: {}",
                         idx, e
-                    )))
+                    )));
                 }
             }
         }
@@ -803,22 +1065,24 @@ fn py_generate_descriptors_from_parquet(
     peel_subshells: Option<Vec<String>>,
     header_path: Option<String>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-    use std::path::Path;
     use pyo3::types::PyDict;
+    use std::path::Path;
 
     let header_path_buf = header_path.as_ref().map(|s| Path::new(s).to_path_buf());
     let input_path = Path::new(&input_parquet).to_path_buf();
     let output_path = Path::new(&output_parquet).to_path_buf();
 
     // Release the GIL during the long-running operation
-    let stats = py.detach(
-        || parquet_batch::generate_descriptors_from_parquet(
-            &input_path,
-            &output_path,
-            peel_subshells,
-            header_path_buf,
-        )
-    ).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let stats = py
+        .detach(|| {
+            parquet_batch::generate_descriptors_from_parquet(
+                &input_path,
+                &output_path,
+                peel_subshells,
+                header_path_buf,
+            )
+        })
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     let dict = PyDict::new(py);
     dict.set_item("success", true)?;
@@ -856,21 +1120,114 @@ fn py_generate_descriptors_from_parquet_parallel(
     peel_subshells: Vec<String>,
     num_workers: Option<usize>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-    use std::path::Path;
     use pyo3::types::PyDict;
+    use std::path::Path;
 
     let input_path = Path::new(&input_parquet).to_path_buf();
     let output_path = Path::new(&output_parquet).to_path_buf();
 
     // Release the GIL during the long-running operation
-    let stats = py.detach(
-        || parquet_batch::generate_descriptors_from_parquet_parallel(
-            &input_path,
-            &output_path,
-            peel_subshells,
-            num_workers,
-        )
-    ).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let stats = py
+        .detach(|| {
+            parquet_batch::generate_descriptors_from_parquet_parallel(
+                &input_path,
+                &output_path,
+                peel_subshells,
+                num_workers,
+            )
+        })
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+    let dict = PyDict::new(py);
+    dict.set_item("success", true)?;
+    dict.set_item("input_file", stats.input_file)?;
+    dict.set_item("output_file", stats.output_file)?;
+    dict.set_item("csf_count", stats.csf_count)?;
+    dict.set_item("descriptor_count", stats.descriptor_count)?;
+    dict.set_item("orbital_count", stats.orbital_count)?;
+    dict.set_item("descriptor_size", stats.descriptor_size)?;
+    Ok(dict.into())
+}
+
+/// Python-exposed function to export descriptors using Polars DataFrame
+#[cfg(all(feature = "python", feature = "polars"))]
+#[pyfunction]
+#[pyo3(signature = (
+    input_parquet,
+    output_parquet,
+    peel_subshells=None,
+    header_path=None
+))]
+fn py_export_descriptors_with_polars(
+    py: Python,
+    input_parquet: String,
+    output_parquet: String,
+    peel_subshells: Option<Vec<String>>,
+    header_path: Option<String>,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    use pyo3::types::PyDict;
+    use std::path::Path;
+
+    let header_path_buf = header_path.as_ref().map(|s| Path::new(s).to_path_buf());
+    let input_path = Path::new(&input_parquet).to_path_buf();
+    let output_path = Path::new(&output_parquet).to_path_buf();
+
+    // Release the GIL during the long-running operation
+    let stats = py
+        .detach(|| {
+            export_descriptors_with_polars(
+                &input_path,
+                &output_path,
+                peel_subshells,
+                header_path_buf,
+            )
+        })
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+    let dict = PyDict::new(py);
+    dict.set_item("success", true)?;
+    dict.set_item("input_file", stats.input_file)?;
+    dict.set_item("output_file", stats.output_file)?;
+    dict.set_item("csf_count", stats.csf_count)?;
+    dict.set_item("descriptor_count", stats.descriptor_count)?;
+    dict.set_item("orbital_count", stats.orbital_count)?;
+    dict.set_item("descriptor_size", stats.descriptor_size)?;
+    Ok(dict.into())
+}
+
+/// Python-exposed function to export descriptors using Polars DataFrame (parallel version)
+#[cfg(all(feature = "python", feature = "polars"))]
+#[pyfunction]
+#[pyo3(signature = (
+    input_parquet,
+    output_parquet,
+    peel_subshells,
+    num_workers=None
+))]
+fn py_export_descriptors_with_polars_parallel(
+    py: Python,
+    input_parquet: String,
+    output_parquet: String,
+    peel_subshells: Vec<String>,
+    num_workers: Option<usize>,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    use pyo3::types::PyDict;
+    use std::path::Path;
+
+    let input_path = Path::new(&input_parquet).to_path_buf();
+    let output_path = Path::new(&output_parquet).to_path_buf();
+
+    // Release the GIL during the long-running operation
+    let stats = py
+        .detach(|| {
+            export_descriptors_with_polars_parallel(
+                &input_path,
+                &output_path,
+                peel_subshells,
+                num_workers,
+            )
+        })
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     let dict = PyDict::new(py);
     dict.set_item("success", true)?;
@@ -887,9 +1244,29 @@ fn py_generate_descriptors_from_parquet_parallel(
 #[cfg(feature = "python")]
 pub fn register_descriptor_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCSFDescriptorGenerator>()?;
-    module.add_function(wrap_pyfunction!(py_generate_descriptors_from_parquet, module)?)?;
-    module.add_function(wrap_pyfunction!(py_generate_descriptors_from_parquet_parallel, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        py_generate_descriptors_from_parquet,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        py_generate_descriptors_from_parquet_parallel,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(py_read_peel_subshells, module)?)?;
+
+    // Register Polars export function if feature is enabled
+    #[cfg(feature = "polars")]
+    {
+        module.add_function(wrap_pyfunction!(
+            py_export_descriptors_with_polars,
+            module
+        )?)?;
+        module.add_function(wrap_pyfunction!(
+            py_export_descriptors_with_polars_parallel,
+            module
+        )?)?;
+    }
+
     Ok(())
 }
 
@@ -919,12 +1296,6 @@ mod tests {
     fn test_j_to_double_j_with_parity() {
         assert_eq!(j_to_double_j("4-"), Ok(8));
         assert_eq!(j_to_double_j("3+"), Ok(6));
-    }
-
-    #[test]
-    fn test_j_to_double_j_empty() {
-        assert_eq!(j_to_double_j(""), Ok(0));
-        assert_eq!(j_to_double_j("   "), Ok(0));
     }
 
     #[test]

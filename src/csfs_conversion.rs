@@ -1,17 +1,16 @@
 use arrow::array::{StringBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use crossbeam_channel::{Receiver, Sender, bounded};
+use num_cpus;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::thread;
 use toml;
 
 /// Number of header lines at the beginning of a CSF file
@@ -85,37 +84,21 @@ struct HeaderData {
     conversion_stats: ConversionStats,
 }
 
-#[derive(Debug, Clone)]
-struct ProcessedChunk {
-    start_csf_index: usize,
-    idx_values: Vec<u64>,
-    line1_values: Vec<String>,
-    line2_values: Vec<String>,
-    line3_values: Vec<String>,
-    csf_count: usize,
-    line_count: usize,
-    truncated_count: usize,
-}
-
-#[derive(Debug)]
-struct WorkChunk {
-    start_csf_index: usize,
-    lines: Vec<String>,
-}
-
 /// Convert CSF text file to Parquet format using parallel processing.
 ///
-/// This function is optimized for large-scale data processing and provides
-/// significant performance improvements over the sequential version through
-/// multi-threaded processing.
+/// This function is optimized for large-scale data processing. It uses a streaming
+/// approach with rayon-based parallel processing:
+/// - Stream: Read file in batches to avoid loading 34GB+ into memory
+/// - Parallel: Process each batch with rayon's work-stealing
+/// - Order: Maintain CSF order in output
 ///
 /// # Arguments
 ///
 /// * `csfs_path` - Path to input CSF file
 /// * `output_path` - Path to output Parquet file
 /// * `max_line_len` - Maximum line length (lines longer than this are truncated)
-/// * `chunk_size` - Number of lines per processing chunk (larger = fewer I/O operations)
-/// * `num_workers` - Number of worker threads (None = CPU core count)
+/// * `chunk_size` - Number of lines per read batch (larger = fewer I/O ops but more memory)
+/// * `num_workers` - Number of rayon worker threads (None = CPU core count)
 ///
 /// # Returns
 ///
@@ -124,12 +107,15 @@ struct WorkChunk {
 /// * `total_lines` - Total number of lines processed
 /// * `truncated_count` - Number of lines that were truncated
 ///
-/// # Features
+/// # Architecture
 ///
-/// * Multi-threaded parallel processing with producer-consumer pattern
-/// * Maintains original CSF order using BTreeMap for sequencing
-/// * Memory-efficient with bounded queues to prevent OOM
-/// * Real-time progress monitoring
+/// ```
+/// File → [Read batch] → [Rayon parallel process] → [Write ordered] → repeat
+/// ```
+///
+/// - **Streaming**: Read file in batches (don't load entire 34GB into memory)
+/// - **Parallel**: Each batch processed with rayon's par_iter (all cores used)
+/// - **Ordered**: Results written in CSF order (par_iter + collect preserves order)
 ///
 /// # Header File
 ///
@@ -142,74 +128,166 @@ pub fn convert_csfs_to_parquet_parallel(
     chunk_size: usize,
     num_workers: Option<usize>,
 ) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
-    let num_workers = num_workers.unwrap_or_else(|| num_cpus::get());
-    let queue_size = num_workers * 2; // Bounded queue to prevent memory explosion
+    // Configure rayon thread pool
+    if let Some(n) = num_workers {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build_global()
+            .map_err(|e| format!("Failed to configure rayon: {}", e))?;
+    }
+    let num_workers = num_workers.unwrap_or_else(num_cpus::get);
 
     println!(
-        "启动并行处理: {} 个工作线程, 队列大小: {}",
-        num_workers, queue_size
+        "启动并行处理: {} 个工作线程 (rayon work-stealing)",
+        num_workers
     );
     println!("输入文件: {:?}", csfs_path);
     println!("输出文件: {:?}", output_path);
-
-    // 创建通信通道
-    let (work_sender, work_receiver) = bounded(queue_size);
-    let (result_sender, result_receiver) = bounded(queue_size);
-
-    // 统计信息 (使用 Mutex 保证线程安全)
-    let total_stats = Arc::new(Mutex::new(ConversionStats {
-        csf_count: 0,
-        total_lines: 0,
-        truncated_count: 0,
-    }));
+    println!("读取批次大小: {} 行", chunk_size);
 
     // --- 1. 读取 Header (5行) ---
     let headers = extract_header_lines(csfs_path)?;
 
-    // --- 2. 启动工作线程 ---
-    let mut worker_handles = Vec::new();
-    for worker_id in 0..num_workers {
-        let work_receiver = work_receiver.clone();
-        let result_sender = result_sender.clone();
-        let max_line_len = max_line_len;
+    // --- 2. 创建 Parquet 写入器 ---
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("idx", DataType::UInt64, false),
+        Field::new("line1", DataType::Utf8, false),
+        Field::new("line2", DataType::Utf8, false),
+        Field::new("line3", DataType::Utf8, false),
+    ]));
 
-        let handle = thread::spawn(move || {
-            worker_process(worker_id, work_receiver, result_sender, max_line_len);
-        });
+    let output_file = File::create(&output_path)?;
+    let props = WriterProperties::builder()
+        .set_compression(parquet::basic::Compression::GZIP(
+            parquet::basic::GzipLevel::try_new(4)?,
+        ))
+        .build();
+    let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
 
-        worker_handles.push(handle);
+    // --- 3. 流式读取 + 批量并行处理 ---
+    let input_file = File::open(csfs_path)?;
+    let reader = BufReader::new(input_file);
+    let mut lines_iter = reader.lines();
+
+    // Skip header lines
+    for _ in 0..CSF_HEADER_LINE_COUNT {
+        if lines_iter.next().is_none() {
+            break;
+        }
     }
 
-    // --- 3. 启动文件读取线程 ---
-    let reader_thread = thread::spawn({
-        let work_sender = work_sender.clone();
-        let csfs_path = csfs_path.to_owned();
-        move || file_reader_thread(csfs_path, chunk_size, work_sender)
-    });
+    let mut batch_lines = Vec::with_capacity(chunk_size);
+    let mut csf_count = 0;
+    let mut total_lines = 0;
+    let mut truncated_count = 0;
+    let mut batch_num = 0;
 
-    // Drop sender copies for worker threads after starting reader thread
-    drop(work_sender);
-    drop(result_sender);
+    println!("开始流式处理 (读取 → 并行处理 → 写入)...");
 
-    // --- 4. 启动写入线程 ---
-    let writer_thread = thread::spawn({
-        let result_receiver = result_receiver;
-        let output_path = output_path.to_owned();
-        let total_stats = total_stats.clone();
-        let max_line_len = max_line_len;
-        move || writer_thread(result_receiver, output_path, total_stats, max_line_len)
-    });
+    loop {
+        // Read a batch of lines
+        let mut lines_read = 0;
+        for _ in 0..chunk_size {
+            match lines_iter.next() {
+                Some(Ok(line)) => {
+                    total_lines += 1;
+                    lines_read += 1;
+                    batch_lines.push(line);
+                }
+                Some(Err(e)) => return Err(e.into()),
+                None => break,
+            }
+        }
 
-    // --- 5. 等待所有线程完成 ---
-    reader_thread.join().unwrap()?;
+        if batch_lines.is_empty() {
+            break;
+        }
 
-    for handle in worker_handles {
-        handle.join().unwrap();
+        // Ensure we have complete CSFs (3 lines each)
+        let num_full_csfs = batch_lines.len() / 3;
+        if num_full_csfs == 0 {
+            if lines_read == 0 {
+                break;
+            }
+            continue;
+        }
+
+        let lines_to_process: Vec<String> = batch_lines.drain(..num_full_csfs * 3).collect();
+
+        // Process batch in parallel using rayon
+        let batch_results: Vec<(u64, String, String, String, bool)> = lines_to_process
+            .par_chunks(3)
+            .enumerate()
+            .map(|(i, chunk)| {
+                if chunk.len() != 3 {
+                    return ((csf_count + i) as u64, String::new(), String::new(), String::new(), false);
+                }
+
+                let process_line = |line: &str, max_len: usize| -> (String, bool) {
+                    if line.len() > MAX_LINE_WARNING_THRESHOLD {
+                        eprintln!("警告: 行过长 ({} bytes)", line.len());
+                    }
+                    if line.len() > max_len {
+                        (line.chars().take(max_len).collect::<String>(), true)
+                    } else {
+                        (line.to_string(), false)
+                    }
+                };
+
+                let (line1, t1) = process_line(&chunk[0], max_line_len);
+                let (line2, t2) = process_line(&chunk[1], max_line_len);
+                let (line3, t3) = process_line(&chunk[2], max_line_len);
+
+                ((csf_count + i) as u64, line1, line2, line3, t1 || t2 || t3)
+            })
+            .collect();
+
+        // Write results in order (par_iter + collect preserves order)
+        let mut idx_builder = UInt64Builder::with_capacity(num_full_csfs);
+        let mut line1_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
+        let mut line2_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
+        let mut line3_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
+
+        for (idx, line1, line2, line3, truncated) in batch_results {
+            idx_builder.append_value(idx);
+            line1_builder.append_value(&line1);
+            line2_builder.append_value(&line2);
+            line3_builder.append_value(&line3);
+            if truncated {
+                truncated_count += 1;
+            }
+        }
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(idx_builder.finish()),
+                Arc::new(line1_builder.finish()),
+                Arc::new(line2_builder.finish()),
+                Arc::new(line3_builder.finish()),
+            ],
+        )?;
+
+        writer.write(&batch)?;
+
+        csf_count += num_full_csfs;
+        batch_num += 1;
+
+        if csf_count % 50000 == 0 {
+            println!("已处理 {} 个 CSF (batch #{})", csf_count, batch_num);
+        }
     }
 
-    let final_stats = writer_thread.join().unwrap()?;
+    // --- 4. 完成写入 ---
+    writer.close()?;
 
-    // --- 6. 创建 TOML 头部文件 ---
+    let final_stats = ConversionStats {
+        csf_count,
+        total_lines,
+        truncated_count,
+    };
+
+    // --- 5. 创建 TOML 头部文件 ---
     let header_data = HeaderData {
         header_info: HeaderInfo {
             header_lines: headers,
@@ -217,7 +295,6 @@ pub fn convert_csfs_to_parquet_parallel(
         conversion_stats: final_stats.clone(),
     };
 
-    // 使用输入文件名的前缀 + _header.toml
     let header_dir = safe_parent_dir(output_path);
     let input_file_stem = csfs_path
         .file_stem()
@@ -238,263 +315,6 @@ pub fn convert_csfs_to_parquet_parallel(
     println!("==========================================");
 
     Ok(final_stats)
-}
-
-// 工作线程函数
-fn worker_process(
-    _worker_id: usize,
-    work_receiver: Receiver<WorkChunk>,
-    result_sender: Sender<ProcessedChunk>,
-    max_line_len: usize,
-) {
-    for work_chunk in work_receiver {
-        let mut idx_values = Vec::with_capacity(work_chunk.lines.len() / 3);
-        let mut line1_values = Vec::with_capacity(work_chunk.lines.len() / 3);
-        let mut line2_values = Vec::with_capacity(work_chunk.lines.len() / 3);
-        let mut line3_values = Vec::with_capacity(work_chunk.lines.len() / 3);
-        let mut csf_count = 0;
-        let mut truncated_count = 0;
-
-        // 处理行，确保是 3 的倍数
-        let _full_csfs = work_chunk.lines.len() / 3;
-        for chunk in work_chunk.lines.chunks(3) {
-            if chunk.len() == 3 {
-                // 处理每一行
-                let process_line = |line: &str| -> (String, bool) {
-                    // Warn about excessively long lines (potential memory issue)
-                    if line.len() > MAX_LINE_WARNING_THRESHOLD {
-                        eprintln!(
-                            "警告: 行过长 ({} bytes)，可能消耗大量内存",
-                            line.len()
-                        );
-                    }
-
-                    if line.len() > max_line_len {
-                        let truncated = line.chars().take(max_line_len).collect::<String>();
-                        (truncated, true)
-                    } else {
-                        (line.to_string(), false)
-                    }
-                };
-
-                let (line1, trunc1) = process_line(&chunk[0]);
-                let (line2, trunc2) = process_line(&chunk[1]);
-                let (line3, trunc3) = process_line(&chunk[2]);
-
-                idx_values.push((work_chunk.start_csf_index + csf_count) as u64);
-                line1_values.push(line1);
-                line2_values.push(line2);
-                line3_values.push(line3);
-
-                if trunc1 || trunc2 || trunc3 {
-                    truncated_count += 1;
-                }
-
-                csf_count += 1;
-            }
-        }
-
-        let processed_chunk = ProcessedChunk {
-            start_csf_index: work_chunk.start_csf_index,
-            idx_values,
-            line1_values,
-            line2_values,
-            line3_values,
-            csf_count,
-            line_count: work_chunk.lines.len(),
-            truncated_count,
-        };
-
-        result_sender
-            .send(processed_chunk)
-            .expect("Failed to send processed chunk to writer thread");
-    }
-}
-
-// 文件读取线程函数
-fn file_reader_thread(
-    csfs_path: PathBuf,
-    chunk_size: usize,
-    work_sender: Sender<WorkChunk>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let input_file = File::open(&csfs_path)?;
-    let reader = BufReader::new(input_file);
-    let mut lines_iter = reader.lines();
-
-    // 跳过前 CSF_HEADER_LINE_COUNT 行 header
-    for _ in 0..CSF_HEADER_LINE_COUNT {
-        if lines_iter.next().is_none() {
-            break;
-        }
-    }
-
-    let mut chunk_id = 0;
-    let mut chunk_lines = Vec::with_capacity(chunk_size);
-    let mut global_csf_count = 0;
-
-    println!("开始读取 CSF 数据...");
-
-    for line_result in lines_iter {
-        match line_result {
-            Ok(line) => {
-                chunk_lines.push(line);
-
-                if chunk_lines.len() >= chunk_size {
-                    // 确保发送的块包含完整的 CSF（3 的倍数行）
-                    let num_full_csfs = chunk_lines.len() / 3;
-                    let lines_to_send = num_full_csfs * 3;
-
-                    if lines_to_send > 0 {
-                        let start_csf_index = global_csf_count;
-
-                        // 发送完整 CSF 的行
-                        let work_chunk = WorkChunk {
-                            start_csf_index,
-                            lines: chunk_lines[..lines_to_send].to_vec(),
-                        };
-
-                        work_sender.send(work_chunk)?;
-
-                        // 更新全局 CSF 计数
-                        global_csf_count += num_full_csfs;
-
-                        // 保留剩余的行到下一块
-                        let remaining_lines = chunk_lines[lines_to_send..].to_vec();
-                        chunk_lines = remaining_lines;
-                        chunk_id += 1;
-
-                        if chunk_id % 100 == 0 {
-                            // println!("已发送 {} 个数据块", chunk_id);
-                        }
-                    }
-                }
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-
-    // 发送剩余的行（确保是 3 的倍数）
-    if !chunk_lines.is_empty() {
-        let num_full_csfs = chunk_lines.len() / 3;
-        if num_full_csfs > 0 {
-            let lines_to_send = num_full_csfs * 3;
-            let work_chunk = WorkChunk {
-                start_csf_index: global_csf_count,
-                lines: chunk_lines[..lines_to_send].to_vec(),
-            };
-            work_sender.send(work_chunk)?;
-        }
-    }
-
-    // println!("文件读取完成，共发送 {} 个数据块", chunk_id + 1);
-    Ok(())
-}
-
-// 写入线程函数
-fn writer_thread(
-    result_receiver: Receiver<ProcessedChunk>,
-    output_path: PathBuf,
-    total_stats: Arc<Mutex<ConversionStats>>,
-    max_line_len: usize,
-) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
-    // 创建 Arrow Schema
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("idx", DataType::UInt64, false),
-        Field::new("line1", DataType::Utf8, false),
-        Field::new("line2", DataType::Utf8, false),
-        Field::new("line3", DataType::Utf8, false),
-    ]));
-
-    // 创建 Parquet 写入器
-    let output_file = File::create(&output_path)?;
-    let props = WriterProperties::builder()
-        .set_compression(parquet::basic::Compression::GZIP(
-            parquet::basic::GzipLevel::try_new(4)?,
-        ))
-        .build();
-
-    let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
-
-    // Use BTreeMap for ordered write buffer (not VecDeque) because:
-    // - Worker threads process chunks in parallel and can finish in ANY order
-    // - Chunks that finish early need to be buffered until earlier chunks arrive
-    // - BTreeMap provides O(log n) insert + ordered iteration by CSF index
-    // - VecDeque would only work if chunks arrived sequentially (unlikely with parallel workers)
-    let mut write_buffer: std::collections::BTreeMap<usize, ProcessedChunk> = std::collections::BTreeMap::new();
-    let mut next_csf_index = 0;
-
-    println!("开始有序写入 Parquet 文件...");
-
-    for processed_chunk in result_receiver {
-        write_buffer.insert(processed_chunk.start_csf_index, processed_chunk);
-
-        // 按 CSF 索引顺序写入连续的块
-        while let Some((start_index, chunk)) =
-            write_buffer.iter().next().map(|(k, v)| (*k, v.clone()))
-        {
-            if start_index == next_csf_index {
-                // 这是下一个期望的块
-                write_buffer.remove(&start_index);
-
-                // 创建 Arrow 数组
-                let mut idx_builder = UInt64Builder::with_capacity(chunk.csf_count);
-                let mut line1_builder =
-                    StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * max_line_len);
-                let mut line2_builder =
-                    StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * max_line_len);
-                let mut line3_builder =
-                    StringBuilder::with_capacity(chunk.csf_count, chunk.csf_count * max_line_len);
-
-                for i in 0..chunk.csf_count {
-                    idx_builder.append_value(chunk.idx_values[i]);
-                    line1_builder.append_value(&chunk.line1_values[i]);
-                    line2_builder.append_value(&chunk.line2_values[i]);
-                    line3_builder.append_value(&chunk.line3_values[i]);
-                }
-
-                // 构建 RecordBatch
-                let batch = RecordBatch::try_new(
-                    schema.clone(),
-                    vec![
-                        Arc::new(idx_builder.finish()),
-                        Arc::new(line1_builder.finish()),
-                        Arc::new(line2_builder.finish()),
-                        Arc::new(line3_builder.finish()),
-                    ],
-                )?;
-
-                // 写入 Parquet
-                writer.write(&batch)?;
-
-                // 更新统计信息
-                {
-                    let mut stats = total_stats.lock().unwrap();
-                    stats.csf_count += chunk.csf_count;
-                    stats.total_lines += chunk.line_count;
-                    stats.truncated_count += chunk.truncated_count;
-                }
-
-                next_csf_index += chunk.csf_count;
-
-                if next_csf_index % 50000 == 0 {
-                    let stats = total_stats.lock().unwrap();
-                    println!("已写入 {} 个 CSF", stats.csf_count);
-                }
-            } else {
-                // 下一个块还没到达，等待
-                break;
-            }
-        }
-    }
-
-    // 完成写入
-    writer.close()?;
-
-    // 返回最终统计信息
-    let stats = total_stats.lock().unwrap().clone();
-    println!("Parquet 写入完成，共处理 {} 个 CSF", next_csf_index);
-
-    Ok(stats)
 }
 
 /// Convert CSF text file to Parquet format using sequential processing.

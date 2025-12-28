@@ -144,25 +144,36 @@ def convert_csfs_parallel(
     """
     Convert CSF text file to Parquet format using parallel processing.
 
-    This function is optimized for large-scale data processing and provides
-    significant performance improvements over the sequential version.
+    This function is optimized for large-scale data processing. It uses a streaming
+    approach with rayon-based parallel processing:
+    - Stream: Read file in batches to avoid loading 34GB+ into memory
+    - Parallel: Process each batch with rayon's work-stealing (all cores used)
+    - Order: Maintain CSF order in output
 
     Args:
         input_path: Path to input CSF file
         output_path: Path to output Parquet file
         max_line_len: Maximum line length (default: 256)
-        chunk_size: Batch processing size (default: 50000, larger than sequential)
-        num_workers: Number of worker threads (default: CPU core count)
+        chunk_size: Number of lines per read batch (default: 50000)
+        num_workers: Number of rayon worker threads (default: CPU core count)
 
     Returns:
         Dictionary containing conversion statistics and status
 
+    Architecture:
+        File → [Read batch] → [Rayon parallel process] → [Write ordered] → repeat
+
     Features:
-        - Multi-threaded parallel processing for large datasets
-        - Maintains original CSF order for consistent output
-        - Memory-efficient processing with bounded queues
+        - Multi-threaded parallel processing with rayon work-stealing
+        - Maintains original CSF order (par_iter + collect preserves order)
+        - Memory-efficient streaming (don't load entire 34GB into memory)
         - Real-time progress monitoring and statistics
         - Automatic worker count optimization
+
+    Performance:
+        - For 34GB source files with 100M+ CSFs
+        - All CPU cores are utilized (not just one)
+        - Uses rayon's work-stealing for automatic load balancing
     """
     return _convert_csfs_parallel(
         input_path=str(input_path),

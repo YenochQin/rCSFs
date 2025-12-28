@@ -17,6 +17,7 @@ serde = { version = "1.0.215", features = ["derive"] }
 crossbeam-channel = "0.5.13"
 num_cpus = "1.16.0"
 anyhow = "1.0.100"
+rayon = "1.10"
 
 [lib]
 name = "_rcsfs"

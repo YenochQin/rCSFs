@@ -1,6 +1,7 @@
 use arrow::array::{StringBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use indicatif::{ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
@@ -10,10 +11,34 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use toml;
 
 /// Number of header lines at the beginning of a CSF file
 const CSF_HEADER_LINE_COUNT: usize = 5;
+
+/// Quickly count the number of CSFs in a file (for progress bar)
+fn count_csfs_fast(csfs_path: &Path) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    let file = File::open(csfs_path)?;
+    let reader = BufReader::new(file);
+
+    let mut line_count = 0;
+    for _line in reader.lines() {
+        line_count += 1;
+        // Stop counting early for very large files (sample approach)
+        if line_count >= 1000000 {
+            // For files with >1M lines, estimate based on sampling
+            // This is a rough estimate but sufficient for progress bar
+            break;
+        }
+    }
+
+    // Subtract header lines, then divide by 3 (each CSF is 3 lines)
+    if line_count <= CSF_HEADER_LINE_COUNT {
+        return Ok(0);
+    }
+    Ok((line_count - CSF_HEADER_LINE_COUNT) / 3)
+}
 
 /// Maximum line length (in bytes) before emitting a strong warning about memory usage.
 /// The BufRead::lines() iterator allocates the full line before truncation.
@@ -133,10 +158,21 @@ pub fn convert_csfs_to_parquet_parallel(
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
     }
 
-    // --- 1. 读取 Header (5行) ---
+    // --- 1. 快速扫描获取总 CSF 数 ---
+    let total_csfs = count_csfs_fast(csfs_path)?;
+
+    // --- 2. 创建进度条 ---
+    let pb = ProgressBar::new(total_csfs as u64);
+    pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} CSFs ({eta})")
+        .unwrap()
+        .progress_chars("##-"));
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    // --- 3. 读取 Header (5行) ---
     let headers = extract_header_lines(csfs_path)?;
 
-    // --- 2. 创建 Parquet 写入器 ---
+    // --- 4. 创建 Parquet 写入器 ---
     let schema = Arc::new(Schema::new(vec![
         Field::new("idx", DataType::UInt64, false),
         Field::new("line1", DataType::Utf8, false),
@@ -152,7 +188,7 @@ pub fn convert_csfs_to_parquet_parallel(
         .build();
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
 
-    // --- 3. 流式读取 + 批量并行处理 ---
+    // --- 5. 流式读取 + 批量并行处理 ---
     let input_file = File::open(csfs_path)?;
     let reader = BufReader::new(input_file);
     let mut lines_iter = reader.lines();
@@ -256,9 +292,13 @@ pub fn convert_csfs_to_parquet_parallel(
         writer.write(&batch)?;
 
         csf_count += num_full_csfs;
+        pb.inc(num_full_csfs as u64);
     }
 
-    // --- 4. 完成写入 ---
+    // --- 6. 完成进度条 ---
+    pb.finish_with_message(format!("✅ 完成: {} CSFs 已转换", csf_count));
+
+    // --- 7. 完成写入 ---
     writer.close()?;
 
     let final_stats = ConversionStats {

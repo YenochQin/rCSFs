@@ -153,12 +153,10 @@ pub fn convert_csfs_to_parquet_parallel(
 
     let output_file = File::create(&output_path)?;
     let props = WriterProperties::builder()
-        .set_compression(parquet::basic::Compression::GZIP(
-            parquet::basic::GzipLevel::try_new(4)?,
-        ))
+        .set_compression(parquet::basic::Compression::UNCOMPRESSED)
         .build();
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
-    println!("Parquet 写入器已创建，使用 GZIP 压缩");
+    println!("Parquet 写入器已创建，使用无压缩");
 
     // --- 3. 流式读取 + 批量并行处理 ---
     let input_file = File::open(csfs_path)?;
@@ -209,9 +207,12 @@ pub fn convert_csfs_to_parquet_parallel(
 
         let lines_to_process: Vec<String> = batch_lines.drain(..num_full_csfs * 3).collect();
 
+        // Create chunks for parallel processing
+        let chunks: Vec<&[String]> = lines_to_process.chunks(3).collect();
+
         // Process batch in parallel using rayon
-        let batch_results: Vec<(u64, String, String, String, bool)> = lines_to_process
-            .par_chunks(3)
+        let batch_results: Vec<(u64, String, String, String, bool)> = chunks
+            .into_par_iter()
             .enumerate()
             .map(|(i, chunk)| {
                 if chunk.len() != 3 {
@@ -376,14 +377,12 @@ pub fn convert_csfs_to_parquet(
     // --- 3. 创建 Parquet 写入器 ---
     let output_file = File::create(output_path)?;
     let props = WriterProperties::builder()
-        .set_compression(parquet::basic::Compression::GZIP(
-            parquet::basic::GzipLevel::try_new(4)?,
-        ))
+        .set_compression(parquet::basic::Compression::UNCOMPRESSED)
         .set_write_batch_size(chunk_size as usize)
         .build();
 
     let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
-    println!("Parquet 写入器已创建，使用 GZIP 压缩");
+    println!("Parquet 写入器已创建，使用无压缩");
 
     // --- 4. 批量处理 ---
     let mut batch_lines = Vec::with_capacity(chunk_size);

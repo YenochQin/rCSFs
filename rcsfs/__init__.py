@@ -221,14 +221,14 @@ def generate_descriptors_from_parquet(
     with streaming batch processing for low memory usage.
 
     Output Format:
-        Arrow IPC (Feather) - columnar format, Polars compatible.
-        Read with: `polars.read_ipc()` or `pyarrow.feather.read_table()`
+        Parquet (UNCOMPRESSED) - columnar format, Polars compatible.
+        Read with: `polars.read_parquet()` or `pyarrow.parquet.read_table()`
         The output file will have descriptor_size columns (col_0, col_1, ..., col_N),
         where each row represents a CSF descriptor with each element in its own column.
 
     Args:
         input_parquet: Path to input parquet file (must have line1, line2, line3, idx columns)
-        output_parquet: Path to output Arrow IPC/Feather file for descriptors
+        output_parquet: Path to output Parquet file for descriptors
         peel_subshells: List of subshell names (e.g., ['5s', '4d-', '4d', '5p-', '5p', '6s'])
         num_workers: Number of worker threads (default: CPU core count)
 
@@ -236,7 +236,7 @@ def generate_descriptors_from_parquet(
         Dictionary containing generation statistics:
         - success: Whether generation succeeded
         - input_file: Input parquet file path
-        - output_file: Output Arrow IPC/Feather file path
+        - output_file: Output Parquet file path
         - csf_count: Number of CSFs processed
         - descriptor_count: Number of descriptors generated
         - orbital_count: Number of orbitals
@@ -249,19 +249,19 @@ def generate_descriptors_from_parquet(
         >>> peel_subshells = read_peel_subshells("data_header.toml")
         >>> stats = generate_descriptors_from_parquet(
         ...     "csfs_data.parquet",
-        ...     "descriptors.feather",
+        ...     "descriptors.parquet",
         ...     peel_subshells=peel_subshells
         ... )
 
         >>> # Read with polars
         >>> import polars as pl
-        >>> df = pl.read_ipc("descriptors.feather")
+        >>> df = pl.read_parquet("descriptors.parquet")
         >>> descriptors = df.to_numpy()  # Shape: (n_csfs, descriptor_size)
 
         >>> # With custom worker count for large files
         >>> stats = generate_descriptors_from_parquet(
         ...     "csfs_data.parquet",
-        ...     "descriptors.feather",
+        ...     "descriptors.parquet",
         ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s'],
         ...     num_workers=8
         ... )
@@ -277,7 +277,7 @@ def generate_descriptors_from_parquet(
         1. Read parquet in batches
         2. Parse CSFs to descriptors in parallel
         3. Convert descriptors to columnar format in parallel
-        4. Write batch to Arrow IPC/Feather file
+        4. Write batch to Parquet file (UNCOMPRESSED)
         5. Repeat until all data processed
     """
     return _generate_descriptors_from_parquet(

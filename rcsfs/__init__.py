@@ -221,7 +221,7 @@ def generate_descriptors_from_parquet(
     with streaming batch processing for low memory usage.
 
     Output Format:
-        Parquet (UNCOMPRESSED) - columnar format, Polars compatible.
+        Parquet with ZSTD compression (level 3) - columnar format, Polars compatible.
         Read with: `polars.read_parquet()` or `pyarrow.parquet.read_table()`
         The output file will have descriptor_size columns (col_0, col_1, ..., col_N),
         where each row represents a CSF descriptor with each element in its own column.
@@ -271,13 +271,14 @@ def generate_descriptors_from_parquet(
         - For large files (>10M CSFs): num_workers=8+
         - More workers = higher CPU usage, faster processing
         - Rayon automatically handles work stealing for optimal load balancing
+        - Uses 65536 rows/batch for better I/CPU balance on multi-core systems
 
     Note:
         This implementation uses streaming batch processing to minimize memory usage:
-        1. Read parquet in batches
+        1. Read parquet in batches (65536 rows per batch)
         2. Parse CSFs to descriptors in parallel
         3. Convert descriptors to columnar format in parallel
-        4. Write batch to Parquet file (UNCOMPRESSED)
+        4. Write batch to Parquet file (ZSTD level 3 compression)
         5. Repeat until all data processed
     """
     return _generate_descriptors_from_parquet(

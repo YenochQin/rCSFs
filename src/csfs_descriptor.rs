@@ -815,64 +815,6 @@ impl PyCSFDescriptorGenerator {
     }
 }
 
-/// Python-exposed function to generate descriptors from parquet file
-///
-/// Output format: Arrow IPC (Feather) file
-/// Read with: polars.read_ipc() or pyarrow.feather.read_table()
-#[cfg(feature = "python")]
-#[pyfunction]
-#[pyo3(signature = (
-    input_parquet,
-    output_file,
-    peel_subshells=None,
-    header_path=None
-))]
-fn py_generate_descriptors_from_parquet(
-    py: Python,
-    input_parquet: String,
-    output_file: String,
-    peel_subshells: Option<Vec<String>>,
-    header_path: Option<String>,
-) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-    use pyo3::types::PyDict;
-    use std::path::Path;
-
-    let header_path_buf = header_path.as_ref().map(|s| Path::new(s).to_path_buf());
-    let input_path = Path::new(&input_parquet).to_path_buf();
-    let output_path = Path::new(&output_file).to_path_buf();
-
-    // Release the GIL during the long-running operation
-    let stats = py
-        .detach(|| {
-            parquet_batch::generate_descriptors_from_parquet(
-                &input_path,
-                &output_path,
-                peel_subshells,
-                header_path_buf,
-            )
-        })
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-
-    let dict = PyDict::new(py);
-    dict.set_item("success", true)?;
-    dict.set_item("input_file", stats.input_file)?;
-    dict.set_item("output_file", stats.output_file)?;
-    dict.set_item("csf_count", stats.csf_count)?;
-    dict.set_item("descriptor_count", stats.descriptor_count)?;
-    dict.set_item("orbital_count", stats.orbital_count)?;
-    dict.set_item("descriptor_size", stats.descriptor_size)?;
-    Ok(dict.into())
-}
-
-/// Python-exposed function to read peel subshells from header file
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_read_peel_subshells(header_path: String) -> PyResult<Vec<String>> {
-    use std::path::Path;
-    parquet_batch::read_peel_subshells_from_header(Path::new(&header_path))
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))
-}
-
 /// Python-exposed function to generate descriptors from parquet file (parallel version)
 ///
 /// Output format: Arrow IPC (Feather) file
@@ -887,7 +829,7 @@ fn py_read_peel_subshells(header_path: String) -> PyResult<Vec<String>> {
     peel_subshells,
     num_workers=None
 ))]
-fn py_generate_descriptors_from_parquet_parallel(
+fn py_generate_descriptors_from_parquet(
     py: Python,
     input_parquet: String,
     output_file: String,
@@ -923,16 +865,21 @@ fn py_generate_descriptors_from_parquet_parallel(
     Ok(dict.into())
 }
 
+/// Python-exposed function to read peel subshells from header file
+#[cfg(feature = "python")]
+#[pyfunction]
+fn py_read_peel_subshells(header_path: String) -> PyResult<Vec<String>> {
+    use std::path::Path;
+    parquet_batch::read_peel_subshells_from_header(Path::new(&header_path))
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))
+}
+
 /// Register the Python module functions and classes
 #[cfg(feature = "python")]
 pub fn register_descriptor_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCSFDescriptorGenerator>()?;
     module.add_function(wrap_pyfunction!(
         py_generate_descriptors_from_parquet,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        py_generate_descriptors_from_parquet_parallel,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(py_read_peel_subshells, module)?)?;

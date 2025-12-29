@@ -11,7 +11,6 @@ pub mod csfs_descriptor;
 fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(convert_csfs, m)?)?;
-    m.add_function(wrap_pyfunction!(convert_csfs_parallel, m)?)?;
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
     m.add_class::<CSFProcessor>()?;
 
@@ -97,26 +96,15 @@ impl CSFProcessor {
         Ok(config.into())
     }
 
-    /// Convert CSF file (sequential version)
-    fn convert(&self, py: Python, input_path: String, output_path: String) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-        convert_csfs(
-            py,
-            input_path,
-            output_path,
-            Some(self.max_line_len),
-            Some(self.chunk_size),
-        )
-    }
-
-    /// Convert CSF file (parallel version, for large-scale data)
-    fn convert_parallel(
+    /// Convert CSF file using parallel processing
+    fn convert(
         &self,
         py: Python,
         input_path: String,
         output_path: String,
         num_workers: Option<usize>,
     ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-        convert_csfs_parallel(
+        convert_csfs(
             py,
             input_path,
             output_path,
@@ -132,105 +120,14 @@ impl CSFProcessor {
     }
 }
 
-/// Convert CSF text file to Parquet format
+/// Convert CSF text file to Parquet format (parallel processing)
 ///
 /// Args:
 /// - input_path: Path to input CSF file
 /// - output_path: Path to output Parquet file
 /// - max_line_len: Maximum line length (default: 256)
-/// - chunk_size: Batch processing size (default: 100000)
-///
-/// Returns:
-/// Dictionary containing conversion statistics:
-/// - success: Whether conversion succeeded
-/// - csf_count: Number of CSFs
-/// - total_lines: Total line count
-/// - truncated_count: Number of truncated lines
-/// - input_file: Input file path
-/// - output_file: Output file path
-/// - header_file: TOML header file path
-/// - max_line_len: Maximum line length used
-/// - chunk_size: Batch processing size used
-/// - error: Error message (only present on failure)
-///
-/// Header file format:
-/// Automatically generates [input_file_stem]_header.toml file containing:
-/// - header_info: Contains header_lines sub-property
-///   - header_lines: List of header line contents
-/// - conversion_stats: Conversion statistics
-#[pyfunction]
-fn convert_csfs(
-    py: Python,
-    input_path: String,
-    output_path: String,
-    max_line_len: Option<usize>,
-    chunk_size: Option<usize>,
-) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-    // Set default parameters
-    let max_line_len = max_line_len.unwrap_or(256);
-    let chunk_size = chunk_size.unwrap_or(100000);
-
-    // Parameter validation
-    if max_line_len == 0 {
-        return Err(PyValueError::new_err("max_line_len must be greater than 0"));
-    }
-    if chunk_size == 0 {
-        return Err(PyValueError::new_err("chunk_size must be greater than 0"));
-    }
-
-    // Execute conversion
-    let result = py.detach(|| {
-        csfs_conversion::convert_csfs_to_parquet(
-            Path::new(&input_path),
-            Path::new(&output_path),
-            max_line_len,
-            chunk_size,
-        )
-    });
-
-    match result {
-        Ok(conversion_stats) => {
-            // Create result dictionary
-            let stats = PyDict::new(py);
-            stats.set_item("success", true)?;
-            stats.set_item("input_file", &input_path)?;
-            stats.set_item("output_file", &output_path)?;
-            stats.set_item("max_line_len", max_line_len)?;
-            stats.set_item("chunk_size", chunk_size)?;
-            stats.set_item("csf_count", conversion_stats.csf_count)?;
-            stats.set_item("total_lines", conversion_stats.total_lines)?;
-            stats.set_item("truncated_count", conversion_stats.truncated_count)?;
-
-            // Try to read [input_file_stem]_header.toml file path
-            let output_dir = Path::new(&output_path).parent().unwrap_or_else(|| Path::new("."));
-            let input_file_stem = Path::new(&input_path).file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("csfs");
-            let header_filename = format!("{}_header.toml", input_file_stem);
-            let header_path = output_dir.join(header_filename);
-            if header_path.exists() {
-                stats.set_item("header_file", header_path.to_string_lossy())?;
-            }
-
-            Ok(stats.into())
-        }
-        Err(e) => {
-            // Create error result dictionary
-            let stats = PyDict::new(py);
-            stats.set_item("success", false)?;
-            stats.set_item("error", e.to_string())?;
-            Ok(stats.into())
-        }
-    }
-}
-
-/// Convert CSF text file to Parquet format (parallel version, for large-scale data)
-///
-/// Args:
-/// - input_path: Path to input CSF file
-/// - output_path: Path to output Parquet file
-/// - max_line_len: Maximum line length (default: 256)
-/// - chunk_size: Batch processing size (default: 3000000, larger recommended for better parallel efficiency)
+/// - chunk_size: Batch processing size (default: 3000000, optimized for parallel efficiency)
+/// - num_workers: Number of worker threads (default: CPU core count)
 ///
 /// Returns:
 /// Dictionary containing conversion statistics:
@@ -257,7 +154,7 @@ fn convert_csfs(
     chunk_size=None,
     num_workers=None
 ))]
-fn convert_csfs_parallel(
+fn convert_csfs(
     py: Python,
     input_path: String,
     output_path: String,

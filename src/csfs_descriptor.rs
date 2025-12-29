@@ -309,15 +309,15 @@ pub mod parquet_batch {
     /// This implementation uses streaming batch processing to minimize memory usage:
     /// 1. Read parquet in batches (65536 rows/batch for better I/CPU balance)
     /// 2. Parse CSFs to descriptors in parallel
-    /// 3. Convert descriptors to columnar format in parallel
+    /// 3. Create ListArray directly (no column transposition overhead)
     /// 4. Write batch to Parquet file (ZSTD level 3 compression)
     /// 5. Repeat until all data processed
     ///
-    /// Output format: Parquet with ZSTD compression (level 3), which is:
-    /// - Polars compatible (pl.read_parquet())
-    /// - Efficient columnar storage format
-    /// - Better I/O performance due to compression
-    /// - Smaller file size than uncompressed Parquet
+    /// Output format: Parquet with single List<int32> column and ZSTD compression (level 3):
+    /// - Schema: `descriptor: List<int32>` (one list per CSF, each containing 168 int32 values)
+    /// - Polars compatible: `df = pl.read_parquet(); descriptors = df["descriptor"].to_numpy()`
+    /// - No column transposition needed for better performance
+    /// - Better I/O performance due to compression and reduced column count
     ///
     /// # Arguments
     /// * `input_parquet` - Path to input parquet file
@@ -331,7 +331,7 @@ pub mod parquet_batch {
         num_workers: Option<usize>,
     ) -> Result<BatchDescriptorStats, String> {
         use rayon::prelude::*;
-        use arrow::array::{Array, Int32Array, UInt64Array};
+        use arrow::array::{Array, Int32Array, StringArray, UInt64Array};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use parquet::arrow::arrow_writer::ArrowWriter;
@@ -361,24 +361,30 @@ pub mod parquet_batch {
         println!("轨道数量: {}, 描述符大小: {}", orbital_count, descriptor_size);
         let generator = std::sync::Arc::new(super::CSFDescriptorGenerator::new(peel_subshells));
 
-        println!("开始生成描述符（Parquet 流式并行版本，ZSTD level 3 压缩）");
+        println!("开始生成描述符（Parquet 流式并行版本，单列 List<int32> 格式）");
         println!("输入文件: {:?}", input_parquet);
         println!("输出文件: {:?}", output_file);
 
         ////////////////////////////////////////////////////////////////////////////////
-        // Phase 1: Setup output schema and writer (Parquet with ZSTD compression)
+        // Phase 1: Setup output schema and writer
+        // Use single List<int32> column instead of 168 separate int columns
+        // This avoids column transposition overhead
         ////////////////////////////////////////////////////////////////////////////////
-        let mut fields = Vec::with_capacity(descriptor_size);
-        for i in 0..descriptor_size {
-            fields.push(Field::new(format!("col_{}", i), DataType::Int32, false));
-        }
-        let schema = Arc::new(Schema::new(fields));
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        // Schema: single column containing lists of int32
+        // Each row = one CSF descriptor (list of 168 int32 values)
+        let descriptor_field = Field::new(
+            "descriptor",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            false
+        );
+        let schema = Arc::new(Schema::new(vec![descriptor_field]));
 
         let output_file_handle = std::fs::File::create(output_file)
             .map_err(|e| format!("Failed to create output file: {}", e))?;
 
-        // Use ZSTD compression for better I/O performance
-        // ZSTD level 3 provides good compression ratio with fast speed
+        // Use ZSTD compression with level 3 for good balance
         let props = WriterProperties::builder()
             .set_compression(parquet::basic::Compression::ZSTD(
                 parquet::basic::ZstdLevel::try_new(3).unwrap(),
@@ -401,10 +407,9 @@ pub mod parquet_batch {
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)
             .map_err(|e| format!("Failed to create parquet reader: {}", e))?;
 
-        // Enable batch reading with larger batch size for better I/CPU balance
-        // Default 1024 is too small for 48 cores, causes I/O bottleneck
+        // Use larger batch size and read ahead for better performance
         let mut reader = builder
-            .with_batch_size(65536)  // 64x larger batch
+            .with_batch_size(65536)
             .build()
             .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
 
@@ -473,16 +478,32 @@ pub mod parquet_batch {
                         .collect();
                     let parse_time = parse_start.elapsed();
 
-                    // Convert descriptors to columnar format (parallel)
-                    // All descriptor_size columns are processed in parallel by different threads!
+                    // Create ListArray directly from Vec<Vec<i32>> (no transposition needed!)
                     let convert_start = std::time::Instant::now();
-                    let column_arrays: Vec<Arc<dyn Array>> = (0..descriptor_size)
-                        .into_par_iter()
-                        .map(|col_idx| {
-                            let values: Vec<i32> = descriptors.iter().map(|desc| desc[col_idx]).collect();
-                            Arc::new(Int32Array::from(values)) as Arc<dyn Array>
-                        })
+                    use arrow::array::{ListArray, UInt32Array};
+                    use std::sync::Arc;
+
+                    // Calculate offsets for the list array
+                    let mut offsets = Vec::with_capacity(batch_size + 1);
+                    offsets.push(0u32);
+                    for desc in &descriptors {
+                        offsets.push(offsets.last().unwrap() + desc.len() as u32);
+                    }
+
+                    // Flatten all descriptors into a single array
+                    let flat_values: Vec<i32> = descriptors.iter()
+                        .flat_map(|desc| desc.iter().copied())
                         .collect();
+
+                    // Create the list array
+                    let list_array = ListArray::new(
+                        Arc::new(Field::new("item", DataType::Int32, false)),
+                        Arc::new(UInt32Array::from(offsets)),
+                        Arc::new(Int32Array::from(flat_values)),
+                        None,
+                    );
+
+                    let column_arrays = vec![Arc::new(list_array) as Arc<dyn Array>];
                     let convert_time = convert_start.elapsed();
 
                     // Write batch to Parquet file
@@ -885,11 +906,11 @@ impl PyCSFDescriptorGenerator {
 
 /// Python-exposed function to generate descriptors from parquet file (parallel version)
 ///
-/// Output format: Parquet file with ZSTD compression (level 3)
-/// Read with: polars.read_parquet() or pyarrow.parquet.read_table()
+/// Output format: Parquet file with single `descriptor: List<int32>` column and ZSTD compression (level 3)
+/// Read with: `df = pl.read_parquet(); descriptors = df["descriptor"].to_numpy()`
 ///
 /// This version uses streaming batch processing with 65536 rows/batch for low memory usage
-/// and better I/CPU balance on multi-core systems.
+/// and better I/CPU balance on multi-core systems. No column transposition overhead.
 #[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (

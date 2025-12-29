@@ -370,7 +370,6 @@ pub mod parquet_batch {
         // Use single List<int32> column instead of 168 separate int columns
         // This avoids column transposition overhead
         ////////////////////////////////////////////////////////////////////////////////
-        use arrow::datatypes::{DataType, Field, Schema};
 
         // Schema: single column containing lists of int32
         // Each row = one CSF descriptor (list of 168 int32 values)
@@ -480,14 +479,15 @@ pub mod parquet_batch {
 
                     // Create ListArray directly from Vec<Vec<i32>> (no transposition needed!)
                     let convert_start = std::time::Instant::now();
-                    use arrow::array::{ListArray, UInt32Array};
+                    use arrow::array::ListArray;
+                    use arrow::buffer::OffsetBuffer;
                     use std::sync::Arc;
 
-                    // Calculate offsets for the list array
+                    // Calculate offsets for the list array (i32 offsets)
                     let mut offsets = Vec::with_capacity(batch_size + 1);
-                    offsets.push(0u32);
+                    offsets.push(0i32);
                     for desc in &descriptors {
-                        offsets.push(offsets.last().unwrap() + desc.len() as u32);
+                        offsets.push(offsets.last().unwrap() + desc.len() as i32);
                     }
 
                     // Flatten all descriptors into a single array
@@ -495,10 +495,10 @@ pub mod parquet_batch {
                         .flat_map(|desc| desc.iter().copied())
                         .collect();
 
-                    // Create the list array
+                    // Create the list array with proper OffsetBuffer<i32>
                     let list_array = ListArray::new(
                         Arc::new(Field::new("item", DataType::Int32, false)),
-                        Arc::new(UInt32Array::from(offsets)),
+                        OffsetBuffer::new(offsets),
                         Arc::new(Int32Array::from(flat_values)),
                         None,
                     );

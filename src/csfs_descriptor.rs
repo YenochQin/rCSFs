@@ -403,10 +403,13 @@ pub mod parquet_batch {
         let mut total_descriptors = 0;
 
         // Process each batch from input parquet
+        let mut batch_count = 0;
         loop {
             match reader.next() {
                 Some(Ok(batch)) => {
+                    let batch_start = std::time::Instant::now();
                     let batch_size = batch.num_rows();
+                    batch_count += 1;
 
                     let idx_col = batch
                         .column(0)
@@ -433,6 +436,7 @@ pub mod parquet_batch {
                         .ok_or("line3 column is not string type")?;
 
                     // Extract rows (borrowed, no allocation)
+                    let extract_start = std::time::Instant::now();
                     let batch_rows: Vec<(u64, &str, &str, &str)> = (0..batch_size)
                         .map(|i| (
                             idx_col.value(i),
@@ -441,8 +445,10 @@ pub mod parquet_batch {
                             line3_col.value(i),
                         ))
                         .collect();
+                    let extract_time = extract_start.elapsed();
 
                     // Parse CSFs to descriptors (parallel)
+                    let parse_start = std::time::Instant::now();
                     let generator_ref = generator.as_ref();
                     let descriptors: Vec<Vec<i32>> = batch_rows
                         .into_par_iter()
@@ -456,9 +462,11 @@ pub mod parquet_batch {
                             }
                         })
                         .collect();
+                    let parse_time = parse_start.elapsed();
 
                     // Convert descriptors to columnar format (parallel)
                     // All descriptor_size columns are processed in parallel by different threads!
+                    let convert_start = std::time::Instant::now();
                     let column_arrays: Vec<Arc<dyn Array>> = (0..descriptor_size)
                         .into_par_iter()
                         .map(|col_idx| {
@@ -466,13 +474,31 @@ pub mod parquet_batch {
                             Arc::new(Int32Array::from(values)) as Arc<dyn Array>
                         })
                         .collect();
+                    let convert_time = convert_start.elapsed();
 
                     // Write batch to Parquet file
+                    let write_start = std::time::Instant::now();
                     let output_batch = RecordBatch::try_new(schema.clone(), column_arrays)
                         .map_err(|e| format!("Failed to create output batch: {}", e))?;
 
                     writer.write(&output_batch)
                         .map_err(|e| format!("Failed to write batch: {}", e))?;
+                    let write_time = write_start.elapsed();
+                    let batch_time = batch_start.elapsed();
+
+                    // Print timing diagnostics for first few batches
+                    if batch_count <= 5 {
+                        println!(
+                            "Batch {}: size={}, extract={:.2}ms, parse={:.2}ms, convert={:.2}ms, write={:.2}ms, total={:.2}ms",
+                            batch_count,
+                            batch_size,
+                            extract_time.as_millis(),
+                            parse_time.as_millis(),
+                            convert_time.as_millis(),
+                            write_time.as_millis(),
+                            batch_time.as_millis()
+                        );
+                    }
 
                     total_csfs += batch_size;
                     total_descriptors += descriptors.len();

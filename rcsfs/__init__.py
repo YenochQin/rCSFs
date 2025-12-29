@@ -83,15 +83,6 @@ from ._rcsfs import (
     py_read_peel_subshells as _read_peel_subshells,
 )
 
-# Optional: Polars export function (only available if built with polars feature)
-try:
-    from ._rcsfs import (
-        py_export_descriptors_with_polars as _export_descriptors_with_polars,
-        py_export_descriptors_with_polars_parallel as _export_descriptors_with_polars_parallel,
-    )
-    _POLARS_AVAILABLE = True
-except ImportError:
-    _POLARS_AVAILABLE = False
 
 
 #///////////////////////////////////////////////////////////////////////////////
@@ -260,19 +251,20 @@ def generate_descriptors_from_parquet(
     header_path: Optional[Union[str, Path]] = None,
 ) -> DescriptorGenerationStats:
     """
-    Generate CSF descriptors from a parquet file and save to a new parquet file.
+    Generate CSF descriptors from a parquet file and save to Arrow IPC (Feather) format.
 
     This function reads CSF data directly from a parquet file, generates descriptors
-    in batch, and writes the results to a new parquet file.
+    in batch, and writes the results to an Arrow IPC/Feather file (not Parquet).
 
-    Output Schema:
-        The output parquet file will have descriptor_size columns (col_0, col_1, ..., col_N),
+    Output Format:
+        Arrow IPC (Feather) - columnar format, Polars compatible.
+        Read with: `polars.read_ipc()` or `pyarrow.feather.read_table()`
+        The output file will have descriptor_size columns (col_0, col_1, ..., col_N),
         where each row represents a CSF descriptor with each element in its own column.
-        This format is convenient for use with polars and other dataframe libraries.
 
     Args:
         input_parquet: Path to input parquet file (must have line1, line2, line3, idx columns)
-        output_parquet: Path to output parquet file for descriptors
+        output_parquet: Path to output Arrow IPC/Feather file for descriptors
         peel_subshells: Optional list of subshell names (auto-detected if None)
         header_path: Optional path to header TOML file for peel_subshells
 
@@ -280,7 +272,7 @@ def generate_descriptors_from_parquet(
         Dictionary containing generation statistics:
         - success: Whether generation succeeded
         - input_file: Input parquet file path
-        - output_file: Output parquet file path
+        - output_file: Output Arrow IPC/Feather file path
         - csf_count: Number of CSFs processed
         - descriptor_count: Number of descriptors generated
         - orbital_count: Number of orbitals
@@ -291,12 +283,12 @@ def generate_descriptors_from_parquet(
         >>> # Auto-detect peel_subshells from header file
         >>> stats = generate_descriptors_from_parquet(
         ...     "csfs_data.parquet",
-        ...     "descriptors.parquet"
+        ...     "descriptors.feather"  # Output is Arrow IPC/Feather
         ... )
         >>>
         >>> # Read with polars
         >>> import polars as pl
-        >>> df = pl.read_parquet("descriptors.parquet")
+        >>> df = pl.read_ipc("descriptors.feather")
         >>> # Each descriptor element is in its own column: col_0, col_1, ...
         >>> # You can select specific columns or convert to numpy:
         >>> descriptors = df.to_numpy()  # Shape: (n_csfs, descriptor_size)
@@ -304,14 +296,14 @@ def generate_descriptors_from_parquet(
         >>> # Manually specify peel_subshells
         >>> stats = generate_descriptors_from_parquet(
         ...     "csfs_data.parquet",
-        ...     "descriptors.parquet",
+        ...     "descriptors.feather",
         ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s']
         ... )
 
         >>> # Use specific header file
         >>> stats = generate_descriptors_from_parquet(
         ...     "csfs_data.parquet",
-        ...     "descriptors.parquet",
+        ...     "descriptors.feather",
         ...     header_path="custom_header.toml"
         ... )
     """
@@ -333,16 +325,18 @@ def generate_descriptors_from_parquet_parallel(
     Generate CSF descriptors from a parquet file using parallel processing.
 
     This function is optimized for large-scale descriptor generation (tens of millions
-    to billions of CSFs). It uses rayon's work-stealing for automatic load balancing.
+    to billions of CSFs). It uses rayon's work-stealing for automatic load balancing
+    with streaming batch processing for low memory usage.
 
-    Output Schema:
-        The output parquet file will have descriptor_size columns (col_0, col_1, ..., col_N),
+    Output Format:
+        Arrow IPC (Feather) - columnar format, Polars compatible.
+        Read with: `polars.read_ipc()` or `pyarrow.feather.read_table()`
+        The output file will have descriptor_size columns (col_0, col_1, ..., col_N),
         where each row represents a CSF descriptor with each element in its own column.
-        This format is convenient for use with polars and other dataframe libraries.
 
     Args:
         input_parquet: Path to input parquet file (must have line1, line2, line3, idx columns)
-        output_parquet: Path to output parquet file for descriptors
+        output_parquet: Path to output Arrow IPC/Feather file for descriptors
         peel_subshells: List of subshell names (e.g., ['5s', '4d-', '4d', '5p-', '5p', '6s'])
         num_workers: Number of worker threads (default: CPU core count)
 
@@ -350,7 +344,7 @@ def generate_descriptors_from_parquet_parallel(
         Dictionary containing generation statistics:
         - success: Whether generation succeeded
         - input_file: Input parquet file path
-        - output_file: Output parquet file path
+        - output_file: Output Arrow IPC/Feather file path
         - csf_count: Number of CSFs processed
         - descriptor_count: Number of descriptors generated
         - orbital_count: Number of orbitals
@@ -363,19 +357,19 @@ def generate_descriptors_from_parquet_parallel(
         >>> peel_subshells = read_peel_subshells("data_header.toml")
         >>> stats = generate_descriptors_from_parquet_parallel(
         ...     "csfs_data.parquet",
-        ...     "descriptors.parquet",
+        ...     "descriptors.feather",  # Output is Arrow IPC/Feather
         ...     peel_subshells=peel_subshells
         ... )
 
         >>> # Read with polars
         >>> import polars as pl
-        >>> df = pl.read_parquet("descriptors.parquet")
+        >>> df = pl.read_ipc("descriptors.feather")
         >>> descriptors = df.to_numpy()  # Shape: (n_csfs, descriptor_size)
 
         >>> # With custom worker count for large files
         >>> stats = generate_descriptors_from_parquet_parallel(
         ...     "csfs_data.parquet",
-        ...     "descriptors.parquet",
+        ...     "descriptors.feather",
         ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s'],
         ...     num_workers=8
         ... )
@@ -388,9 +382,12 @@ def generate_descriptors_from_parquet_parallel(
         - Rayon automatically handles work stealing for optimal load balancing
 
     Note:
-        This implementation loads all data into memory upfront. For 280MB parquet files
-        (typical for 100M+ CSFs), this fits easily in 256GB RAM. The use of rayon's
-        work-stealing ensures optimal CPU utilization without manual task sizing.
+        This implementation uses streaming batch processing to minimize memory usage:
+        1. Read parquet in batches
+        2. Parse CSFs to descriptors in parallel
+        3. Convert descriptors to columnar format in parallel
+        4. Write batch to Arrow IPC/Feather file
+        5. Repeat until all data processed
     """
     return _generate_descriptors_from_parquet_parallel(
         input_parquet=str(input_parquet),
@@ -399,127 +396,6 @@ def generate_descriptors_from_parquet_parallel(
         num_workers=num_workers,
     )
 
-
-def export_descriptors_with_polars(
-    input_parquet: Union[str, Path],
-    output_parquet: Union[str, Path],
-    peel_subshells: Optional[list[str]] = None,
-    header_path: Optional[Union[str, Path]] = None,
-) -> DescriptorGenerationStats:
-    """
-    Export CSF descriptors to Parquet using Polars DataFrame (experimental).
-
-    This is an alternative implementation that uses Polars DataFrame for descriptor
-    generation and export. It provides similar functionality to generate_descriptors_from_parquet
-    but uses Polars' LazyFrame API for data processing.
-
-    **Note:** This function is only available if the package was built with the
-    `polars` feature enabled. Use `rcsfs._POLARS_AVAILABLE` to check availability.
-
-    Args:
-        input_parquet: Path to input parquet file (must have line1, line2, line3 columns)
-        output_parquet: Path to output parquet file for descriptors
-        peel_subshells: Optional list of subshell names (auto-detected if None)
-        header_path: Optional path to header TOML file for peel_subshells
-
-    Returns:
-        Dictionary containing generation statistics
-
-    Raises:
-        ImportError: If the package was not built with the `polars` feature
-
-    Examples:
-        >>> # Check if Polars export is available
-        >>> import rcsfs
-        >>> if rcsfs._POLARS_AVAILABLE:
-        ...     stats = rcsfs.export_descriptors_with_polars(
-        ...         "csfs_data.parquet",
-        ...         "descriptors.parquet"
-        ...     )
-        ... else:
-        ...     # Fallback to standard Arrow-based export
-        ...     stats = rcsfs.generate_descriptors_from_parquet(
-        ...         "csfs_data.parquet",
-        ...         "descriptors.parquet"
-        ...     )
-    """
-    if not _POLARS_AVAILABLE:
-        raise ImportError(
-            "Polars export is not available. The package was built without the 'polars' feature. "
-            "Rebuild with: maturin develop --features polars"
-        )
-    return _export_descriptors_with_polars(
-        input_parquet=str(input_parquet),
-        output_parquet=str(output_parquet),
-        peel_subshells=peel_subshells,
-        header_path=str(header_path) if header_path else None,
-    )
-
-
-
-def export_descriptors_with_polars_parallel(
-    input_parquet: Union[str, Path],
-    output_parquet: Union[str, Path],
-    peel_subshells: list[str],
-    num_workers: Optional[int] = None,
-) -> ParallelDescriptorGenerationStats:
-    """
-    Export CSF descriptors to Parquet using Polars DataFrame with parallel processing (experimental).
-
-    This is a parallel version of export_descriptors_with_polars that uses rayon for
-    multi-threaded CSF parsing. It is optimized for large-scale descriptor generation.
-
-    **Note:** This function is only available if the package was built with the
-    `polars` feature enabled. Use `rcsfs._POLARS_AVAILABLE` to check availability.
-
-    Args:
-        input_parquet: Path to input parquet file (must have line1, line2, line3 columns)
-        output_parquet: Path to output parquet file for descriptors
-        peel_subshells: List of subshell names (e.g., ["5s", "4d-", "4d", "5p-", "5p", "6s"])
-        num_workers: Optional number of worker threads (default: CPU core count)
-
-    Returns:
-        Dictionary containing generation statistics
-
-    Raises:
-        ImportError: If the package was not built with the `polars` feature
-
-    Examples:
-        >>> # Check if Polars export is available
-        >>> import rcsfs
-        >>> if rcsfs._POLARS_AVAILABLE:
-        ...     stats = rcsfs.export_descriptors_with_polars_parallel(
-        ...         "csfs_data.parquet",
-        ...         "descriptors.parquet",
-        ...         peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
-        ...         num_workers=8
-        ...     )
-        ... else:
-        ...     # Fallback to standard Arrow-based parallel export
-        ...     stats = rcsfs.generate_descriptors_from_parquet_parallel(
-        ...         "csfs_data.parquet",
-        ...         "descriptors.parquet",
-        ...         peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
-        ...         num_workers=8
-        ...     )
-
-    Performance Considerations:
-        - For small files (<1M CSFs): use export_descriptors_with_polars() instead
-        - For medium files (1-10M CSFs): num_workers=4-8
-        - For large files (>10M CSFs): num_workers=8+
-        - More workers = higher CPU usage, faster processing
-    """
-    if not _POLARS_AVAILABLE:
-        raise ImportError(
-            "Polars export is not available. The package was built without the 'polars' feature. "
-            "Rebuild with: maturin develop --features polars"
-        )
-    return _export_descriptors_with_polars_parallel(
-        input_parquet=str(input_parquet),
-        output_parquet=str(output_parquet),
-        peel_subshells=peel_subshells,
-        num_workers=num_workers,
-    )
 #///////////////////////////////////////////////////////////////////////////////
 # CSFProcessor Wrapper Class (with property accessors)
 #///////////////////////////////////////////////////////////////////////////////
@@ -646,9 +522,6 @@ __all__ = [
     # Version
     "__version__",
 
-    # Feature flags
-    "_POLARS_AVAILABLE",
-
     # CSF file conversion
     "convert_csfs",
     "convert_csfs_parallel",
@@ -661,8 +534,6 @@ __all__ = [
     # Batch descriptor generation
     "generate_descriptors_from_parquet",
     "generate_descriptors_from_parquet_parallel",
-    "export_descriptors_with_polars",  # Experimental Polars-based export
-    "export_descriptors_with_polars_parallel",  # Experimental Polars-based parallel export
     "read_peel_subshells",
 
     # Type definitions

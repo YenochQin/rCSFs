@@ -328,7 +328,7 @@ pub mod parquet_batch {
         num_workers: Option<usize>,
     ) -> Result<BatchDescriptorStats, String> {
         use rayon::prelude::*;
-        use arrow::array::{Array, UInt64Array};
+        use arrow::array::{Array, Int32Array, UInt64Array};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use parquet::arrow::arrow_writer::ArrowWriter;
@@ -342,6 +342,15 @@ pub mod parquet_batch {
                 .num_threads(n)
                 .build_global()
                 .map_err(|e| format!("Failed to configure rayon thread pool: {}", e))?;
+        }
+
+        // Print actual thread count (either configured or default)
+        let current_threads = rayon::current_num_threads();
+        if num_workers.is_some() {
+            println!("Rayon 全局线程池已设置为 {} 个 worker", current_threads);
+        } else {
+            println!("Rayon 使用当前全局线程池配置：{} 个 worker", current_threads);
+            println!("提示：可以通过 num_workers 参数显式设置线程数");
         }
 
         let orbital_count = peel_subshells.len();
@@ -448,24 +457,14 @@ pub mod parquet_batch {
                         })
                         .collect();
 
-                    // Use Arrow Builders to directly build columnar arrays (avoids transpose overhead)
-                    use arrow::array::Int32Builder;
-                    let mut builders: Vec<Int32Builder> =
-                        (0..descriptor_size)
-                            .map(|_| arrow::array::Int32Builder::with_capacity(batch_size))
-                            .collect();
-
-                    // Append values directly to column builders
-                    for desc in &descriptors {
-                        for (col_idx, &val) in desc.iter().enumerate() {
-                            builders[col_idx].append_value(val);
-                        }
-                    }
-
-                    // Convert builders to arrays
-                    let column_arrays: Vec<Arc<dyn Array>> = builders
-                        .into_iter()
-                        .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
+                    // Convert descriptors to columnar format (parallel)
+                    // All descriptor_size columns are processed in parallel by different threads!
+                    let column_arrays: Vec<Arc<dyn Array>> = (0..descriptor_size)
+                        .into_par_iter()
+                        .map(|col_idx| {
+                            let values: Vec<i32> = descriptors.iter().map(|desc| desc[col_idx]).collect();
+                            Arc::new(Int32Array::from(values)) as Arc<dyn Array>
+                        })
                         .collect();
 
                     // Write batch to Parquet file

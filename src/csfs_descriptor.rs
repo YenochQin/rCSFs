@@ -125,7 +125,7 @@ pub mod parquet_batch {
     /// * `Err(String)` - Error message if operation fails
     ///
     /// # Output Format
-    /// Parquet (UNCOMPRESSED) - columnar format, Polars compatible
+    /// Parquet with ZSTD compression (level 3) - columnar format, Polars compatible
     /// Read with: `polars.read_parquet()` or `pyarrow.parquet.read_table()`
     pub fn generate_descriptors_from_parquet(
         input_parquet: &Path,
@@ -166,7 +166,7 @@ pub mod parquet_batch {
             .build()
             .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
 
-        // Step 4: Create output Parquet writer (UNCOMPRESSED)
+        // Step 4: Create output Parquet writer (ZSTD compression)
         use arrow::datatypes::{DataType, Field, Schema};
         use parquet::arrow::arrow_writer::ArrowWriter;
         use parquet::file::properties::WriterProperties;
@@ -182,9 +182,11 @@ pub mod parquet_batch {
         let output_file_handle = std::fs::File::create(output_file)
             .map_err(|e| format!("Failed to create output file: {}", e))?;
 
-        // Use UNCOMPRESSED compression for better performance with large files
+        // Use ZSTD compression for better I/O performance and smaller file size
         let props = WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .set_compression(parquet::basic::Compression::ZSTD(
+                parquet::basic::ZstdLevel::try_new(3).unwrap(),
+            ))
             .build();
 
         let mut writer = ArrowWriter::try_new(
@@ -305,16 +307,17 @@ pub mod parquet_batch {
     /// Generate descriptors from parquet with parallel processing using rayon
     ///
     /// This implementation uses streaming batch processing to minimize memory usage:
-    /// 1. Read parquet in batches
+    /// 1. Read parquet in batches (65536 rows/batch for better I/CPU balance)
     /// 2. Parse CSFs to descriptors in parallel
     /// 3. Convert descriptors to columnar format in parallel
-    /// 4. Write batch to Parquet file (UNCOMPRESSED)
+    /// 4. Write batch to Parquet file (ZSTD level 3 compression)
     /// 5. Repeat until all data processed
     ///
-    /// Output format: Parquet (UNCOMPRESSED), which is:
+    /// Output format: Parquet with ZSTD compression (level 3), which is:
     /// - Polars compatible (pl.read_parquet())
     /// - Efficient columnar storage format
-    /// - Better file size than Arrow IPC for large datasets
+    /// - Better I/O performance due to compression
+    /// - Smaller file size than uncompressed Parquet
     ///
     /// # Arguments
     /// * `input_parquet` - Path to input parquet file
@@ -358,12 +361,12 @@ pub mod parquet_batch {
         println!("轨道数量: {}, 描述符大小: {}", orbital_count, descriptor_size);
         let generator = std::sync::Arc::new(super::CSFDescriptorGenerator::new(peel_subshells));
 
-        println!("开始生成描述符（Parquet 流式并行版本，无压缩）");
+        println!("开始生成描述符（Parquet 流式并行版本，ZSTD level 3 压缩）");
         println!("输入文件: {:?}", input_parquet);
         println!("输出文件: {:?}", output_file);
 
         ////////////////////////////////////////////////////////////////////////////////
-        // Phase 1: Setup output schema and writer (Parquet, UNCOMPRESSED)
+        // Phase 1: Setup output schema and writer (Parquet with ZSTD compression)
         ////////////////////////////////////////////////////////////////////////////////
         let mut fields = Vec::with_capacity(descriptor_size);
         for i in 0..descriptor_size {
@@ -374,9 +377,12 @@ pub mod parquet_batch {
         let output_file_handle = std::fs::File::create(output_file)
             .map_err(|e| format!("Failed to create output file: {}", e))?;
 
-        // Use UNCOMPRESSED compression for better file size with large datasets
+        // Use ZSTD compression for better I/O performance
+        // ZSTD level 3 provides good compression ratio with fast speed
         let props = WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .set_compression(parquet::basic::Compression::ZSTD(
+                parquet::basic::ZstdLevel::try_new(3).unwrap(),
+            ))
             .build();
 
         let mut writer = ArrowWriter::try_new(
@@ -395,7 +401,10 @@ pub mod parquet_batch {
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)
             .map_err(|e| format!("Failed to create parquet reader: {}", e))?;
 
+        // Enable batch reading with larger batch size for better I/CPU balance
+        // Default 1024 is too small for 48 cores, causes I/O bottleneck
         let mut reader = builder
+            .with_batch_size(65536)  // 64x larger batch
             .build()
             .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
 
@@ -876,10 +885,11 @@ impl PyCSFDescriptorGenerator {
 
 /// Python-exposed function to generate descriptors from parquet file (parallel version)
 ///
-/// Output format: Parquet file (UNCOMPRESSED)
+/// Output format: Parquet file with ZSTD compression (level 3)
 /// Read with: polars.read_parquet() or pyarrow.parquet.read_table()
 ///
-/// This version uses streaming batch processing for low memory usage.
+/// This version uses streaming batch processing with 65536 rows/batch for low memory usage
+/// and better I/CPU balance on multi-core systems.
 #[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (

@@ -14,6 +14,7 @@ pub mod parquet_batch {
     use arrow::array::{StringArray, UInt64Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     /// Read peel subshells from a header TOML file
     ///
@@ -301,23 +302,31 @@ pub mod parquet_batch {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
-    // Parallel Descriptor Generation (Rayon-based, streaming for low memory)
+    // Pipeline Parallel Descriptor Generation
     ////////////////////////////////////////////////////////////////////////////////
 
-    /// Generate descriptors from parquet with parallel processing using rayon
+    /// Work item sent from reader to workers
+    struct WorkItem {
+        batch_idx: usize,
+        rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)>,
+    }
+
+    /// Result item sent from workers to writer
+    struct ResultItem {
+        batch_idx: usize,
+        descriptors: Vec<Vec<i32>>,
+    }
+
+    /// Generate descriptors from parquet with full pipeline parallelization
     ///
-    /// This implementation uses streaming batch processing to minimize memory usage:
-    /// 1. Read parquet in batches (65536 rows/batch for better I/CPU balance)
-    /// 2. Parse CSFs to descriptors in parallel
-    /// 3. Create ListArray directly (no column transposition overhead)
-    /// 4. Write batch to Parquet file (ZSTD level 3 compression)
-    /// 5. Repeat until all data processed
+    /// This implementation uses a producer-consumer pipeline with three stages:
+    /// 1. **Reader thread**: Continuously reads parquet batches and sends to work channel
+    /// 2. **Worker threads (Rayon)**: Parse CSFs in parallel, send results to result channel
+    /// 3. **Writer thread**: Receives results in order and writes to parquet file
     ///
-    /// Output format: Parquet with single List<int32> column and ZSTD compression (level 3):
-    /// - Schema: `descriptor: List<int32>` (one list per CSF, each containing 168 int32 values)
-    /// - Polars compatible: `df = pl.read_parquet(); descriptors = df["descriptor"].to_numpy()`
-    /// - No column transposition needed for better performance
-    /// - Better I/O performance due to compression and reduced column count
+    /// All three stages run concurrently, maximizing CPU utilization and I/O overlap.
+    ///
+    /// Output format: Parquet with single List<int32> column and ZSTD compression (level 3)
     ///
     /// # Arguments
     /// * `input_parquet` - Path to input parquet file
@@ -330,49 +339,41 @@ pub mod parquet_batch {
         peel_subshells: Vec<String>,
         num_workers: Option<usize>,
     ) -> Result<BatchDescriptorStats, String> {
-        use rayon::prelude::*;
         use arrow::array::{Array, Int32Array, StringArray, UInt64Array};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use parquet::arrow::arrow_writer::ArrowWriter;
         use parquet::file::properties::WriterProperties;
         use std::sync::Arc;
+        use crossbeam_channel::{bounded, Sender, Receiver};
+        use std::collections::BTreeMap;
 
-        // Configure rayon thread pool if specified
-        if let Some(n) = num_workers {
-            println!("配置 Rayon 线程池，使用 {} 个 worker", n);
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(n)
-                .build_global()
-                .map_err(|e| format!("Failed to configure rayon thread pool: {}", e))?;
-        }
+        // Determine worker count
+        let num_workers = num_workers.unwrap_or_else(|| {
+            let default = num_cpus::get();
+            println!("使用默认 worker 数量: {} (CPU 核心数)", default);
+            default
+        });
 
-        // Print actual thread count (either configured or default)
-        let current_threads = rayon::current_num_threads();
-        if num_workers.is_some() {
-            println!("Rayon 全局线程池已设置为 {} 个 worker", current_threads);
-        } else {
-            println!("Rayon 使用当前全局线程池配置：{} 个 worker", current_threads);
-            println!("提示：可以通过 num_workers 参数显式设置线程数");
-        }
+        println!("配置流水线并行处理");
+        println!("输入文件: {:?}", input_parquet);
+        println!("输出文件: {:?}", output_file);
+        println!("Worker 线程数: {}", num_workers);
 
         let orbital_count = peel_subshells.len();
         let descriptor_size = 3 * orbital_count;
         println!("轨道数量: {}, 描述符大小: {}", orbital_count, descriptor_size);
-        let generator = std::sync::Arc::new(super::CSFDescriptorGenerator::new(peel_subshells));
-
-        println!("开始生成描述符（Parquet 流式并行版本，单列 List<int32> 格式）");
-        println!("输入文件: {:?}", input_parquet);
-        println!("输出文件: {:?}", output_file);
 
         ////////////////////////////////////////////////////////////////////////////////
-        // Phase 1: Setup output schema and writer
-        // Use single List<int32> column instead of 168 separate int columns
-        // This avoids column transposition overhead
+        // Phase 1: Setup channels with bounded capacity
         ////////////////////////////////////////////////////////////////////////////////
+        let channel_capacity = num_workers * 2;
+        let (work_tx, work_rx): (Sender<WorkItem>, Receiver<WorkItem>) = bounded(channel_capacity);
+        let (result_tx, result_rx): (Sender<ResultItem>, Receiver<ResultItem>) = bounded(channel_capacity);
 
-        // Schema: single column containing lists of int32
-        // Each row = one CSF descriptor (list of 168 int32 values)
+        ////////////////////////////////////////////////////////////////////////////////
+        // Phase 2: Setup output schema and writer
+        ////////////////////////////////////////////////////////////////////////////////
         let descriptor_field = Field::new(
             "descriptor",
             DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
@@ -383,7 +384,6 @@ pub mod parquet_batch {
         let output_file_handle = std::fs::File::create(output_file)
             .map_err(|e| format!("Failed to create output file: {}", e))?;
 
-        // Use ZSTD compression with level 3 for good balance
         let props = WriterProperties::builder()
             .set_compression(parquet::basic::Compression::ZSTD(
                 parquet::basic::ZstdLevel::try_new(3).unwrap(),
@@ -398,75 +398,135 @@ pub mod parquet_batch {
             .map_err(|e| format!("Failed to create Parquet writer: {}", e))?;
 
         ////////////////////////////////////////////////////////////////////////////////
-        // Phase 2: Stream processing - read, process, write in batches
+        // Phase 3: Spawn reader thread
         ////////////////////////////////////////////////////////////////////////////////
-        let file = std::fs::File::open(input_parquet)
-            .map_err(|e| format!("Failed to open input parquet: {}", e))?;
+        let input_path = input_parquet.to_path_buf();
+        let reader_handle = std::thread::spawn(move || {
+            use std::fs::File;
+            let file = match File::open(&input_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = work_tx.send(WorkItem {
+                        batch_idx: usize::MAX,  // Error sentinel
+                        rows: vec![],
+                    });
+                    return Err(format!("Failed to open input parquet: {}", e));
+                }
+            };
 
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file)
-            .map_err(|e| format!("Failed to create parquet reader: {}", e))?;
+            let builder = match ParquetRecordBatchReaderBuilder::try_new(file) {
+                Ok(b) => b,
+                Err(e) => {
+                    let _ = work_tx.send(WorkItem {
+                        batch_idx: usize::MAX,
+                        rows: vec![],
+                    });
+                    return Err(format!("Failed to create parquet reader: {}", e));
+                }
+            };
 
-        // Use larger batch size and read ahead for better performance
-        let mut reader = builder
-            .with_batch_size(65536)
-            .build()
-            .map_err(|e| format!("Failed to build parquet reader: {}", e))?;
+            let mut reader = match builder.with_batch_size(65536).build() {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = work_tx.send(WorkItem {
+                        batch_idx: usize::MAX,
+                        rows: vec![],
+                    });
+                    return Err(format!("Failed to build parquet reader: {}", e));
+                }
+            };
 
-        let mut total_csfs = 0;
-        let mut total_descriptors = 0;
+            let mut batch_idx = 0usize;
+            let mut total_csfs = 0usize;
 
-        // Process each batch from input parquet
-        let mut batch_count = 0;
-        loop {
-            match reader.next() {
-                Some(Ok(batch)) => {
-                    let batch_start = std::time::Instant::now();
-                    let batch_size = batch.num_rows();
-                    batch_count += 1;
+            loop {
+                match reader.next() {
+                    Some(Ok(batch)) => {
+                        let batch_size = batch.num_rows();
+                        total_csfs += batch_size;
 
-                    let idx_col = batch
-                        .column(0)
-                        .as_any()
-                        .downcast_ref::<UInt64Array>()
-                        .ok_or("idx column is not uint64 type")?;
+                        let idx_col = match batch.column(0).as_any().downcast_ref::<UInt64Array>() {
+                            Some(col) => col,
+                            None => return Err("idx column is not uint64 type".to_string()),
+                        };
 
-                    let line1_col = batch
-                        .column(1)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .ok_or("line1 column is not string type")?;
+                        let line1_col = match batch.column(1).as_any().downcast_ref::<StringArray>() {
+                            Some(col) => col,
+                            None => return Err("line1 column is not string type".to_string()),
+                        };
 
-                    let line2_col = batch
-                        .column(2)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .ok_or("line2 column is not string type")?;
+                        let line2_col = match batch.column(2).as_any().downcast_ref::<StringArray>() {
+                            Some(col) => col,
+                            None => return Err("line2 column is not string type".to_string()),
+                        };
 
-                    let line3_col = batch
-                        .column(3)
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .ok_or("line3 column is not string type")?;
+                        let line3_col = match batch.column(3).as_any().downcast_ref::<StringArray>() {
+                            Some(col) => col,
+                            None => return Err("line3 column is not string type".to_string()),
+                        };
 
-                    // Extract rows (borrowed, no allocation)
-                    let extract_start = std::time::Instant::now();
-                    let batch_rows: Vec<(u64, &str, &str, &str)> = (0..batch_size)
-                        .map(|i| (
-                            idx_col.value(i),
-                            line1_col.value(i),
-                            line2_col.value(i),
-                            line3_col.value(i),
-                        ))
-                        .collect();
-                    let extract_time = extract_start.elapsed();
+                        // Extract rows as Arc<str> for zero-copy sharing across threads
+                        let rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)> = (0..batch_size)
+                            .map(|i| (
+                                idx_col.value(i),
+                                line1_col.value(i).into(),
+                                line2_col.value(i).into(),
+                                line3_col.value(i).into(),
+                            ))
+                            .collect();
 
-                    // Parse CSFs to descriptors (parallel)
-                    let parse_start = std::time::Instant::now();
-                    let generator_ref = generator.as_ref();
-                    let descriptors: Vec<Vec<i32>> = batch_rows
+                        let work_item = WorkItem { batch_idx, rows };
+                        match work_tx.send(work_item) {
+                            Ok(()) => {},
+                            Err(_) => return Err("Failed to send work item".to_string()),
+                        }
+                        batch_idx += 1;
+
+                        if total_csfs % 10_000_000 == 0 {
+                            println!("[Reader] 已读取 {} 个 CSF", total_csfs);
+                        }
+                    }
+                    Some(Err(e)) => {
+                        return Err(format!("Error reading parquet batch: {}", e));
+                    }
+                    None => break,
+                }
+            }
+
+            println!("[Reader] 读取完成，共 {} 个 CSF，{} 个批次", total_csfs, batch_idx);
+            Ok((total_csfs, batch_idx))
+        });
+
+        ////////////////////////////////////////////////////////////////////////////////
+        // Phase 4: Multiple Worker threads - compete to process items from channel
+        ////////////////////////////////////////////////////////////////////////////////
+        let generator = Arc::new(super::CSFDescriptorGenerator::new(peel_subshells));
+        let mut worker_handles = Vec::new();
+
+        // Spawn multiple worker threads, all competing on the same channel
+        for worker_id in 0..num_workers {
+            let generator_clone = generator.clone();
+            let result_tx_clone = result_tx.clone();
+            let work_rx_clone = work_rx.clone();
+
+            worker_handles.push(std::thread::spawn(move || {
+                use rayon::prelude::*;
+
+                let mut processed_batches = 0usize;
+                let descriptor_size = 3 * generator_clone.orbital_count();
+
+                // Each worker competes to receive work items
+                while let Ok(work_item) = work_rx_clone.recv() {
+                    // Check for error sentinel
+                    if work_item.batch_idx == usize::MAX {
+                        return Err("Reader thread encountered an error".to_string());
+                    }
+
+                    let batch_idx = work_item.batch_idx;
+                    let descriptors: Vec<Vec<i32>> = work_item.rows
                         .into_par_iter()
-                        .map(|(idx, line1, line2, line3)| {
-                            match generator_ref.parse_csf(line1, line2, line3) {
+                        .map(|(idx, ref line1, ref line2, ref line3)| {
+                            match generator_clone.parse_csf(line1, line2, line3) {
                                 Ok(desc) => desc,
                                 Err(e) => {
                                     eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
@@ -475,90 +535,127 @@ pub mod parquet_batch {
                             }
                         })
                         .collect();
-                    let parse_time = parse_start.elapsed();
 
-                    // Create ListArray directly from Vec<Vec<i32>> (no transposition needed!)
-                    let convert_start = std::time::Instant::now();
-                    use arrow::array::ListArray;
-                    use arrow::buffer::OffsetBuffer;
-                    use std::sync::Arc;
+                    let result_item = ResultItem { batch_idx, descriptors };
+                    if result_tx_clone.send(result_item).is_err() {
+                        return Err("Failed to send result item".to_string());
+                    }
 
-                    // Calculate offsets for the list array (i32 offsets)
+                    processed_batches += 1;
+                    if processed_batches % 100 == 0 {
+                        println!("[Worker-{}] 已处理 {} 个批次", worker_id, processed_batches);
+                    }
+                }
+
+                println!("[Worker-{}] 处理完成，共 {} 个批次", worker_id, processed_batches);
+                Ok(())
+            }));
+        }
+
+        // Drop our clone of the result_tx so the writer can properly detect when workers are done
+        drop(result_tx);
+
+        ////////////////////////////////////////////////////////////////////////////////
+        // Phase 5: Writer thread - maintain order and write to parquet
+        ////////////////////////////////////////////////////////////////////////////////
+        let writer_handle = std::thread::spawn(move || {
+            use arrow::array::ListArray;
+            use arrow::buffer::OffsetBuffer;
+
+            let mut pending: BTreeMap<usize, Vec<Vec<i32>>> = BTreeMap::new();
+            let mut next_write_idx = 0usize;
+            let mut total_descriptors = 0usize;
+            let mut total_batches_written = 0usize;
+
+            while let Ok(result_item) = result_rx.recv() {
+                let batch_idx = result_item.batch_idx;
+                let descriptors = result_item.descriptors;
+
+                // Insert into pending map
+                pending.insert(batch_idx, descriptors);
+
+                // Write all consecutive batches we have
+                while let Some(descriptors) = pending.remove(&next_write_idx) {
+                    let batch_size = descriptors.len();
+                    total_descriptors += batch_size;
+
+                    // Build ListArray
                     let mut offsets = Vec::with_capacity(batch_size + 1);
                     offsets.push(0i32);
                     for desc in &descriptors {
                         offsets.push(offsets.last().unwrap() + desc.len() as i32);
                     }
 
-                    // Flatten all descriptors into a single array
                     let flat_values: Vec<i32> = descriptors.iter()
                         .flat_map(|desc| desc.iter().copied())
                         .collect();
 
-                    // Create the list array with proper OffsetBuffer<i32>
                     let list_array = ListArray::new(
                         Arc::new(Field::new("item", DataType::Int32, false)),
-                        OffsetBuffer::new(offsets),
+                        OffsetBuffer::new(offsets.into()),
                         Arc::new(Int32Array::from(flat_values)),
                         None,
                     );
 
                     let column_arrays = vec![Arc::new(list_array) as Arc<dyn Array>];
-                    let convert_time = convert_start.elapsed();
+                    let output_batch = match RecordBatch::try_new(schema.clone(), column_arrays) {
+                        Ok(b) => b,
+                        Err(e) => return Err(format!("Failed to create output batch: {}", e)),
+                    };
 
-                    // Write batch to Parquet file
-                    let write_start = std::time::Instant::now();
-                    let output_batch = RecordBatch::try_new(schema.clone(), column_arrays)
-                        .map_err(|e| format!("Failed to create output batch: {}", e))?;
-
-                    writer.write(&output_batch)
-                        .map_err(|e| format!("Failed to write batch: {}", e))?;
-                    let write_time = write_start.elapsed();
-                    let batch_time = batch_start.elapsed();
-
-                    // Print timing diagnostics for first few batches
-                    if batch_count <= 5 {
-                        println!(
-                            "Batch {}: size={}, extract={:.2}ms, parse={:.2}ms, convert={:.2}ms, write={:.2}ms, total={:.2}ms",
-                            batch_count,
-                            batch_size,
-                            extract_time.as_millis(),
-                            parse_time.as_millis(),
-                            convert_time.as_millis(),
-                            write_time.as_millis(),
-                            batch_time.as_millis()
-                        );
+                    if writer.write(&output_batch).is_err() {
+                        return Err("Failed to write batch".to_string());
                     }
 
-                    total_csfs += batch_size;
-                    total_descriptors += descriptors.len();
+                    total_batches_written += 1;
+                    next_write_idx += 1;
 
-                    // Memory is automatically released after each iteration
-
-                    // Print progress every 10 million CSFs
-                    if total_csfs % 10_000_000 == 0 {
-                        println!("已处理 {} 个 CSF", total_csfs);
+                    if total_batches_written % 100 == 0 {
+                        println!("[Writer] 已写入 {} 个批次，{} 个描述符", total_batches_written, total_descriptors);
                     }
                 }
-                Some(Err(e)) => {
-                    return Err(format!("Error reading parquet batch: {}", e));
-                }
-                None => break,
             }
+
+            // Finalize writer
+            match writer.close() {
+                Ok(_) => {
+                    println!("[Writer] 写入完成，共 {} 个批次，{} 个描述符", total_batches_written, total_descriptors);
+                    Ok((total_descriptors, total_batches_written))
+                }
+                Err(e) => Err(format!("Failed to close writer: {}", e)),
+            }
+        });
+
+        ////////////////////////////////////////////////////////////////////////////////
+        // Phase 6: Wait for all threads and collect results
+        ////////////////////////////////////////////////////////////////////////////////
+        let reader_result = reader_handle.join()
+            .map_err(|e| format!("Reader thread panicked: {:?}", e))?
+            .map_err(|e| format!("Reader thread failed: {}", e))?;
+
+        let (total_csfs, batch_count) = reader_result;
+
+        // Wait for all worker threads
+        for (i, handle) in worker_handles.into_iter().enumerate() {
+            handle.join()
+                .map_err(|e| format!("Worker thread {} panicked: {:?}", i, e))?
+                .map_err(|e| format!("Worker thread {} failed: {}", i, e))?;
         }
 
-        ////////////////////////////////////////////////////////////////////////////////
-        // Phase 3: Finalize writer
-        ////////////////////////////////////////////////////////////////////////////////
-        println!("完成写入 Parquet 文件...");
-        writer.close()
-            .map_err(|e| format!("Failed to close writer: {}", e))?;
+        let writer_result = writer_handle.join()
+            .map_err(|e| format!("Writer thread panicked: {:?}", e))?
+            .map_err(|e| format!("Writer thread failed: {}", e))?;
 
-        println!("描述符导出完成！");
+        let (total_descriptors, _) = writer_result;
+
+        println!("==============================================");
+        println!("流水线并行处理完成！");
         println!("输入 CSF 数量: {}", total_csfs);
         println!("生成描述符数量: {}", total_descriptors);
+        println!("处理批次数量: {}", batch_count);
         println!("轨道数量: {}", orbital_count);
         println!("描述符大小: {}", descriptor_size);
+        println!("==============================================");
 
         Ok(BatchDescriptorStats {
             input_file: input_parquet.to_string_lossy().to_string(),

@@ -221,9 +221,10 @@ def generate_descriptors_from_parquet(
     with streaming batch processing for low memory usage.
 
     Output Format:
-        Parquet with single `descriptor: List[int32]` column and ZSTD compression (level 3).
-        The output file has one column "descriptor" where each row is a list of
-        descriptor_size int32 values (e.g., [2, 0, 0, 4, 0, 0, 6, 3, 8] for 3 orbitals).
+        Parquet with multiple Int32 columns `col_0, col_1, ..., col_N` and ZSTD compression (level 3).
+        Each column corresponds to one position in the descriptor array.
+        This multi-column format is much faster than List column format for large datasets.
+        Example: For 3 orbitals (descriptor_size=9), columns are: col_0, col_1, ..., col_8
 
     Args:
         input_parquet: Path to input parquet file (must have line1, line2, line3, idx columns)
@@ -255,10 +256,9 @@ def generate_descriptors_from_parquet(
         >>> # Read with polars
         >>> import polars as pl
         >>> df = pl.read_parquet("descriptors.parquet")
-        >>> descriptors = df["descriptor"].to_numpy()  # Shape: (n_csfs,)
-        >>> # Convert to 2D array
-        >>> import numpy as np
-        >>> descriptors_2d = np.stack(descriptors)  # Shape: (n_csfs, descriptor_size)
+        >>> # Get all descriptor columns (col_0, col_1, ..., col_N)
+        >>> descriptor_cols = [col for col in df.columns if col.startswith("col_")]
+        >>> descriptors = df[descriptor_cols].to_numpy()  # Shape: (n_csfs, descriptor_size)
 
         >>> # With custom worker count for large files
         >>> stats = generate_descriptors_from_parquet(
@@ -278,10 +278,12 @@ def generate_descriptors_from_parquet(
     Note:
         This implementation uses streaming batch processing to minimize memory usage:
         1. Read parquet in batches (65536 rows per batch)
-        2. Parse CSFs to descriptors in parallel
-        3. Create ListArray directly (no column transposition overhead)
+        2. Parse CSFs to descriptors in parallel (Rayon work-stealing)
+        3. Build column arrays directly (Int32 builders per column, no ListArray overhead)
         4. Write batch to Parquet file (ZSTD level 3 compression)
         5. Repeat until all data processed
+
+        Multi-column format is significantly faster than List column format for billion-scale data.
     """
     return _generate_descriptors_from_parquet(
         input_parquet=str(input_parquet),

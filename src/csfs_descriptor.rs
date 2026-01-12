@@ -120,6 +120,8 @@ pub mod parquet_batch {
     /// * `output_file` - Path to output Parquet file for descriptors
     /// * `peel_subshells` - Optional list of subshell names (auto-detected if None)
     /// * `header_path` - Optional path to header TOML file
+    /// * `normalize` - Whether to normalize descriptors (default: false)
+    /// * `max_cumulative_doubled_j` - Maximum cumulative 2J value for normalization (required if normalize=true)
     ///
     /// # Returns
     /// * `Ok(BatchDescriptorStats)` - Statistics about the batch operation
@@ -133,6 +135,8 @@ pub mod parquet_batch {
         output_file: &Path,
         peel_subshells: Option<Vec<String>>,
         header_path: Option<PathBuf>,
+        normalize: bool,
+        max_cumulative_doubled_j: Option<i32>,
     ) -> Result<BatchDescriptorStats, String> {
         // Step 1: Determine peel_subshells
         let peel_subshells = match peel_subshells {
@@ -150,6 +154,25 @@ pub mod parquet_batch {
 
         let orbital_count = peel_subshells.len();
         let descriptor_size = 3 * orbital_count;
+
+        // Validate normalization parameters
+        let max_cumulative_doubled_j = if normalize {
+            match max_cumulative_doubled_j {
+                Some(v) => v,
+                None => return Err("max_cumulative_doubled_j is required when normalize=true".to_string()),
+            }
+        } else {
+            0  // Unused when normalize=false
+        };
+
+        // Pre-compute normalization reciprocals if needed
+        let normalization_reciprocals: Option<Vec<f32>> = if normalize {
+            use crate::descriptor_normalization::{get_subshells_properties, compute_properties_reciprocals};
+            let denominators = get_subshells_properties(&peel_subshells, max_cumulative_doubled_j)?;
+            Some(compute_properties_reciprocals(&denominators)?)
+        } else {
+            None
+        };
 
         // Step 2: Create descriptor generator
         let generator = super::CSFDescriptorGenerator::new(peel_subshells.clone());
@@ -174,9 +197,11 @@ pub mod parquet_batch {
         use std::sync::Arc;
 
         // Output schema: descriptor columns (one column per descriptor element)
+        // Use Float32 for normalized output, Int32 for raw descriptors
+        let output_type = if normalize { DataType::Float32 } else { DataType::Int32 };
         let mut fields = Vec::with_capacity(descriptor_size);
         for i in 0..descriptor_size {
-            fields.push(Field::new(format!("col_{}", i), DataType::Int32, false));
+            fields.push(Field::new(format!("col_{}", i), output_type.clone(), false));
         }
         let output_schema = Arc::new(Schema::new(fields));
 
@@ -232,52 +257,99 @@ pub mod parquet_batch {
                         .ok_or("line3 column is not string type")?;
 
                     // Process each row
-                    use arrow::array::{Array, Int32Builder};
+                    use arrow::array::{Array, Int32Builder, Float32Builder};
                     use std::sync::Arc;
 
                     // Initialize builders for each column (avoids transpose overhead)
-                    let mut builders: Vec<Int32Builder> =
-                        (0..descriptor_size)
-                            .map(|_| arrow::array::Int32Builder::with_capacity(batch_size))
-                            .collect();
+                    // Use Float32Builder for normalized output, Int32Builder for raw descriptors
+                    if normalize {
+                        let mut builders: Vec<Float32Builder> =
+                            (0..descriptor_size)
+                                .map(|_| arrow::array::Float32Builder::with_capacity(batch_size))
+                                .collect();
 
-                    for i in 0..batch_size {
-                        let line1 = line1_col.value(i);
-                        let line2 = line2_col.value(i);
-                        let line3 = line3_col.value(i);
-                        let idx = idx_col.value(i);
+                        let reciprocals = normalization_reciprocals.as_ref().unwrap();
 
-                        match generator.parse_csf(line1, line2, line3) {
-                            Ok(descriptor) => {
-                                // Append directly to column builders
-                                for (col_idx, &val) in descriptor.iter().enumerate() {
-                                    builders[col_idx].append_value(val);
+                        for i in 0..batch_size {
+                            let line1 = line1_col.value(i);
+                            let line2 = line2_col.value(i);
+                            let line3 = line3_col.value(i);
+                            let idx = idx_col.value(i);
+
+                            match generator.parse_csf(line1, line2, line3) {
+                                Ok(descriptor) => {
+                                    // Normalize and append directly to column builders
+                                    for (col_idx, &val) in descriptor.iter().enumerate() {
+                                        let normalized_val = val as f32 * reciprocals[col_idx];
+                                        builders[col_idx].append_value(normalized_val);
+                                    }
+                                    descriptor_count += 1;
                                 }
-                                descriptor_count += 1;
-                            }
-                            Err(e) => {
-                                eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
+                                Err(e) => {
+                                    eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
+                                }
                             }
                         }
+
+                        // Convert builders to Arrow arrays
+                        let column_arrays: Vec<Arc<dyn Array>> = builders
+                            .into_iter()
+                            .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
+                            .collect();
+
+                        // Create output record batch
+                        use arrow::record_batch::RecordBatch;
+                        let output_batch =
+                            RecordBatch::try_new(output_schema.clone(), column_arrays)
+                                .map_err(|e| format!("Failed to create output batch: {}", e))?;
+
+                        writer
+                            .write(&output_batch)
+                            .map_err(|e| format!("Failed to write batch: {}", e))?;
+                    } else {
+                        let mut builders: Vec<Int32Builder> =
+                            (0..descriptor_size)
+                                .map(|_| arrow::array::Int32Builder::with_capacity(batch_size))
+                                .collect();
+
+                        for i in 0..batch_size {
+                            let line1 = line1_col.value(i);
+                            let line2 = line2_col.value(i);
+                            let line3 = line3_col.value(i);
+                            let idx = idx_col.value(i);
+
+                            match generator.parse_csf(line1, line2, line3) {
+                                Ok(descriptor) => {
+                                    // Append directly to column builders
+                                    for (col_idx, &val) in descriptor.iter().enumerate() {
+                                        builders[col_idx].append_value(val);
+                                    }
+                                    descriptor_count += 1;
+                                }
+                                Err(e) => {
+                                    eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
+                                }
+                            }
+                        }
+
+                        // Convert builders to Arrow arrays
+                        let column_arrays: Vec<Arc<dyn Array>> = builders
+                            .into_iter()
+                            .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
+                            .collect();
+
+                        // Create output record batch
+                        use arrow::record_batch::RecordBatch;
+                        let output_batch =
+                            RecordBatch::try_new(output_schema.clone(), column_arrays)
+                                .map_err(|e| format!("Failed to create output batch: {}", e))?;
+
+                        writer
+                            .write(&output_batch)
+                            .map_err(|e| format!("Failed to write batch: {}", e))?;
                     }
 
                     total_csfs += batch_size;
-
-                    // Convert builders to Arrow arrays (one per column)
-                    let column_arrays: Vec<Arc<dyn Array>> = builders
-                        .into_iter()
-                        .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
-                        .collect();
-
-                    // Create output record batch
-                    use arrow::record_batch::RecordBatch;
-                    let output_batch =
-                        RecordBatch::try_new(output_schema.clone(), column_arrays)
-                            .map_err(|e| format!("Failed to create output batch: {}", e))?;
-
-                    writer
-                        .write(&output_batch)
-                        .map_err(|e| format!("Failed to write batch: {}", e))?;
                 }
                 Some(Err(e)) => {
                     return Err(format!("Error reading parquet batch: {}", e));
@@ -326,18 +398,22 @@ pub mod parquet_batch {
     ///
     /// All three stages run concurrently, maximizing CPU utilization and I/O overlap.
     ///
-    /// Output format: Parquet with single List<int32> column and ZSTD compression (level 3)
+    /// Output format: Parquet with ZSTD compression (level 3)
     ///
     /// # Arguments
     /// * `input_parquet` - Path to input parquet file
     /// * `output_file` - Path to output Parquet file
     /// * `peel_subshells` - List of subshell names
     /// * `num_workers` - Number of worker threads (default: CPU core count)
+    /// * `normalize` - Whether to normalize descriptors (default: false)
+    /// * `max_cumulative_doubled_j` - Maximum cumulative 2J value for normalization (required if normalize=true)
     pub fn generate_descriptors_from_parquet_parallel(
         input_parquet: &Path,
         output_file: &Path,
         peel_subshells: Vec<String>,
         num_workers: Option<usize>,
+        normalize: bool,
+        max_cumulative_doubled_j: Option<i32>,
     ) -> Result<BatchDescriptorStats, String> {
         use arrow::array::{Array, StringArray, UInt64Array};
         use arrow::datatypes::{DataType, Field, Schema};
@@ -357,9 +433,31 @@ pub mod parquet_batch {
         let orbital_count = peel_subshells.len();
         let descriptor_size = 3 * orbital_count;
 
+        // Validate normalization parameters
+        let max_cumulative_doubled_j = if normalize {
+            match max_cumulative_doubled_j {
+                Some(v) => v,
+                None => return Err("max_cumulative_doubled_j is required when normalize=true".to_string()),
+            }
+        } else {
+            0  // Unused when normalize=false
+        };
+
+        // Pre-compute normalization reciprocals if needed
+        let normalization_reciprocals: Option<Vec<f32>> = if normalize {
+            use crate::descriptor_normalization::{get_subshells_properties, compute_properties_reciprocals};
+            let denominators = get_subshells_properties(&peel_subshells, max_cumulative_doubled_j)?;
+            Some(compute_properties_reciprocals(&denominators)?)
+        } else {
+            None
+        };
+
         println!("开始生成描述符...");
         println!("输入: {:?} | 输出: {:?}", input_parquet, output_file);
         println!("Worker: {} | 轨道: {} | 描述符大小: {}", num_workers, orbital_count, descriptor_size);
+        if normalize {
+            println!("归一化: 启用 (max_cumulative_doubled_j = {})", max_cumulative_doubled_j);
+        }
 
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 1: Setup channels with bounded capacity
@@ -371,11 +469,11 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 2: Setup output schema and writer (multi-column format for better performance)
         ////////////////////////////////////////////////////////////////////////////////
-        // Create descriptor columns (one column per descriptor element)
-        // This is much faster than List column format for large datasets
+        // Use Float32 for normalized output, Int32 for raw descriptors
+        let output_type = if normalize { DataType::Float32 } else { DataType::Int32 };
         let mut fields = Vec::with_capacity(descriptor_size);
         for i in 0..descriptor_size {
-            fields.push(Field::new(format!("col_{}", i), DataType::Int32, false));
+            fields.push(Field::new(format!("col_{}", i), output_type.clone(), false));
         }
         let schema = Arc::new(Schema::new(fields));
 
@@ -550,12 +648,15 @@ pub mod parquet_batch {
         // Phase 5: Writer thread - maintain order and write to parquet (multi-column format)
         ////////////////////////////////////////////////////////////////////////////////
         let writer_handle = std::thread::spawn(move || {
-            use arrow::array::Int32Builder;
+            use arrow::array::{Int32Builder, Float32Builder};
 
             let mut pending: BTreeMap<usize, Vec<Vec<i32>>> = BTreeMap::new();
             let mut next_write_idx = 0usize;
             let mut total_descriptors = 0usize;
             let mut total_batches_written = 0usize;
+
+            // Clone normalization reciprocals for writer thread
+            let normalization_reciprocals_clone = normalization_reciprocals.clone();
 
             while let Ok(result_item) = result_rx.recv() {
                 let batch_idx = result_item.batch_idx;
@@ -573,32 +674,63 @@ pub mod parquet_batch {
                     }
                     total_descriptors += batch_size;
 
-                    // Initialize builders for each column (avoids transpose overhead)
-                    let mut builders: Vec<Int32Builder> =
-                        (0..descriptor_size)
-                            .map(|_| Int32Builder::with_capacity(batch_size))
+                    // Build and write batch based on normalization setting
+                    if normalize {
+                        let reciprocals = normalization_reciprocals_clone.as_ref().unwrap();
+                        let mut builders: Vec<Float32Builder> =
+                            (0..descriptor_size)
+                                .map(|_| Float32Builder::with_capacity(batch_size))
+                                .collect();
+
+                        // Build normalized columns
+                        for desc in &descriptors {
+                            for (col_idx, &val) in desc.iter().enumerate() {
+                                let normalized_val = val as f32 * reciprocals[col_idx];
+                                builders[col_idx].append_value(normalized_val);
+                            }
+                        }
+
+                        // Convert builders to Arrow arrays
+                        let column_arrays: Vec<Arc<dyn Array>> = builders
+                            .into_iter()
+                            .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
                             .collect();
 
-                    // Build columns directly (no ListArray overhead)
-                    for desc in &descriptors {
-                        for (col_idx, &val) in desc.iter().enumerate() {
-                            builders[col_idx].append_value(val);
+                        let output_batch = match RecordBatch::try_new(schema.clone(), column_arrays) {
+                            Ok(b) => b,
+                            Err(e) => return Err(format!("Failed to create output batch: {}", e)),
+                        };
+
+                        if writer.write(&output_batch).is_err() {
+                            return Err("Failed to write batch".to_string());
                         }
-                    }
+                    } else {
+                        let mut builders: Vec<Int32Builder> =
+                            (0..descriptor_size)
+                                .map(|_| Int32Builder::with_capacity(batch_size))
+                                .collect();
 
-                    // Convert builders to Arrow arrays
-                    let column_arrays: Vec<Arc<dyn Array>> = builders
-                        .into_iter()
-                        .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
-                        .collect();
+                        // Build columns directly (no ListArray overhead)
+                        for desc in &descriptors {
+                            for (col_idx, &val) in desc.iter().enumerate() {
+                                builders[col_idx].append_value(val);
+                            }
+                        }
 
-                    let output_batch = match RecordBatch::try_new(schema.clone(), column_arrays) {
-                        Ok(b) => b,
-                        Err(e) => return Err(format!("Failed to create output batch: {}", e)),
-                    };
+                        // Convert builders to Arrow arrays
+                        let column_arrays: Vec<Arc<dyn Array>> = builders
+                            .into_iter()
+                            .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
+                            .collect();
 
-                    if writer.write(&output_batch).is_err() {
-                        return Err("Failed to write batch".to_string());
+                        let output_batch = match RecordBatch::try_new(schema.clone(), column_arrays) {
+                            Ok(b) => b,
+                            Err(e) => return Err(format!("Failed to create output batch: {}", e)),
+                        };
+
+                        if writer.write(&output_batch).is_err() {
+                            return Err("Failed to write batch".to_string());
+                        }
                     }
 
                     total_batches_written += 1;
@@ -864,9 +996,16 @@ impl CSFDescriptorGenerator {
 
                 // Ensure we don't go out of bounds
                 if descriptor_idx + 3 <= descriptor.len() {
-                    descriptor[descriptor_idx] = subshell_electron_num;
-                    descriptor[descriptor_idx + 1] = temp_middle_item;
-                    descriptor[descriptor_idx + 2] = temp_coupling_item;
+                    // If electron count is 0, set all three values to 0
+                    if subshell_electron_num == 0 {
+                        descriptor[descriptor_idx] = 0;
+                        descriptor[descriptor_idx + 1] = 0;
+                        descriptor[descriptor_idx + 2] = 0;
+                    } else {
+                        descriptor[descriptor_idx] = subshell_electron_num;
+                        descriptor[descriptor_idx + 1] = temp_middle_item;
+                        descriptor[descriptor_idx + 2] = temp_coupling_item;
+                    }
 
                     occupied_orbitals.push(orbs_idx);
                 }
@@ -876,17 +1015,7 @@ impl CSFDescriptorGenerator {
             }
         }
 
-        // Step 6: Fill unoccupied orbitals with final J value (position 2)
-        let all_orbitals: std::collections::HashSet<_> = (0..self.orbital_count).collect();
-        let occupied: std::collections::HashSet<_> = occupied_orbitals.iter().cloned().collect();
-        let remaining: Vec<_> = all_orbitals.difference(&occupied).cloned().collect();
-
-        for idx in remaining {
-            let descriptor_idx = idx * 3 + 2;
-            if descriptor_idx < descriptor.len() {
-                descriptor[descriptor_idx] = final_double_j;
-            }
-        }
+        // Unoccupied orbitals remain with all zeros (default initialization)
 
         Ok(descriptor)
     }
@@ -1007,7 +1136,9 @@ impl PyCSFDescriptorGenerator {
     input_parquet,
     output_file,
     peel_subshells,
-    num_workers=None
+    num_workers=None,
+    normalize=false,
+    max_cumulative_doubled_j=None
 ))]
 fn py_generate_descriptors_from_parquet(
     py: Python,
@@ -1015,6 +1146,8 @@ fn py_generate_descriptors_from_parquet(
     output_file: String,
     peel_subshells: Vec<String>,
     num_workers: Option<usize>,
+    normalize: bool,
+    max_cumulative_doubled_j: Option<i32>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     use pyo3::types::PyDict;
     use std::path::Path;
@@ -1030,6 +1163,8 @@ fn py_generate_descriptors_from_parquet(
                 &output_path,
                 peel_subshells,
                 num_workers,
+                normalize,
+                max_cumulative_doubled_j,
             )
         })
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;

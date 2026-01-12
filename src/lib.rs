@@ -6,6 +6,7 @@ use std::path::Path;
 // Public modules for integration testing
 pub mod csfs_conversion;
 pub mod csfs_descriptor;
+pub mod descriptor_normalization;
 
 #[pymodule]
 fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -16,6 +17,9 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Register CSF descriptor module
     csfs_descriptor::register_descriptor_module(m)?;
+
+    // Register descriptor normalization module
+    descriptor_normalization::register_normalization_module(m)?;
 
     Ok(())
 }

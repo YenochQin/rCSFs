@@ -51,31 +51,6 @@ pub fn get_max_subshell_electrons(subshell: &str) -> Option<f32> {
     limits.get(subshell).copied()
 }
 
-/// Get the half-filled electron capacity for a given subshell type
-///
-/// For relativistic orbitals, this returns half of the maximum (2j+1) capacity.
-/// Half-filled configurations are often particularly stable in atomic physics.
-///
-/// # Arguments
-/// * `subshell` - Subshell identifier string (exact match required)
-///
-/// # Returns
-/// * `Some(f32)` - Half-filled electron capacity for the subshell
-/// * `None` - Unknown subshell type
-///
-/// # Examples
-/// ```text
-/// get_half_filled_electrons("s ")  => Some(1.0)  // 2/2 = 1
-/// get_half_filled_electrons("p-")  => Some(1.0)  // 2/2 = 1
-/// get_half_filled_electrons("p ")  => Some(2.0)  // 4/2 = 2
-/// get_half_filled_electrons("d ")  => Some(3.0)  // 6/2 = 3
-/// get_half_filled_electrons("f ")  => Some(4.0)  // 8/2 = 4
-/// get_half_filled_electrons("xyz") => None
-/// ```
-pub fn get_half_filled_electrons(subshell: &str) -> Option<f32> {
-    get_max_subshell_electrons(subshell).map(|max| max / 2.0)
-}
-
 /// Get the kappa squared value for a given subshell type
 ///
 /// In relativistic atomic physics, kappa is the quantum number related to
@@ -151,14 +126,113 @@ pub fn normalize_electron_count(num_electrons: i32, subshell: &str) -> Result<f3
     Ok(num_electrons as f32 / max_electrons)
 }
 
-/// Normalize a descriptor array using subshell information
+/// Get subshell properties as an array: [max_electrons, kappa_squared, max_cumulative_doubled_j]
+///
+/// This function combines multiple subshell properties into a single array for convenience.
+///
+/// # Arguments
+/// * `subshell` - Subshell identifier string (exact match required)
+/// * `max_cumulative_doubled_j` - Maximum cumulative 2J value (typically an integer)
+///
+/// # Returns
+/// * `Ok([i32; 3])` - Array containing [max_electrons, kappa_squared, max_cumulative_doubled_j]
+/// * `Err(String)` - Error message if subshell is unknown
+///
+/// # Examples
+/// ```text
+/// get_subshell_properties("s ", 10)  => Ok([2, 1, 10])
+/// get_subshell_properties("p ", 20)  => Ok([4, 4, 20])
+/// get_subshell_properties("d ", 30)  => Ok([6, 9, 30])
+/// get_subshell_properties("xyz", 10) => Err("Unknown subshell: xyz")
+/// ```
+pub fn get_subshell_properties(subshell: &str, max_cumulative_doubled_j: i32) -> Result<[i32; 3], String> {
+    let max_electrons = get_max_subshell_electrons(subshell)
+        .ok_or_else(|| format!("Unknown subshell: {}", subshell))?;
+    let kappa_sq = get_kappa_squared(subshell)
+        .ok_or_else(|| format!("Unknown subshell: {}", subshell))?;
+
+    Ok([max_electrons as i32, kappa_sq, max_cumulative_doubled_j])
+}
+
+/// Get subshell properties for multiple subshells in order
+///
+/// This function iterates through the subshells list in order and concatenates
+/// the results from get_subshell_properties for each subshell.
+///
+/// # Arguments
+/// * `subshells` - List of subshell identifier strings (order is preserved)
+/// * `max_cumulative_doubled_j` - Maximum cumulative 2J value (applied to all subshells)
+///
+/// # Returns
+/// * `Ok(Vec<i32>)` - Flattened array containing [max_e1, kappa1, 2J1, max_e2, kappa2, 2J2, ...]
+/// * `Err(String)` - Error message if any subshell is unknown
+///
+/// # Examples
+/// ```text
+/// subshells = ["s ", "p ", "d "]
+/// max_cumulative_doubled_j = 10
+///
+/// get_subshells_properties(subshells, 10)
+/// => Ok([2, 1, 10,  // s: max=2, kappa_sq=1, 2J=10
+///       4, 4, 10,   // p: max=4, kappa_sq=4, 2J=10
+///       6, 9, 10])  // d: max=6, kappa_sq=9, 2J=10
+/// ```
+pub fn get_subshells_properties(
+    subshells: &[String],
+    max_cumulative_doubled_j: i32,
+) -> Result<Vec<i32>, String> {
+    let mut result = Vec::with_capacity(subshells.len() * 3);
+
+    for subshell in subshells {
+        let props = get_subshell_properties(subshell, max_cumulative_doubled_j)?;
+        result.extend_from_slice(&props);
+    }
+
+    Ok(result)
+}
+
+/// Calculate reciprocal of each element in the subshell properties array
+///
+/// This function takes the output from get_subshells_properties and computes
+/// the reciprocal (1/x) of each element.
+///
+/// # Arguments
+/// * `properties` - Array of subshell properties (output from get_subshells_properties)
+///
+/// # Returns
+/// * `Ok(Vec<f32>)` - Array containing reciprocals [1/x1, 1/x2, ...]
+/// * `Err(String)` - Error message if any element is zero (division by zero)
+///
+/// # Examples
+/// ```text
+/// properties = [2, 1, 10, 4, 4, 10]
+///
+/// compute_properties_reciprocals(properties)
+/// => Ok([0.5, 1.0, 0.1,   // 1/2, 1/1, 1/10
+///       0.25, 0.25, 0.1]) // 1/4, 1/4, 1/10
+/// ```
+pub fn compute_properties_reciprocals(properties: &[i32]) -> Result<Vec<f32>, String> {
+    let mut result = Vec::with_capacity(properties.len());
+
+    for (idx, &val) in properties.iter().enumerate() {
+        if val == 0 {
+            return Err(format!("Cannot compute reciprocal: element at index {} is zero", idx));
+        }
+        result.push(1.0 / val as f32);
+    }
+
+    Ok(result)
+}
+
+/// Normalize a descriptor array using subshell properties
 ///
 /// Each descriptor contains triplets of [n_electrons, J_middle, J_coupling] for each orbital.
-/// This function normalizes only the electron count values (every 3rd element starting at 0).
+/// This function normalizes all values by multiplying with the reciprocal of subshell properties.
 ///
 /// # Arguments
 /// * `descriptor` - Descriptor array to normalize
 /// * `peel_subshells` - List of subshell names in order (must match descriptor length)
+/// * `max_cumulative_doubled_j` - Maximum cumulative 2J value for normalization
 ///
 /// # Returns
 /// * `Ok(Vec<f32>)` - Normalized descriptor array (same size as input)
@@ -168,13 +242,18 @@ pub fn normalize_electron_count(num_electrons: i32, subshell: &str) -> Result<f3
 /// ```text
 /// descriptor = [2, 3, 4, 6, 3, 8]  // 2 orbitals: [e1, J1, Jc1, e2, J2, Jc2]
 /// subshells = ["s ", "d "]
+/// max_cumulative_doubled_j = 10
 ///
-/// normalize_descriptor(descriptor, subshells)
-/// => [1.0, 3.0, 4.0, 1.0, 3.0, 8.0]  // 2/2=1.0, 6/6=1.0 (only e values normalized)
+/// // get_subshells_properties => [2, 1, 10, 6, 9, 10]
+/// // reciprocals => [0.5, 1.0, 0.1, 0.167, 0.111, 0.1]
+///
+/// normalize_descriptor(descriptor, subshells, 10)
+/// => [1.0, 3.0, 0.4, 1.0, 0.333, 0.8]  // element-wise multiplication
 /// ```
 pub fn normalize_descriptor(
     descriptor: &[i32],
     peel_subshells: &[String],
+    max_cumulative_doubled_j: i32,
 ) -> Result<Vec<f32>, String> {
     if descriptor.len() != 3 * peel_subshells.len() {
         return Err(format!(
@@ -184,23 +263,18 @@ pub fn normalize_descriptor(
         ));
     }
 
-    let mut normalized = Vec::with_capacity(descriptor.len());
+    // Get normalization denominators from subshell properties
+    let denominators = get_subshells_properties(peel_subshells, max_cumulative_doubled_j)?;
 
-    for (orbital_idx, subshell) in peel_subshells.iter().enumerate() {
-        let base_idx = orbital_idx * 3;
+    // Compute reciprocals for normalization
+    let reciprocals = compute_properties_reciprocals(&denominators)?;
 
-        // Normalize electron count (position 0 in each triplet)
-        let num_electrons = descriptor[base_idx];
-        let normalized_electrons = normalize_electron_count(num_electrons, subshell)?;
-
-        // Copy J_middle and J_coupling as-is (positions 1 and 2)
-        let j_middle = descriptor[base_idx + 1] as f32;
-        let j_coupling = descriptor[base_idx + 2] as f32;
-
-        normalized.push(normalized_electrons);
-        normalized.push(j_middle);
-        normalized.push(j_coupling);
-    }
+    // Element-wise multiplication: descriptor * reciprocals
+    let normalized: Vec<f32> = descriptor
+        .iter()
+        .zip(reciprocals.iter())
+        .map(|(&d, &r)| d as f32 * r)
+        .collect();
 
     Ok(normalized)
 }
@@ -210,6 +284,7 @@ pub fn normalize_descriptor(
 /// # Arguments
 /// * `descriptors` - Vector of descriptor arrays
 /// * `peel_subshells` - List of subshell names in order
+/// * `max_cumulative_doubled_j` - Maximum cumulative 2J value for normalization
 ///
 /// # Returns
 /// * `Ok(Vec<Vec<f32>>)` - Vector of normalized descriptor arrays
@@ -217,12 +292,13 @@ pub fn normalize_descriptor(
 pub fn batch_normalize_descriptors(
     descriptors: &[Vec<i32>],
     peel_subshells: &[String],
+    max_cumulative_doubled_j: i32,
 ) -> Result<Vec<Vec<f32>>, String> {
     descriptors
         .iter()
         .enumerate()
         .map(|(idx, desc)| {
-            normalize_descriptor(desc, peel_subshells)
+            normalize_descriptor(desc, peel_subshells, max_cumulative_doubled_j)
                 .map_err(|e| format!("Failed to normalize descriptor at index {}: {}", idx, e))
         })
         .collect()
@@ -248,95 +324,6 @@ pub fn get_all_subshell_limits() -> HashMap<String, f32> {
         ("i-".to_string(), 12.0),
         ("i ".to_string(), 14.0),
     ])
-}
-
-//////////////////////////////////////////////////////////////////////////////
-/// Python Bindings (PyO3)
-//////////////////////////////////////////////////////////////////////////////
-
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
-
-/// Python-exposed function to get max electrons for a subshell
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_get_max_subshell_electrons(subshell: String) -> PyResult<f32> {
-    get_max_subshell_electrons(&subshell)
-        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("Unknown subshell: {}", subshell)))
-}
-
-/// Python-exposed function to normalize electron count
-///
-/// Args:
-///     num_electrons: Number of electrons in the subshell
-///     subshell: Subshell identifier string (e.g., "s ", "p-", "d ")
-///
-/// Returns:
-///     Normalized value (num_electrons / max_subshell_electrons)
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_normalize_electron_count(num_electrons: i32, subshell: String) -> PyResult<f32> {
-    normalize_electron_count(num_electrons, &subshell)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
-}
-
-/// Python-exposed function to normalize a descriptor array
-///
-/// Args:
-///     descriptor: Descriptor array to normalize
-///     peel_subshells: List of subshell names in order
-///
-/// Returns:
-///     Normalized descriptor array (electron counts normalized)
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_normalize_descriptor(descriptor: Vec<i32>, peel_subshells: Vec<String>) -> PyResult<Vec<f32>> {
-    normalize_descriptor(&descriptor, &peel_subshells)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
-}
-
-/// Python-exposed function to batch normalize descriptors
-///
-/// Args:
-///     descriptors: List of descriptor arrays
-///     peel_subshells: List of subshell names in order
-///
-/// Returns:
-///     List of normalized descriptor arrays
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_batch_normalize_descriptors(
-    descriptors: Vec<Vec<i32>>,
-    peel_subshells: Vec<String>,
-) -> PyResult<Vec<Vec<f32>>> {
-    batch_normalize_descriptors(&descriptors, &peel_subshells)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
-}
-
-/// Python-exposed function to get all subshell limits
-///
-/// Returns:
-///     Dictionary mapping subshell identifiers to max electron capacities
-#[cfg(feature = "python")]
-#[pyfunction]
-fn py_get_all_subshell_limits(py: Python) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-    let limits = get_all_subshell_limits();
-    let dict = pyo3::types::PyDict::new(py);
-    for (key, value) in limits {
-        dict.set_item(key, value)?;
-    }
-    Ok(dict.into())
-}
-
-/// Register the normalization module functions
-#[cfg(feature = "python")]
-pub fn register_normalization_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(py_get_max_subshell_electrons, module)?)?;
-    module.add_function(wrap_pyfunction!(py_normalize_electron_count, module)?)?;
-    module.add_function(wrap_pyfunction!(py_normalize_descriptor, module)?)?;
-    module.add_function(wrap_pyfunction!(py_batch_normalize_descriptors, module)?)?;
-    module.add_function(wrap_pyfunction!(py_get_all_subshell_limits, module)?)?;
-    Ok(())
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -366,24 +353,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_half_filled_electrons() {
-        assert_eq!(get_half_filled_electrons("s "), Some(1.0));  // 2/2
-        assert_eq!(get_half_filled_electrons("p-"), Some(1.0));  // 2/2
-        assert_eq!(get_half_filled_electrons("p "), Some(2.0));  // 4/2
-        assert_eq!(get_half_filled_electrons("d-"), Some(2.0));  // 4/2
-        assert_eq!(get_half_filled_electrons("d "), Some(3.0));  // 6/2
-        assert_eq!(get_half_filled_electrons("f-"), Some(3.0));  // 6/2
-        assert_eq!(get_half_filled_electrons("f "), Some(4.0));  // 8/2
-        assert_eq!(get_half_filled_electrons("g-"), Some(4.0));  // 8/2
-        assert_eq!(get_half_filled_electrons("g "), Some(5.0));  // 10/2
-        assert_eq!(get_half_filled_electrons("h-"), Some(5.0));  // 10/2
-        assert_eq!(get_half_filled_electrons("h "), Some(6.0));  // 12/2
-        assert_eq!(get_half_filled_electrons("i-"), Some(6.0));  // 12/2
-        assert_eq!(get_half_filled_electrons("i "), Some(7.0));  // 14/2
-        assert_eq!(get_half_filled_electrons("xyz"), None);
-    }
-
-    #[test]
     fn test_get_kappa_squared() {
         assert_eq!(get_kappa_squared("s "), Some(1));   // kappa = -1
         assert_eq!(get_kappa_squared("p-"), Some(1));   // kappa = 1
@@ -399,6 +368,106 @@ mod tests {
         assert_eq!(get_kappa_squared("i-"), Some(36));  // kappa = 6
         assert_eq!(get_kappa_squared("i "), Some(49));  // kappa = -7
         assert_eq!(get_kappa_squared("xyz"), None);
+    }
+
+    #[test]
+    fn test_get_subshell_properties() {
+        // s orbital: max_electrons=2, kappa_sq=1
+        let result = get_subshell_properties("s ", 10).unwrap();
+        assert_eq!(result[0], 2);
+        assert_eq!(result[1], 1);
+        assert_eq!(result[2], 10);
+
+        // p orbital: max_electrons=4, kappa_sq=4
+        let result = get_subshell_properties("p ", 20).unwrap();
+        assert_eq!(result[0], 4);
+        assert_eq!(result[1], 4);
+        assert_eq!(result[2], 20);
+
+        // d orbital: max_electrons=6, kappa_sq=9
+        let result = get_subshell_properties("d ", 30).unwrap();
+        assert_eq!(result[0], 6);
+        assert_eq!(result[1], 9);
+        assert_eq!(result[2], 30);
+
+        // Unknown subshell should return error
+        assert!(get_subshell_properties("xyz", 10).is_err());
+    }
+
+    #[test]
+    fn test_get_subshells_properties() {
+        let subshells = vec!["s ".to_string(), "p ".to_string(), "d ".to_string()];
+        let result = get_subshells_properties(&subshells, 10).unwrap();
+
+        // Expected: [2, 1, 10,  4, 4, 10,  6, 9, 10]
+        assert_eq!(result.len(), 9);
+
+        // s orbital
+        assert_eq!(result[0], 2);
+        assert_eq!(result[1], 1);
+        assert_eq!(result[2], 10);
+
+        // p orbital
+        assert_eq!(result[3], 4);
+        assert_eq!(result[4], 4);
+        assert_eq!(result[5], 10);
+
+        // d orbital
+        assert_eq!(result[6], 6);
+        assert_eq!(result[7], 9);
+        assert_eq!(result[8], 10);
+
+        // Test order preservation
+        let subshells_reversed = vec!["d ".to_string(), "p ".to_string(), "s ".to_string()];
+        let result_reversed = get_subshells_properties(&subshells_reversed, 5).unwrap();
+
+        // Should be in reversed order: d first, then p, then s
+        assert_eq!(result_reversed[0], 6);  // d max
+        assert_eq!(result_reversed[3], 4);  // p max
+        assert_eq!(result_reversed[6], 2);  // s max
+
+        // Unknown subshell should return error
+        let invalid_subshells = vec!["s ".to_string(), "xyz".to_string()];
+        assert!(get_subshells_properties(&invalid_subshells, 10).is_err());
+    }
+
+    #[test]
+    fn test_compute_properties_reciprocals() {
+        // Test basic reciprocal calculation
+        let properties = vec![2, 1, 10, 4, 4, 10];
+        let result = compute_properties_reciprocals(&properties).unwrap();
+
+        assert_eq!(result.len(), 6);
+        assert!((result[0] - 0.5).abs() < 0.001);   // 1/2
+        assert!((result[1] - 1.0).abs() < 0.001);   // 1/1
+        assert!((result[2] - 0.1).abs() < 0.001);   // 1/10
+        assert!((result[3] - 0.25).abs() < 0.001);  // 1/4
+        assert!((result[4] - 0.25).abs() < 0.001);  // 1/4
+        assert!((result[5] - 0.1).abs() < 0.001);   // 1/10
+
+        // Test with single element
+        let single = vec![5];
+        let result_single = compute_properties_reciprocals(&single).unwrap();
+        assert_eq!(result_single.len(), 1);
+        assert!((result_single[0] - 0.2).abs() < 0.001);  // 1/5
+
+        // Test division by zero error
+        let with_zero = vec![2, 0, 4];
+        assert!(compute_properties_reciprocals(&with_zero).is_err());
+
+        // Test combined with get_subshells_properties
+        let subshells = vec!["s ".to_string(), "p ".to_string()];
+        let props = get_subshells_properties(&subshells, 10).unwrap();
+        let reciprocals = compute_properties_reciprocals(&props).unwrap();
+
+        // props = [2, 1, 10, 4, 4, 10]
+        // expected = [0.5, 1.0, 0.1, 0.25, 0.25, 0.1]
+        assert!((reciprocals[0] - 0.5).abs() < 0.001);
+        assert!((reciprocals[1] - 1.0).abs() < 0.001);
+        assert!((reciprocals[2] - 0.1).abs() < 0.001);
+        assert!((reciprocals[3] - 0.25).abs() < 0.001);
+        assert!((reciprocals[4] - 0.25).abs() < 0.001);
+        assert!((reciprocals[5] - 0.1).abs() < 0.001);
     }
 
     #[test]
@@ -424,26 +493,33 @@ mod tests {
     fn test_normalize_descriptor() {
         let descriptor = vec![2, 3, 4, 6, 3, 8]; // 2 orbitals
         let subshells = vec!["s ".to_string(), "d ".to_string()];
+        let max_cumulative_doubled_j = 10;
 
-        let result = normalize_descriptor(&descriptor, &subshells).unwrap();
+        let result = normalize_descriptor(&descriptor, &subshells, max_cumulative_doubled_j).unwrap();
 
-        // First orbital (s): 2/2 = 1.0, J values unchanged
+        // get_subshells_properties => [2, 1, 10, 6, 9, 10]
+        // reciprocals => [0.5, 1.0, 0.1, 0.167, 0.111, 0.1]
+        // result: [2*0.5, 3*1.0, 4*0.1, 6*0.167, 3*0.111, 8*0.1]
+        //       = [1.0, 3.0, 0.4, 1.0, 0.333, 0.8]
+
+        // First orbital (s): 2*0.5=1.0, 3*1.0=3.0, 4*0.1=0.4
         assert!((result[0] - 1.0).abs() < 0.01);
-        assert_eq!(result[1], 3.0);
-        assert_eq!(result[2], 4.0);
+        assert!((result[1] - 3.0).abs() < 0.01);
+        assert!((result[2] - 0.4).abs() < 0.01);
 
-        // Second orbital (d): 6/6 = 1.0, J values unchanged
+        // Second orbital (d): 6*0.167=1.0, 3*0.111=0.333, 8*0.1=0.8
         assert!((result[3] - 1.0).abs() < 0.01);
-        assert_eq!(result[4], 3.0);
-        assert_eq!(result[5], 8.0);
+        assert!((result[4] - 0.333).abs() < 0.01);
+        assert!((result[5] - 0.8).abs() < 0.01);
     }
 
     #[test]
     fn test_normalize_descriptor_length_mismatch() {
         let descriptor = vec![2, 3, 4, 6]; // Wrong length (should be 6 for 2 orbitals)
         let subshells = vec!["s ".to_string(), "d ".to_string()];
+        let max_cumulative_doubled_j = 10;
 
-        assert!(normalize_descriptor(&descriptor, &subshells).is_err());
+        assert!(normalize_descriptor(&descriptor, &subshells, max_cumulative_doubled_j).is_err());
     }
 
     #[test]
@@ -453,18 +529,21 @@ mod tests {
             vec![2, 3, 4, 6, 3, 8],
         ];
         let subshells = vec!["s ".to_string(), "d ".to_string()];
+        let max_cumulative_doubled_j = 10;
 
-        let results = batch_normalize_descriptors(&descriptors, &subshells).unwrap();
+        let results = batch_normalize_descriptors(&descriptors, &subshells, max_cumulative_doubled_j).unwrap();
 
         assert_eq!(results.len(), 2);
 
-        // First descriptor: 1/2=0.5, 3/6=0.5
-        assert!((results[0][0] - 0.5).abs() < 0.01);
-        assert!((results[0][3] - 0.5).abs() < 0.01);
+        // reciprocals: [0.5, 1.0, 0.1, 0.167, 0.111, 0.1]
 
-        // Second descriptor: 2/2=1.0, 6/6=1.0
-        assert!((results[1][0] - 1.0).abs() < 0.01);
-        assert!((results[1][3] - 1.0).abs() < 0.01);
+        // First descriptor: [1, 3, 4, 3, 3, 8] * reciprocals
+        assert!((results[0][0] - 0.5).abs() < 0.01);  // 1*0.5
+        assert!((results[0][3] - 0.5).abs() < 0.01);  // 3*0.167
+
+        // Second descriptor: [2, 3, 4, 6, 3, 8] * reciprocals
+        assert!((results[1][0] - 1.0).abs() < 0.01);  // 2*0.5
+        assert!((results[1][3] - 1.0).abs() < 0.01);  // 6*0.167
     }
 
     #[test]

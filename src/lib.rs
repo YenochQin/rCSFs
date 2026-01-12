@@ -18,9 +18,6 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register CSF descriptor module
     csfs_descriptor::register_descriptor_module(m)?;
 
-    // Register descriptor normalization module
-    descriptor_normalization::register_normalization_module(m)?;
-
     Ok(())
 }
 

@@ -6,6 +6,79 @@
 
 use std::collections::HashMap;
 
+/// Convert full subshell notation (e.g., "2s", "3p-") to angular notation (e.g., "s ", "p-")
+///
+/// This function strips the principal quantum number (n) from subshell identifiers,
+/// keeping only the angular momentum quantum number (l) and parity indicator.
+///
+/// # Arguments
+/// * `full_subshell` - Full subshell identifier with principal quantum number (e.g., "2s", "3p-")
+///
+/// # Returns
+/// Angular momentum notation (e.g., "s " for s-orbitals, "p-" for p- orbitals)
+///
+/// # Conversion Rules
+/// - "2s" → "s " (s-orbitals have a trailing space for consistency)
+/// - "2p-" → "p-" (negative parity p-orbitals keep the minus sign)
+/// - "2p" → "p " (positive parity p-orbitals have a trailing space)
+/// - "3d-" → "d-" (negative parity d-orbitals)
+/// - "3d" → "d " (positive parity d-orbitals)
+/// - "4f-" → "f-" (negative parity f-orbitals)
+/// - "4f" → "f " (positive parity f-orbitals)
+///
+/// # Examples
+/// ```text
+/// convert_full_to_angular("2s")  => "s "
+/// convert_full_to_angular("2p-") => "p-"
+/// convert_full_to_angular("3p")  => "p "
+/// convert_full_to_angular("3d-") => "d-"
+/// convert_full_to_angular("4d")  => "d "
+/// convert_full_to_angular("5f-") => "f-"
+/// ```
+pub fn convert_full_to_angular(full_subshell: &str) -> String {
+    let trimmed = full_subshell.trim();
+
+    // Find the first alphabetic character (start of angular momentum label)
+    let alpha_start = trimmed
+        .chars()
+        .position(|c| c.is_alphabetic())
+        .unwrap_or(0);
+
+    // Get everything from the first alphabetic character onward
+    let angular_part = &trimmed[alpha_start..];
+
+    // The normalization module expects specific format:
+    // - Single letter orbitals (s, p, d, f, g, h, i) need trailing space: "s ", "p ", "d ", etc.
+    // - Orbitals with minus sign keep the minus without trailing space: "p-", "d-", etc.
+    if angular_part.len() == 1 {
+        // Single letter orbital (positive parity) - add trailing space
+        format!("{} ", angular_part)
+    } else {
+        // Has minus sign or other characters - keep as-is
+        angular_part.to_string()
+    }
+}
+
+/// Convert a list of full subshell notations to angular notations
+///
+/// # Arguments
+/// * `full_subshells` - List of full subshell identifiers (e.g., ["2s", "2p-", "2p"])
+///
+/// # Returns
+/// List of angular momentum notations (e.g., ["s ", "p-", "p "])
+///
+/// # Examples
+/// ```text
+/// convert_full_to_angular_list(&["2s", "2p-", "2p", "3s"])
+/// => ["s ", "p-", "p ", "s "]
+/// ```
+pub fn convert_full_to_angular_list(full_subshells: &[String]) -> Vec<String> {
+    full_subshells
+        .iter()
+        .map(|s| convert_full_to_angular(s))
+        .collect()
+}
+
 /// Get the maximum electron capacity for a given subshell type
 ///
 /// Subshell strings must match exactly (including whitespace):
@@ -159,8 +232,12 @@ pub fn get_subshell_properties(subshell: &str, max_cumulative_doubled_j: i32) ->
 /// This function iterates through the subshells list in order and concatenates
 /// the results from get_subshell_properties for each subshell.
 ///
+/// The function automatically converts full notation (e.g., "2s", "3p-") to
+/// angular notation (e.g., "s ", "p-") before looking up properties.
+///
 /// # Arguments
 /// * `subshells` - List of subshell identifier strings (order is preserved)
+///                 Can be in full notation (e.g., "2s", "2p-") or angular notation (e.g., "s ", "p-")
 /// * `max_cumulative_doubled_j` - Maximum cumulative 2J value (applied to all subshells)
 ///
 /// # Returns
@@ -169,9 +246,15 @@ pub fn get_subshell_properties(subshell: &str, max_cumulative_doubled_j: i32) ->
 ///
 /// # Examples
 /// ```text
+/// // Using angular notation (original format)
 /// subshells = ["s ", "p ", "d "]
-/// max_cumulative_doubled_j = 10
+/// get_subshells_properties(subshells, 10)
+/// => Ok([2, 1, 10,  // s: max=2, kappa_sq=1, 2J=10
+///       4, 4, 10,   // p: max=4, kappa_sq=4, 2J=10
+///       6, 9, 10])  // d: max=6, kappa_sq=9, 2J=10
 ///
+/// // Using full notation (auto-converted)
+/// subshells = ["2s", "2p", "3d"]
 /// get_subshells_properties(subshells, 10)
 /// => Ok([2, 1, 10,  // s: max=2, kappa_sq=1, 2J=10
 ///       4, 4, 10,   // p: max=4, kappa_sq=4, 2J=10
@@ -184,7 +267,10 @@ pub fn get_subshells_properties(
     let mut result = Vec::with_capacity(subshells.len() * 3);
 
     for subshell in subshells {
-        let props = get_subshell_properties(subshell, max_cumulative_doubled_j)?;
+        // Convert full notation to angular notation if needed
+        // This handles both "2s" -> "s " and "s " -> "s " cases
+        let angular_subshell = convert_full_to_angular(subshell);
+        let props = get_subshell_properties(&angular_subshell, max_cumulative_doubled_j)?;
         result.extend_from_slice(&props);
     }
 
@@ -333,6 +419,65 @@ pub fn get_all_subshell_limits() -> HashMap<String, f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_convert_full_to_angular() {
+        // Test basic conversions
+        assert_eq!(convert_full_to_angular("2s"), "s ");
+        assert_eq!(convert_full_to_angular("2p-"), "p-");
+        assert_eq!(convert_full_to_angular("2p"), "p ");
+        assert_eq!(convert_full_to_angular("3d-"), "d-");
+        assert_eq!(convert_full_to_angular("3d"), "d ");
+        assert_eq!(convert_full_to_angular("4f-"), "f-");
+        assert_eq!(convert_full_to_angular("4f"), "f ");
+
+        // Test with whitespace
+        assert_eq!(convert_full_to_angular(" 2s "), "s ");
+        assert_eq!(convert_full_to_angular(" 3p-"), "p-");
+
+        // Test higher principal quantum numbers
+        assert_eq!(convert_full_to_angular("5s"), "s ");
+        assert_eq!(convert_full_to_angular("6g-"), "g-");
+        assert_eq!(convert_full_to_angular("7h"), "h ");
+    }
+
+    #[test]
+    fn test_convert_full_to_angular_list() {
+        // Test list conversion
+        let full = vec!["2s".to_string(), "2p-".to_string(), "2p".to_string(), "3s".to_string()];
+        let angular = convert_full_to_angular_list(&full);
+        assert_eq!(angular, vec!["s ", "p-", "p ", "s "]);
+
+        // Test with more complex list
+        let full = vec!["5s".to_string(), "4d-".to_string(), "4d".to_string(), "5p-".to_string()];
+        let angular = convert_full_to_angular_list(&full);
+        assert_eq!(angular, vec!["s ", "d-", "d ", "p-"]);
+    }
+
+    #[test]
+    fn test_get_subshells_properties_with_full_notation() {
+        // Test that get_subshells_properties works with full notation
+        let full_notation = vec!["2s".to_string(), "2p".to_string(), "3d".to_string()];
+        let result = get_subshells_properties(&full_notation, 10).unwrap();
+
+        // Expected: [2, 1, 10,  4, 4, 10,  6, 9, 10]
+        assert_eq!(result.len(), 9);
+
+        // s orbital
+        assert_eq!(result[0], 2);
+        assert_eq!(result[1], 1);
+        assert_eq!(result[2], 10);
+
+        // p orbital
+        assert_eq!(result[3], 4);
+        assert_eq!(result[4], 4);
+        assert_eq!(result[5], 10);
+
+        // d orbital
+        assert_eq!(result[6], 6);
+        assert_eq!(result[7], 9);
+        assert_eq!(result[8], 10);
+    }
 
     #[test]
     fn test_get_max_subshell_electrons() {

@@ -212,6 +212,8 @@ def generate_descriptors_from_parquet(
     output_parquet: Union[str, Path],
     peel_subshells: list[str],
     num_workers: Optional[int] = None,
+    normalize: bool = False,
+    max_cumulative_doubled_j: Optional[int] = None,
 ) -> DescriptorGenerationStats:
     """
     Generate CSF descriptors from a parquet file using parallel processing.
@@ -221,7 +223,8 @@ def generate_descriptors_from_parquet(
     with streaming batch processing for low memory usage.
 
     Output Format:
-        Parquet with multiple Int32 columns `col_0, col_1, ..., col_N` and ZSTD compression (level 3).
+        - Non-normalized: Parquet with multiple Int32 columns `col_0, col_1, ..., col_N` and ZSTD compression (level 3)
+        - Normalized: Parquet with multiple Float32 columns `col_0, col_1, ..., col_N` and ZSTD compression (level 3)
         Each column corresponds to one position in the descriptor array.
         This multi-column format is much faster than List column format for large datasets.
         Example: For 3 orbitals (descriptor_size=9), columns are: col_0, col_1, ..., col_8
@@ -231,6 +234,8 @@ def generate_descriptors_from_parquet(
         output_parquet: Path to output Parquet file for descriptors
         peel_subshells: List of subshell names (e.g., ['5s', '4d-', '4d', '5p-', '5p', '6s'])
         num_workers: Number of worker threads (default: CPU core count)
+        normalize: Whether to normalize descriptors (default: False)
+        max_cumulative_doubled_j: Maximum cumulative 2J value for normalization (required if normalize=True)
 
     Returns:
         Dictionary containing generation statistics:
@@ -260,6 +265,15 @@ def generate_descriptors_from_parquet(
         >>> descriptor_cols = [col for col in df.columns if col.startswith("col_")]
         >>> descriptors = df[descriptor_cols].to_numpy()  # Shape: (n_csfs, descriptor_size)
 
+        >>> # With normalization
+        >>> stats = generate_descriptors_from_parquet(
+        ...     "csfs_data.parquet",
+        ...     "descriptors_normalized.parquet",
+        ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s'],
+        ...     normalize=True,
+        ...     max_cumulative_doubled_j=10
+        ... )
+
         >>> # With custom worker count for large files
         >>> stats = generate_descriptors_from_parquet(
         ...     "csfs_data.parquet",
@@ -279,7 +293,7 @@ def generate_descriptors_from_parquet(
         This implementation uses streaming batch processing to minimize memory usage:
         1. Read parquet in batches (65536 rows per batch)
         2. Parse CSFs to descriptors in parallel (Rayon work-stealing)
-        3. Build column arrays directly (Int32 builders per column, no ListArray overhead)
+        3. Build column arrays directly (Int32 or Float32 builders per column, no ListArray overhead)
         4. Write batch to Parquet file (ZSTD level 3 compression)
         5. Repeat until all data processed
 
@@ -290,6 +304,8 @@ def generate_descriptors_from_parquet(
         output_file=str(output_parquet),
         peel_subshells=peel_subshells,
         num_workers=num_workers,
+        normalize=normalize,
+        max_cumulative_doubled_j=max_cumulative_doubled_j,
     )
 
 

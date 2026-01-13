@@ -2,6 +2,7 @@ use arrow::array::{StringBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
+use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use rayon::prelude::*;
@@ -11,6 +12,53 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use toml;
+
+/// RAII wrapper for ArrowWriter that ensures proper cleanup on errors.
+///
+/// This wrapper guarantees that:
+/// 1. The file handle is properly closed when dropped
+/// 2. Incomplete output files are removed if an error occurs
+/// 3. Resources are released even if a panic happens
+struct ParquetFileGuard<'a> {
+    writer: Option<ArrowWriter<File>>,
+    path: &'a Path,
+    cleanup_on_drop: bool,
+}
+
+impl<'a> ParquetFileGuard<'a> {
+    /// Creates a new guard that will clean up the file on drop unless `finish()` is called.
+    fn new(writer: ArrowWriter<File>, path: &'a Path) -> Self {
+        Self {
+            writer: Some(writer),
+            path,
+            cleanup_on_drop: true,
+        }
+    }
+
+    /// Completes the write operation successfully and prevents cleanup on drop.
+    ///
+    /// # Errors
+    ///
+    /// Returns a ParquetError if the writer fails to close properly.
+    fn finish(mut self) -> Result<(), ParquetError> {
+        self.cleanup_on_drop = false;
+        if let Some(writer) = self.writer.take() {
+            writer.close()?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> Drop for ParquetFileGuard<'a> {
+    fn drop(&mut self) {
+        // Clean up incomplete output file if an error occurred
+        if self.cleanup_on_drop {
+            let _ = std::fs::remove_file(self.path);
+        }
+        // Ensure the writer is closed (idempotent if already closed via finish())
+        let _ = self.writer.take().map(|w| w.close());
+    }
+}
 
 /// Number of header lines at the beginning of a CSF file
 const CSF_HEADER_LINE_COUNT: usize = 5;
@@ -126,12 +174,22 @@ pub fn convert_csfs_to_parquet_parallel(
     num_workers: Option<usize>,
 ) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
     // Configure rayon thread pool if num_workers is specified
+    // Note: build_global() can only be called once per program lifetime
     if let Some(n) = num_workers {
-        println!("配置 Rayon 线程池，使用 {} 个 worker", n);
-        rayon::ThreadPoolBuilder::new()
+        match rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .build_global()
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        {
+            Ok(_) => {
+                println!("配置 Rayon 线程池，使用 {} 个 worker", n);
+            }
+            Err(_) => {
+                eprintln!(
+                    "警告: Rayon 线程池已配置，忽略 num_workers={} 参数 (使用现有配置)",
+                    n
+                );
+            }
+        }
     }
 
     println!("开始并行转换 CSF 文件");
@@ -155,7 +213,8 @@ pub fn convert_csfs_to_parquet_parallel(
     let props = WriterProperties::builder()
         .set_compression(parquet::basic::Compression::UNCOMPRESSED)
         .build();
-    let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
+    let writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
+    let mut writer_guard = ParquetFileGuard::new(writer, &output_path);
     println!("Parquet 写入器已创建，使用无压缩");
 
     // --- 3. 流式读取 + 批量并行处理 ---
@@ -200,6 +259,14 @@ pub fn convert_csfs_to_parquet_parallel(
         let num_full_csfs = batch_lines.len() / 3;
         if num_full_csfs == 0 {
             if lines_read == 0 {
+                break;
+            }
+            // Prevent infinite loop: if we read lines but cannot form a complete CSF
+            if batch_lines.len() < 3 {
+                eprintln!(
+                    "警告: 文件末尾有 {} 行不完整的数据，将被忽略",
+                    batch_lines.len()
+                );
                 break;
             }
             continue;
@@ -264,13 +331,13 @@ pub fn convert_csfs_to_parquet_parallel(
             ],
         )?;
 
-        writer.write(&batch)?;
+        writer_guard.writer.as_mut().unwrap().write(&batch)?;
 
         csf_count += num_full_csfs;
     }
 
     // --- 4. 完成写入 ---
-    writer.close()?;
+    writer_guard.finish()?;
 
     let final_stats = ConversionStats {
         csf_count,
@@ -381,7 +448,8 @@ pub fn convert_csfs_to_parquet(
         .set_write_batch_size(chunk_size as usize)
         .build();
 
-    let mut writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
+    let writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
+    let mut writer_guard = ParquetFileGuard::new(writer, &output_path);
     println!("Parquet 写入器已创建，使用无压缩");
 
     // --- 4. 批量处理 ---
@@ -447,6 +515,14 @@ pub fn convert_csfs_to_parquet(
             if lines_read_this_iteration == 0 {
                 break;
             }
+            // Prevent infinite loop: if we read lines but cannot form a complete CSF
+            if batch_lines.len() < 3 {
+                eprintln!(
+                    "警告: 文件末尾有 {} 行不完整的数据，将被忽略",
+                    batch_lines.len()
+                );
+                break;
+            }
             // 保留剩余行给下一轮
             continue;
         }
@@ -484,7 +560,7 @@ pub fn convert_csfs_to_parquet(
         )?;
 
         // 写入 Parquet
-        writer.write(&batch)?;
+        writer_guard.writer.as_mut().unwrap().write(&batch)?;
 
         csf_count += num_full_csfs;
         if csf_count % 100000 == 0 {
@@ -493,7 +569,7 @@ pub fn convert_csfs_to_parquet(
     }
 
     // 完成写入
-    writer.close()?;
+    writer_guard.finish()?;
 
     // 创建 TOML 头部数据
     let header_data = HeaderData {

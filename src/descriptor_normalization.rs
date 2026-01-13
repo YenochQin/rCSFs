@@ -4,6 +4,7 @@
 //! Normalization helps improve machine learning model performance by scaling
 //! values to a consistent range.
 
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 
 /// Convert full subshell notation (e.g., "2s", "3p-") to angular notation (e.g., "s ", "p-")
@@ -188,12 +189,12 @@ pub fn get_kappa_squared(subshell: &str) -> Option<i32> {
 /// normalize_electron_count(3, "p ")  => Ok(0.75)  // 3/4 < 1 (partially filled)
 /// normalize_electron_count(5, "xyz") => Err("Unknown subshell: xyz")
 /// ```
-pub fn normalize_electron_count(num_electrons: i32, subshell: &str) -> Result<f32, String> {
+pub fn normalize_electron_count(num_electrons: i32, subshell: &str) -> Result<f32> {
     let max_electrons = get_max_subshell_electrons(subshell)
-        .ok_or_else(|| format!("Unknown subshell: {}", subshell))?;
+        .ok_or_else(|| anyhow::anyhow!("Unknown subshell: {}", subshell))?;
 
     if max_electrons <= 0.0 {
-        return Err(format!("Invalid max electrons for subshell {}: {}", subshell, max_electrons));
+        return Err(anyhow::anyhow!("Invalid max electrons for subshell {}: {}", subshell, max_electrons));
     }
 
     Ok(num_electrons as f32 / max_electrons)
@@ -209,7 +210,7 @@ pub fn normalize_electron_count(num_electrons: i32, subshell: &str) -> Result<f3
 ///
 /// # Returns
 /// * `Ok([i32; 3])` - Array containing [max_electrons, kappa_squared, max_cumulative_doubled_j]
-/// * `Err(String)` - Error message if subshell is unknown
+/// * `Err(anyhow::Error)` - Error if subshell is unknown
 ///
 /// # Examples
 /// ```text
@@ -218,11 +219,11 @@ pub fn normalize_electron_count(num_electrons: i32, subshell: &str) -> Result<f3
 /// get_subshell_properties("d ", 30)  => Ok([6, 9, 30])
 /// get_subshell_properties("xyz", 10) => Err("Unknown subshell: xyz")
 /// ```
-pub fn get_subshell_properties(subshell: &str, max_cumulative_doubled_j: i32) -> Result<[i32; 3], String> {
+pub fn get_subshell_properties(subshell: &str, max_cumulative_doubled_j: i32) -> Result<[i32; 3]> {
     let max_electrons = get_max_subshell_electrons(subshell)
-        .ok_or_else(|| format!("Unknown subshell: {}", subshell))?;
+        .ok_or_else(|| anyhow::anyhow!("Unknown subshell: {}", subshell))?;
     let kappa_sq = get_kappa_squared(subshell)
-        .ok_or_else(|| format!("Unknown subshell: {}", subshell))?;
+        .ok_or_else(|| anyhow::anyhow!("Unknown subshell: {}", subshell))?;
 
     Ok([max_electrons as i32, kappa_sq, max_cumulative_doubled_j])
 }
@@ -263,7 +264,7 @@ pub fn get_subshell_properties(subshell: &str, max_cumulative_doubled_j: i32) ->
 pub fn get_subshells_properties(
     subshells: &[String],
     max_cumulative_doubled_j: i32,
-) -> Result<Vec<i32>, String> {
+) -> Result<Vec<i32>> {
     let mut result = Vec::with_capacity(subshells.len() * 3);
 
     for subshell in subshells {
@@ -287,7 +288,7 @@ pub fn get_subshells_properties(
 ///
 /// # Returns
 /// * `Ok(Vec<f32>)` - Array containing reciprocals [1/x1, 1/x2, ...]
-/// * `Err(String)` - Error message if any element is zero (division by zero)
+/// * `Err(anyhow::Error)` - Error if any element is zero (division by zero)
 ///
 /// # Examples
 /// ```text
@@ -297,12 +298,12 @@ pub fn get_subshells_properties(
 /// => Ok([0.5, 1.0, 0.1,   // 1/2, 1/1, 1/10
 ///       0.25, 0.25, 0.1]) // 1/4, 1/4, 1/10
 /// ```
-pub fn compute_properties_reciprocals(properties: &[i32]) -> Result<Vec<f32>, String> {
+pub fn compute_properties_reciprocals(properties: &[i32]) -> Result<Vec<f32>> {
     let mut result = Vec::with_capacity(properties.len());
 
     for (idx, &val) in properties.iter().enumerate() {
         if val == 0 {
-            return Err(format!("Cannot compute reciprocal: element at index {} is zero", idx));
+            return Err(anyhow::anyhow!("Cannot compute reciprocal: element at index {} is zero", idx));
         }
         result.push(1.0 / val as f32);
     }
@@ -340,9 +341,9 @@ pub fn normalize_descriptor(
     descriptor: &[i32],
     peel_subshells: &[String],
     max_cumulative_doubled_j: i32,
-) -> Result<Vec<f32>, String> {
+) -> Result<Vec<f32>> {
     if descriptor.len() != 3 * peel_subshells.len() {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "Descriptor length mismatch: expected {}, got {}",
             3 * peel_subshells.len(),
             descriptor.len()
@@ -374,18 +375,18 @@ pub fn normalize_descriptor(
 ///
 /// # Returns
 /// * `Ok(Vec<Vec<f32>>)` - Vector of normalized descriptor arrays
-/// * `Err(String)` - Error message if any normalization fails
+/// * `Err(anyhow::Error)` - Error if any normalization fails
 pub fn batch_normalize_descriptors(
     descriptors: &[Vec<i32>],
     peel_subshells: &[String],
     max_cumulative_doubled_j: i32,
-) -> Result<Vec<Vec<f32>>, String> {
+) -> Result<Vec<Vec<f32>>> {
     descriptors
         .iter()
         .enumerate()
         .map(|(idx, desc)| {
             normalize_descriptor(desc, peel_subshells, max_cumulative_doubled_j)
-                .map_err(|e| format!("Failed to normalize descriptor at index {}: {}", idx, e))
+                .with_context(|| format!("Failed to normalize descriptor at index {}", idx))
         })
         .collect()
 }

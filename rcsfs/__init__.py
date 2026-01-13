@@ -13,17 +13,9 @@ Main Components:
 ### CSF File Conversion
 
 ```python
-from rcsfs import CSFProcessor
-
-processor = CSFProcessor()
-processor.convert("input.csf", "output.parquet")
-```
-
-Or use the functional API:
-
-```python
 from rcsfs import convert_csfs
 
+# Basic conversion
 convert_csfs("input.csf", "output.parquet")
 
 # With custom chunk size (default: 3000000 lines = 1M CSFs)
@@ -36,24 +28,23 @@ convert_csfs("input.csf", "output.parquet", num_workers=8)
 ### CSF Descriptor Generation
 
 ```python
-from rcsfs import CSFDescriptorGenerator
+from rcsfs import read_peel_subshells, generate_descriptors_from_parquet
 
-# Define orbitals
-peel_subshells = ['5s', '4d-', '4d', '5p-', '5p', '6s']
-gen = CSFDescriptorGenerator(peel_subshells)
+# Read peel subshells from header file
+peel_subshells = read_peel_subshells("data_header.toml")
 
-# Parse CSF
-line1 = '  5s ( 2)  4d-( 4)  4d ( 6)  5p-( 2)  5p ( 4)  6s ( 2)'
-line2 = '                   3/2               2        '
-line3 = '                                           4-  '
-
-descriptor = gen.parse_csf(line1, line2, line3)
-# Returns: [2.0, 0.0, 0.0, 4.0, 0.0, 0.0, 6.0, 3.0, 3.0, ...]
+# Generate descriptors from parquet file
+stats = generate_descriptors_from_parquet(
+    "csfs_data.parquet",
+    "descriptors.parquet",
+    peel_subshells=peel_subshells
+)
 ```
 
-For detailed documentation, see:
-- CSF File Conversion: See `CSFProcessor` class documentation
-- CSF Descriptor Generation: See `CSFDescriptorGenerator` class documentation
+For detailed documentation, see function documentation:
+- `convert_csfs()`: CSF file to Parquet conversion
+- `generate_descriptors_from_parquet()`: Batch descriptor generation
+- `read_peel_subshells()`: Extract peel subshells from header file
 """
 
 from pathlib import Path
@@ -72,8 +63,6 @@ except ImportError:
 
 # Import from the Rust extension module
 from ._rcsfs import (
-    CSFDescriptorGenerator,
-    CSFProcessor as _CSFProcessor,
     convert_csfs as _convert_csfs,
     get_parquet_info as _get_parquet_info,
     py_generate_descriptors_from_parquet as _generate_descriptors_from_parquet,
@@ -310,102 +299,6 @@ def generate_descriptors_from_parquet(
 
 
 #///////////////////////////////////////////////////////////////////////////////
-# CSFProcessor Wrapper Class (with property accessors)
-#///////////////////////////////////////////////////////////////////////////////
-
-
-class CSFProcessor:
-    """
-    CSF file processor class providing an object-oriented interface.
-
-    This class allows for easy configuration and repeated conversion operations
-    with consistent settings.
-    """
-
-    def __init__(
-        self, max_line_len: Optional[int] = 256, chunk_size: Optional[int] = 3000000
-    ):
-        """
-        Create a new CSF processor instance.
-
-        Args:
-            max_line_len: Maximum line length (default: 256)
-            chunk_size: Batch processing size (default: 3000000)
-        """
-        self._processor = _CSFProcessor(
-            max_line_len=max_line_len, chunk_size=chunk_size
-        )
-
-    @property
-    def max_line_len(self) -> int:
-        """Get current maximum line length."""
-        return self._processor.get_config()["max_line_len"]
-
-    @max_line_len.setter
-    def max_line_len(self, value: int) -> None:
-        """Set maximum line length."""
-        if value <= 0:
-            raise ValueError("max_line_len must be greater than 0")
-        self._processor.set_max_line_len(value)
-
-    @property
-    def chunk_size(self) -> int:
-        """Get current chunk size."""
-        return self._processor.get_config()["chunk_size"]
-
-    @chunk_size.setter
-    def chunk_size(self, value: int) -> None:
-        """Set chunk size."""
-        if value <= 0:
-            raise ValueError("chunk_size must be greater than 0")
-        self._processor.set_chunk_size(value)
-
-    def get_config(self) -> dict:
-        """
-        Get current processor configuration.
-
-        Returns:
-            Dictionary containing current settings
-        """
-        return self._processor.get_config()
-
-    def convert(
-        self,
-        input_path: Union[str, Path],
-        output_path: Union[str, Path],
-        num_workers: Optional[int] = None,
-    ) -> ConversionStats:
-        """
-        Convert CSF file using parallel processing.
-
-        Args:
-            input_path: Path to input CSF file
-            output_path: Path to output Parquet file
-            num_workers: Optional number of worker threads (default: CPU core count)
-
-        Returns:
-            Conversion statistics and status
-        """
-        return self._processor.convert(
-            input_path=str(input_path),
-            output_path=str(output_path),
-            num_workers=num_workers,
-        )
-
-    def get_metadata(self, input_path: Union[str, Path]) -> dict:
-        """
-        Get Parquet file information.
-
-        Args:
-            input_path: Path to Parquet file
-
-        Returns:
-            File information and metadata
-        """
-        return self._processor.get_metadata(input_path=str(input_path))
-
-
-#///////////////////////////////////////////////////////////////////////////////
 # Public API
 #///////////////////////////////////////////////////////////////////////////////
 
@@ -415,9 +308,6 @@ __all__ = [
     # CSF file conversion
     "convert_csfs",
     "get_parquet_info",
-    "CSFProcessor",
-    # CSF descriptor generation
-    "CSFDescriptorGenerator",
     # Batch descriptor generation
     "generate_descriptors_from_parquet",
     "read_peel_subshells",

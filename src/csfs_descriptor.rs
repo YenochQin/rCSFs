@@ -1028,99 +1028,6 @@ impl CSFDescriptorGenerator {
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
-/// Python-exposed CSF Descriptor Generator class
-#[cfg(feature = "python")]
-#[pyclass(name = "CSFDescriptorGenerator")]
-pub struct PyCSFDescriptorGenerator {
-    inner: CSFDescriptorGenerator,
-}
-
-#[cfg(feature = "python")]
-#[pymethods]
-impl PyCSFDescriptorGenerator {
-    /// Create a new descriptor generator
-    #[new]
-    fn new(peel_subshells: Vec<String>) -> Self {
-        Self {
-            inner: CSFDescriptorGenerator::new(peel_subshells),
-        }
-    }
-
-    /// Get the number of orbitals
-    fn orbital_count(&self) -> usize {
-        self.inner.orbital_count()
-    }
-
-    /// Get the peel subshells list
-    fn peel_subshells(&self) -> Vec<String> {
-        self.inner.peel_subshells().to_vec()
-    }
-
-    /// Parse a single CSF into a descriptor array
-    ///
-    /// Args:
-    ///     line1: First line of CSF (subshell configurations)
-    ///     line2: Second line of CSF (intermediate J coupling)
-    ///     line3: Third line of CSF (final coupling and total J)
-    ///
-    /// Returns:
-    ///     List of int32 descriptor values
-    fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> PyResult<Vec<i32>> {
-        self.inner
-            .parse_csf(line1, line2, line3)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
-    }
-
-    /// Parse CSF from a list of 3 strings (Python list format)
-    fn parse_csf_from_list(&self, csf_lines: Vec<String>) -> PyResult<Vec<i32>> {
-        if csf_lines.len() != 3 {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "csf_lines must contain exactly 3 elements",
-            ));
-        }
-        self.inner
-            .parse_csf(&csf_lines[0], &csf_lines[1], &csf_lines[2])
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
-    }
-
-    /// Batch parse multiple CSFs
-    ///
-    /// Args:
-    ///     csf_list: List of CSF data, each being a list of 3 strings
-    ///
-    /// Returns:
-    ///     List of descriptor arrays
-    fn batch_parse_csfs(&self, csf_list: Vec<Vec<String>>) -> PyResult<Vec<Vec<i32>>> {
-        let mut results = Vec::with_capacity(csf_list.len());
-
-        for (idx, csf_lines) in csf_list.into_iter().enumerate() {
-            match self.inner.parse_csf(
-                &csf_lines.get(0).map(|s| s.as_str()).unwrap_or(""),
-                &csf_lines.get(1).map(|s| s.as_str()).unwrap_or(""),
-                &csf_lines.get(2).map(|s| s.as_str()).unwrap_or(""),
-            ) {
-                Ok(descriptor) => results.push(descriptor),
-                Err(e) => {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "Error parsing CSF at index {}: {}",
-                        idx, e
-                    )));
-                }
-            }
-        }
-
-        Ok(results)
-    }
-
-    /// Get the configuration as a dictionary
-    fn get_config(&self, py: Python) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-        let dict = pyo3::types::PyDict::new(py);
-        dict.set_item("orbital_count", self.inner.orbital_count())?;
-        dict.set_item("peel_subshells", self.inner.peel_subshells())?;
-        Ok(dict.into())
-    }
-}
-
 /// Python-exposed function to generate descriptors from parquet file (parallel version)
 ///
 /// Output format: Parquet file with multiple `col_0, col_1, ..., col_N` Int32 columns and ZSTD compression (level 3)
@@ -1192,7 +1099,6 @@ fn py_read_peel_subshells(header_path: String) -> PyResult<Vec<String>> {
 /// Register the Python module functions and classes
 #[cfg(feature = "python")]
 pub fn register_descriptor_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_class::<PyCSFDescriptorGenerator>()?;
     module.add_function(wrap_pyfunction!(
         py_generate_descriptors_from_parquet,
         module

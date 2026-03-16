@@ -40,10 +40,7 @@ pub fn convert_full_to_angular(full_subshell: &str) -> String {
     let trimmed = full_subshell.trim();
 
     // Find the first alphabetic character (start of angular momentum label)
-    let alpha_start = trimmed
-        .chars()
-        .position(|c| c.is_alphabetic())
-        .unwrap_or(0);
+    let alpha_start = trimmed.chars().position(|c| c.is_alphabetic()).unwrap_or(0);
 
     // Get everything from the first alphabetic character onward
     let angular_part = &trimmed[alpha_start..];
@@ -107,19 +104,19 @@ pub fn get_max_subshell_electrons(subshell: &str) -> Option<f32> {
     // Subshell to max electron mapping (exact string match required)
     // For relativistic orbitals: max electrons = 2j + 1 where j = l ± 1/2
     let limits: HashMap<&str, f32> = HashMap::from([
-        ("s ", 2.0),   // s-orbital (j=1/2): 2j+1 = 2
-        ("p-", 2.0),   // p- orbital (l=1, j=1/2): 2j+1 = 2
-        ("p ", 4.0),   // p-orbital (l=1, j=3/2): 2j+1 = 4
-        ("d-", 4.0),   // d- orbital (l=2, j=3/2): 2j+1 = 4
-        ("d ", 6.0),   // d-orbital (l=2, j=5/2): 2j+1 = 6
-        ("f-", 6.0),   // f- orbital (l=3, j=5/2): 2j+1 = 6
-        ("f ", 8.0),   // f-orbital (l=3, j=7/2): 2j+1 = 8
-        ("g-", 8.0),   // g- orbital (l=4, j=7/2): 2j+1 = 8
-        ("g ", 10.0),  // g-orbital (l=4, j=9/2): 2j+1 = 10
-        ("h-", 10.0),  // h- orbital (l=5, j=9/2): 2j+1 = 10
-        ("h ", 12.0),  // h-orbital (l=5, j=11/2): 2j+1 = 12
-        ("i-", 12.0),  // i- orbital (l=6, j=11/2): 2j+1 = 12
-        ("i ", 14.0),  // i-orbital (l=6, j=13/2): 2j+1 = 14
+        ("s ", 2.0),  // s-orbital (j=1/2): 2j+1 = 2
+        ("p-", 2.0),  // p- orbital (l=1, j=1/2): 2j+1 = 2
+        ("p ", 4.0),  // p-orbital (l=1, j=3/2): 2j+1 = 4
+        ("d-", 4.0),  // d- orbital (l=2, j=3/2): 2j+1 = 4
+        ("d ", 6.0),  // d-orbital (l=2, j=5/2): 2j+1 = 6
+        ("f-", 6.0),  // f- orbital (l=3, j=5/2): 2j+1 = 6
+        ("f ", 8.0),  // f-orbital (l=3, j=7/2): 2j+1 = 8
+        ("g-", 8.0),  // g- orbital (l=4, j=7/2): 2j+1 = 8
+        ("g ", 10.0), // g-orbital (l=4, j=9/2): 2j+1 = 10
+        ("h-", 10.0), // h- orbital (l=5, j=9/2): 2j+1 = 10
+        ("h ", 12.0), // h-orbital (l=5, j=11/2): 2j+1 = 12
+        ("i-", 12.0), // i- orbital (l=6, j=11/2): 2j+1 = 12
+        ("i ", 14.0), // i-orbital (l=6, j=13/2): 2j+1 = 14
     ]);
 
     limits.get(subshell).copied()
@@ -194,12 +191,15 @@ pub fn normalize_electron_count(num_electrons: i32, subshell: &str) -> Result<f3
         .ok_or_else(|| anyhow::anyhow!("Unknown subshell: {}", subshell))?;
 
     if max_electrons <= 0.0 {
-        return Err(anyhow::anyhow!("Invalid max electrons for subshell {}: {}", subshell, max_electrons));
+        return Err(anyhow::anyhow!(
+            "Invalid max electrons for subshell {}: {}",
+            subshell,
+            max_electrons
+        ));
     }
 
     Ok(num_electrons as f32 / max_electrons)
 }
-
 
 /// Normalize a descriptor array using per-CSF physics-correct denominators
 ///
@@ -306,6 +306,20 @@ pub fn normalize_descriptor_per_csf(
     Ok(result)
 }
 
+/// Infer the final doubled J value from the last occupied subshell in a descriptor.
+///
+/// The parser stores the total target J in the coupling slot of the last occupied
+/// subshell, not the last peel subshell. Trailing empty peel subshells therefore
+/// must be ignored when recovering `2J_target`.
+pub fn infer_two_j_target(descriptor: &[i32]) -> i32 {
+    descriptor
+        .chunks_exact(3)
+        .rev()
+        .find(|chunk| chunk[0] > 0)
+        .map(|chunk| chunk[2])
+        .unwrap_or(0)
+}
+
 /// Batch normalize multiple descriptor arrays
 ///
 /// # Arguments
@@ -321,8 +335,8 @@ pub fn normalize_descriptor_per_csf(
 /// A single `two_j_target` is applied to all descriptors in the batch. This is
 /// correct for single-Jpi datasets but **wrong for mixed-Jpi data**, where
 /// different CSFs have different target J values. For mixed-Jpi datasets call
-/// `normalize_descriptor_per_csf` per CSF, reading
-/// `two_j_target = descriptor[descriptor.len() - 1]` from each individual CSF.
+/// `normalize_descriptor_per_csf` per CSF, deriving `two_j_target` with
+/// [`infer_two_j_target`] for each individual CSF.
 pub fn batch_normalize_descriptors(
     descriptors: &[Vec<i32>],
     peel_subshells: &[String],
@@ -392,12 +406,22 @@ mod tests {
     #[test]
     fn test_convert_full_to_angular_list() {
         // Test list conversion
-        let full = vec!["2s".to_string(), "2p-".to_string(), "2p".to_string(), "3s".to_string()];
+        let full = vec![
+            "2s".to_string(),
+            "2p-".to_string(),
+            "2p".to_string(),
+            "3s".to_string(),
+        ];
         let angular = convert_full_to_angular_list(&full);
         assert_eq!(angular, vec!["s ", "p-", "p ", "s "]);
 
         // Test with more complex list
-        let full = vec!["5s".to_string(), "4d-".to_string(), "4d".to_string(), "5p-".to_string()];
+        let full = vec![
+            "5s".to_string(),
+            "4d-".to_string(),
+            "4d".to_string(),
+            "5p-".to_string(),
+        ];
         let angular = convert_full_to_angular_list(&full);
         assert_eq!(angular, vec!["s ", "d-", "d ", "p-"]);
     }
@@ -422,19 +446,19 @@ mod tests {
 
     #[test]
     fn test_get_kappa_squared() {
-        assert_eq!(get_kappa_squared("s "), Some(1));   // kappa = -1
-        assert_eq!(get_kappa_squared("p-"), Some(1));   // kappa = 1
-        assert_eq!(get_kappa_squared("p "), Some(4));   // kappa = -2
-        assert_eq!(get_kappa_squared("d-"), Some(4));   // kappa = 2
-        assert_eq!(get_kappa_squared("d "), Some(9));   // kappa = -3
-        assert_eq!(get_kappa_squared("f-"), Some(9));   // kappa = 3
-        assert_eq!(get_kappa_squared("f "), Some(16));  // kappa = -4
-        assert_eq!(get_kappa_squared("g-"), Some(16));  // kappa = 4
-        assert_eq!(get_kappa_squared("g "), Some(25));  // kappa = -5
-        assert_eq!(get_kappa_squared("h-"), Some(25));  // kappa = 5
-        assert_eq!(get_kappa_squared("h "), Some(36));  // kappa = -6
-        assert_eq!(get_kappa_squared("i-"), Some(36));  // kappa = 6
-        assert_eq!(get_kappa_squared("i "), Some(49));  // kappa = -7
+        assert_eq!(get_kappa_squared("s "), Some(1)); // kappa = -1
+        assert_eq!(get_kappa_squared("p-"), Some(1)); // kappa = 1
+        assert_eq!(get_kappa_squared("p "), Some(4)); // kappa = -2
+        assert_eq!(get_kappa_squared("d-"), Some(4)); // kappa = 2
+        assert_eq!(get_kappa_squared("d "), Some(9)); // kappa = -3
+        assert_eq!(get_kappa_squared("f-"), Some(9)); // kappa = 3
+        assert_eq!(get_kappa_squared("f "), Some(16)); // kappa = -4
+        assert_eq!(get_kappa_squared("g-"), Some(16)); // kappa = 4
+        assert_eq!(get_kappa_squared("g "), Some(25)); // kappa = -5
+        assert_eq!(get_kappa_squared("h-"), Some(25)); // kappa = 5
+        assert_eq!(get_kappa_squared("h "), Some(36)); // kappa = -6
+        assert_eq!(get_kappa_squared("i-"), Some(36)); // kappa = 6
+        assert_eq!(get_kappa_squared("i "), Some(49)); // kappa = -7
         assert_eq!(get_kappa_squared("xyz"), None);
     }
 
@@ -459,10 +483,7 @@ mod tests {
 
     #[test]
     fn test_batch_normalize_descriptors() {
-        let descriptors = vec![
-            vec![1, 1, 1, 3, 9, 6],
-            vec![1, 1, 1, 1, 5, 6],
-        ];
+        let descriptors = vec![vec![1, 1, 1, 3, 9, 6], vec![1, 1, 1, 1, 5, 6]];
         let subshells = vec!["s ".to_string(), "d ".to_string()];
         let two_j_target = 6;
 
@@ -548,7 +569,7 @@ mod tests {
         // 2J_target=2
         // i=0: U=min(1, 2+1)=1  → 2J_cum[0]/1
         // i=1: U=min(2, 2+0)=2  → 2J_cum[1]/2
-        let descriptor = vec![1, 1, 1,  1, 1, 2];
+        let descriptor = vec![1, 1, 1, 1, 1, 2];
         let subshells = vec!["s ".to_string(), "s ".to_string()];
         let result = normalize_descriptor_per_csf(&descriptor, &subshells, 2).unwrap();
         // i=0
@@ -593,8 +614,10 @@ mod tests {
     fn test_normalize_descriptor_per_csf_full_notation_subshells() {
         // Full notation "2s" should be auto-converted and produce identical results
         let descriptor = vec![1, 1, 1];
-        let result_angular = normalize_descriptor_per_csf(&descriptor, &vec!["s ".to_string()], 1).unwrap();
-        let result_full    = normalize_descriptor_per_csf(&descriptor, &vec!["2s".to_string()], 1).unwrap();
+        let result_angular =
+            normalize_descriptor_per_csf(&descriptor, &vec!["s ".to_string()], 1).unwrap();
+        let result_full =
+            normalize_descriptor_per_csf(&descriptor, &vec!["2s".to_string()], 1).unwrap();
         for (a, b) in result_angular.iter().zip(result_full.iter()) {
             assert!((a - b).abs() < 1e-6);
         }
@@ -608,7 +631,7 @@ mod tests {
         // two_j_target=2
         // i=0 (f): U=min(16, 2+1)=3  ← rear constraint is binding (3 << prefix=16)
         // i=1 (s): U=min(17, 2+0)=2  ← rear constraint is binding
-        let descriptor = vec![4, 12, 3,  1, 1, 2];
+        let descriptor = vec![4, 12, 3, 1, 1, 2];
         let subshells = vec!["f ".to_string(), "s ".to_string()];
         let result = normalize_descriptor_per_csf(&descriptor, &subshells, 2).unwrap();
 
@@ -630,7 +653,7 @@ mod tests {
         // two_j_target=5
         // i=0 (p-): U=min(1, 5+8)=1  ← front constraint binding
         // i=1 (d ): U=min(9, 5+0)=5  ← rear constraint binding (5 < prefix=9)
-        let descriptor = vec![1, 1, 1,  2, 6, 5];
+        let descriptor = vec![1, 1, 1, 2, 6, 5];
         let subshells = vec!["p-".to_string(), "d ".to_string()];
         let result = normalize_descriptor_per_csf(&descriptor, &subshells, 5).unwrap();
 
@@ -642,5 +665,43 @@ mod tests {
         assert!((result[3] - (1.0 / 3.0)).abs() < 1e-5);
         assert!((result[4] - 0.75).abs() < 1e-5);
         assert!((result[5] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_infer_two_j_target_ignores_trailing_empty_subshells() {
+        let descriptor = vec![
+            2, 0, 0, 4, 0, 0, 6, 0, 0, 2, 0, 0, 4, 0, 0, 2, 0, 0, 3, 9, 9, 4, 16, 7, 0, 0, 0, 1, 5,
+            8, 0, 0, 0, 0, 0, 0,
+        ];
+
+        assert_eq!(infer_two_j_target(&descriptor), 8);
+    }
+
+    #[test]
+    fn test_normalize_descriptor_per_csf_with_trailing_empty_subshells() {
+        let descriptor = vec![
+            2, 0, 0, 4, 0, 0, 6, 0, 0, 2, 0, 0, 4, 0, 0, 2, 0, 0, 3, 9, 9, 4, 16, 7, 0, 0, 0, 1, 5,
+            8, 0, 0, 0, 0, 0, 0,
+        ];
+        let subshells = vec![
+            "5s".to_string(),
+            "4d-".to_string(),
+            "4d".to_string(),
+            "5p-".to_string(),
+            "5p".to_string(),
+            "6s".to_string(),
+            "4f-".to_string(),
+            "4f".to_string(),
+            "5d-".to_string(),
+            "5d".to_string(),
+            "6p-".to_string(),
+            "6p".to_string(),
+        ];
+
+        let result =
+            normalize_descriptor_per_csf(&descriptor, &subshells, infer_two_j_target(&descriptor))
+                .unwrap();
+
+        assert!((result[23] - (7.0 / 13.0)).abs() < 1e-6);
     }
 }

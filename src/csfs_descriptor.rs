@@ -36,8 +36,9 @@ pub mod parquet_batch {
         let toml_content = toml_content.trim();
 
         // Parse the TOML content using from_str instead of parse()
-        let toml_value: Value = toml::from_str(toml_content)
-            .with_context(|| format!("Failed to parse TOML from file: {}", header_path.display()))?;
+        let toml_value: Value = toml::from_str(toml_content).with_context(|| {
+            format!("Failed to parse TOML from file: {}", header_path.display())
+        })?;
 
         // Get header_lines from [header_info] section
         let header_lines = toml_value
@@ -71,7 +72,9 @@ pub mod parquet_batch {
             }
         }
 
-        Err(anyhow::anyhow!("Could not find peel subshells in header file"))
+        Err(anyhow::anyhow!(
+            "Could not find peel subshells in header file"
+        ))
     }
 
     /// Find the header file for a given parquet file
@@ -158,11 +161,16 @@ pub mod parquet_batch {
         let generator = super::CSFDescriptorGenerator::new(peel_subshells.clone());
 
         // Step 3: Open input parquet file
-        let file = std::fs::File::open(input_parquet)
-            .with_context(|| format!("Failed to open input parquet: {}", input_parquet.display()))?;
+        let file = std::fs::File::open(input_parquet).with_context(|| {
+            format!("Failed to open input parquet: {}", input_parquet.display())
+        })?;
 
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file)
-            .with_context(|| format!("Failed to create parquet reader: {}", input_parquet.display()))?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).with_context(|| {
+            format!(
+                "Failed to create parquet reader: {}",
+                input_parquet.display()
+            )
+        })?;
 
         let _schema = builder.schema();
 
@@ -178,7 +186,11 @@ pub mod parquet_batch {
 
         // Output schema: descriptor columns (one column per descriptor element)
         // Use Float32 for normalized output, Int32 for raw descriptors
-        let output_type = if normalize { DataType::Float32 } else { DataType::Int32 };
+        let output_type = if normalize {
+            DataType::Float32
+        } else {
+            DataType::Int32
+        };
         let mut fields = Vec::with_capacity(descriptor_size);
         for i in 0..descriptor_size {
             fields.push(Field::new(format!("col_{}", i), output_type.clone(), false));
@@ -195,12 +207,9 @@ pub mod parquet_batch {
             ))
             .build();
 
-        let mut writer = ArrowWriter::try_new(
-            output_file_handle,
-            output_schema.clone(),
-            Some(props),
-        )
-            .with_context(|| "Failed to create Parquet writer")?;
+        let mut writer =
+            ArrowWriter::try_new(output_file_handle, output_schema.clone(), Some(props))
+                .with_context(|| "Failed to create Parquet writer")?;
 
         // Step 5: Process each batch
         let mut total_csfs = 0;
@@ -237,18 +246,19 @@ pub mod parquet_batch {
                         .ok_or_else(|| anyhow::anyhow!("line3 column is not string type"))?;
 
                     // Process each row
-                    use arrow::array::{Array, Int32Builder, Float32Builder};
+                    use arrow::array::{Array, Float32Builder, Int32Builder};
                     use std::sync::Arc;
 
                     // Initialize builders for each column (avoids transpose overhead)
                     // Use Float32Builder for normalized output, Int32Builder for raw descriptors
                     if normalize {
-                        use crate::descriptor_normalization::normalize_descriptor_per_csf;
+                        use crate::descriptor_normalization::{
+                            infer_two_j_target, normalize_descriptor_per_csf,
+                        };
 
-                        let mut builders: Vec<Float32Builder> =
-                            (0..descriptor_size)
-                                .map(|_| arrow::array::Float32Builder::with_capacity(batch_size))
-                                .collect();
+                        let mut builders: Vec<Float32Builder> = (0..descriptor_size)
+                            .map(|_| arrow::array::Float32Builder::with_capacity(batch_size))
+                            .collect();
 
                         for i in 0..batch_size {
                             let line1 = line1_col.value(i);
@@ -258,7 +268,7 @@ pub mod parquet_batch {
 
                             match generator.parse_csf(line1, line2, line3) {
                                 Ok(descriptor) => {
-                                    let two_j_target = descriptor[descriptor_size - 1];
+                                    let two_j_target = infer_two_j_target(&descriptor);
                                     let normalized = normalize_descriptor_per_csf(
                                         &descriptor,
                                         &peel_subshells,
@@ -272,7 +282,10 @@ pub mod parquet_batch {
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
+                                    eprintln!(
+                                        "Warning: Failed to parse CSF at index {}: {}",
+                                        idx, e
+                                    );
                                     for col_idx in 0..descriptor_size {
                                         builders[col_idx].append_value(0.0f32);
                                     }
@@ -297,10 +310,9 @@ pub mod parquet_batch {
                             .write(&output_batch)
                             .with_context(|| "Failed to write batch")?;
                     } else {
-                        let mut builders: Vec<Int32Builder> =
-                            (0..descriptor_size)
-                                .map(|_| arrow::array::Int32Builder::with_capacity(batch_size))
-                                .collect();
+                        let mut builders: Vec<Int32Builder> = (0..descriptor_size)
+                            .map(|_| arrow::array::Int32Builder::with_capacity(batch_size))
+                            .collect();
 
                         for i in 0..batch_size {
                             let line1 = line1_col.value(i);
@@ -316,7 +328,10 @@ pub mod parquet_batch {
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
+                                    eprintln!(
+                                        "Warning: Failed to parse CSF at index {}: {}",
+                                        idx, e
+                                    );
                                     for col_idx in 0..descriptor_size {
                                         builders[col_idx].append_value(0i32);
                                     }
@@ -352,9 +367,7 @@ pub mod parquet_batch {
         }
 
         // Step 6: Finalize writer
-        writer
-            .finish()
-            .with_context(|| "Failed to finish writer")?;
+        writer.finish().with_context(|| "Failed to finish writer")?;
 
         Ok(BatchDescriptorStats {
             input_file: input_parquet.to_string_lossy().to_string(),
@@ -409,11 +422,11 @@ pub mod parquet_batch {
         use arrow::array::{Array, StringArray, UInt64Array};
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
+        use crossbeam_channel::{Receiver, Sender, bounded};
         use parquet::arrow::arrow_writer::ArrowWriter;
         use parquet::file::properties::WriterProperties;
-        use std::sync::Arc;
-        use crossbeam_channel::{bounded, Sender, Receiver};
         use std::collections::BTreeMap;
+        use std::sync::Arc;
 
         // Determine worker count
         let num_workers = num_workers.unwrap_or_else(|| {
@@ -426,7 +439,10 @@ pub mod parquet_batch {
 
         println!("开始生成描述符...");
         println!("输入: {:?} | 输出: {:?}", input_parquet, output_file);
-        println!("Worker: {} | 轨道: {} | 描述符大小: {}", num_workers, orbital_count, descriptor_size);
+        println!(
+            "Worker: {} | 轨道: {} | 描述符大小: {}",
+            num_workers, orbital_count, descriptor_size
+        );
         if normalize {
             println!("归一化: 启用 (per-CSF physics-correct normalization)");
         }
@@ -436,13 +452,18 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         let channel_capacity = num_workers * 2;
         let (work_tx, work_rx): (Sender<WorkItem>, Receiver<WorkItem>) = bounded(channel_capacity);
-        let (result_tx, result_rx): (Sender<ResultItem>, Receiver<ResultItem>) = bounded(channel_capacity);
+        let (result_tx, result_rx): (Sender<ResultItem>, Receiver<ResultItem>) =
+            bounded(channel_capacity);
 
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 2: Setup output schema and writer (multi-column format for better performance)
         ////////////////////////////////////////////////////////////////////////////////
         // Use Float32 for normalized output, Int32 for raw descriptors
-        let output_type = if normalize { DataType::Float32 } else { DataType::Int32 };
+        let output_type = if normalize {
+            DataType::Float32
+        } else {
+            DataType::Int32
+        };
         let mut fields = Vec::with_capacity(descriptor_size);
         for i in 0..descriptor_size {
             fields.push(Field::new(format!("col_{}", i), output_type.clone(), false));
@@ -458,11 +479,7 @@ pub mod parquet_batch {
             ))
             .build();
 
-        let mut writer = ArrowWriter::try_new(
-            output_file_handle,
-            schema.clone(),
-            Some(props),
-        )
+        let mut writer = ArrowWriter::try_new(output_file_handle, schema.clone(), Some(props))
             .with_context(|| "Failed to create Parquet writer")?;
 
         ////////////////////////////////////////////////////////////////////////////////
@@ -475,7 +492,7 @@ pub mod parquet_batch {
                 Ok(f) => f,
                 Err(e) => {
                     let _ = work_tx.send(WorkItem {
-                        batch_idx: usize::MAX,  // Error sentinel
+                        batch_idx: usize::MAX, // Error sentinel
                         rows: vec![],
                     });
                     return Err(anyhow::anyhow!("Failed to open input parquet: {}", e));
@@ -518,34 +535,39 @@ pub mod parquet_batch {
                             None => return Err(anyhow::anyhow!("idx column is not uint64 type")),
                         };
 
-                        let line1_col = match batch.column(1).as_any().downcast_ref::<StringArray>() {
+                        let line1_col = match batch.column(1).as_any().downcast_ref::<StringArray>()
+                        {
                             Some(col) => col,
                             None => return Err(anyhow::anyhow!("line1 column is not string type")),
                         };
 
-                        let line2_col = match batch.column(2).as_any().downcast_ref::<StringArray>() {
+                        let line2_col = match batch.column(2).as_any().downcast_ref::<StringArray>()
+                        {
                             Some(col) => col,
                             None => return Err(anyhow::anyhow!("line2 column is not string type")),
                         };
 
-                        let line3_col = match batch.column(3).as_any().downcast_ref::<StringArray>() {
+                        let line3_col = match batch.column(3).as_any().downcast_ref::<StringArray>()
+                        {
                             Some(col) => col,
                             None => return Err(anyhow::anyhow!("line3 column is not string type")),
                         };
 
                         // Extract rows as Arc<str> for zero-copy sharing across threads
                         let rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)> = (0..batch_size)
-                            .map(|i| (
-                                idx_col.value(i),
-                                line1_col.value(i).into(),
-                                line2_col.value(i).into(),
-                                line3_col.value(i).into(),
-                            ))
+                            .map(|i| {
+                                (
+                                    idx_col.value(i),
+                                    line1_col.value(i).into(),
+                                    line2_col.value(i).into(),
+                                    line3_col.value(i).into(),
+                                )
+                            })
                             .collect();
 
                         let work_item = WorkItem { batch_idx, rows };
                         match work_tx.send(work_item) {
-                            Ok(()) => {},
+                            Ok(()) => {}
                             Err(_) => return Err(anyhow::anyhow!("Failed to send work item")),
                         }
                         batch_idx += 1;
@@ -591,20 +613,27 @@ pub mod parquet_batch {
                     }
 
                     let batch_idx = work_item.batch_idx;
-                    let descriptors: Vec<Vec<i32>> = work_item.rows
+                    let descriptors: Vec<Vec<i32>> = work_item
+                        .rows
                         .into_par_iter()
                         .map(|(idx, ref line1, ref line2, ref line3)| {
                             match generator_clone.parse_csf(line1, line2, line3) {
                                 Ok(desc) => desc,
                                 Err(e) => {
-                                    eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
+                                    eprintln!(
+                                        "Warning: Failed to parse CSF at index {}: {}",
+                                        idx, e
+                                    );
                                     vec![0i32; descriptor_size]
                                 }
                             }
                         })
                         .collect();
 
-                    let result_item = ResultItem { batch_idx, descriptors };
+                    let result_item = ResultItem {
+                        batch_idx,
+                        descriptors,
+                    };
                     if result_tx_clone.send(result_item).is_err() {
                         return Err(anyhow::anyhow!("Failed to send result item"));
                     }
@@ -622,117 +651,130 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         let writer_handle: std::thread::JoinHandle<Result<(usize, usize)>> =
             std::thread::spawn(move || {
-            use arrow::array::{Int32Builder, Float32Builder};
-            use crate::descriptor_normalization::normalize_descriptor_per_csf;
+                use crate::descriptor_normalization::{
+                    infer_two_j_target, normalize_descriptor_per_csf,
+                };
+                use arrow::array::{Float32Builder, Int32Builder};
 
-            let mut pending: BTreeMap<usize, Vec<Vec<i32>>> = BTreeMap::new();
-            let mut next_write_idx = 0usize;
-            let mut total_descriptors = 0usize;
-            let mut total_batches_written = 0usize;
+                let mut pending: BTreeMap<usize, Vec<Vec<i32>>> = BTreeMap::new();
+                let mut next_write_idx = 0usize;
+                let mut total_descriptors = 0usize;
+                let mut total_batches_written = 0usize;
 
-            while let Ok(result_item) = result_rx.recv() {
-                let batch_idx = result_item.batch_idx;
-                let descriptors = result_item.descriptors;
+                while let Ok(result_item) = result_rx.recv() {
+                    let batch_idx = result_item.batch_idx;
+                    let descriptors = result_item.descriptors;
 
-                // Insert into pending map
-                pending.insert(batch_idx, descriptors);
+                    // Insert into pending map
+                    pending.insert(batch_idx, descriptors);
 
-                // Write all consecutive batches we have
-                while let Some(descriptors) = pending.remove(&next_write_idx) {
-                    let batch_size = descriptors.len();
-                    if batch_size == 0 {
-                        next_write_idx += 1;
-                        continue;
-                    }
-                    total_descriptors += batch_size;
+                    // Write all consecutive batches we have
+                    while let Some(descriptors) = pending.remove(&next_write_idx) {
+                        let batch_size = descriptors.len();
+                        if batch_size == 0 {
+                            next_write_idx += 1;
+                            continue;
+                        }
+                        total_descriptors += batch_size;
 
-                    // Build and write batch based on normalization setting
-                    if normalize {
-                        let mut builders: Vec<Float32Builder> =
-                            (0..descriptor_size)
+                        // Build and write batch based on normalization setting
+                        if normalize {
+                            let mut builders: Vec<Float32Builder> = (0..descriptor_size)
                                 .map(|_| Float32Builder::with_capacity(batch_size))
                                 .collect();
 
-                        // Build per-CSF normalized columns
-                        for desc in &descriptors {
-                            let two_j_target = desc[descriptor_size - 1];
-                            let normalized = normalize_descriptor_per_csf(
-                                desc,
-                                &peel_subshells_for_writer,
-                                two_j_target,
-                            )
-                            .with_context(|| "Failed to normalize descriptor batch item")?;
-                            for (col_idx, &val) in normalized.iter().enumerate() {
-                                builders[col_idx].append_value(val);
+                            // Build per-CSF normalized columns
+                            for desc in &descriptors {
+                                let two_j_target = infer_two_j_target(desc);
+                                let normalized = normalize_descriptor_per_csf(
+                                    desc,
+                                    &peel_subshells_for_writer,
+                                    two_j_target,
+                                )
+                                .with_context(|| "Failed to normalize descriptor batch item")?;
+                                for (col_idx, &val) in normalized.iter().enumerate() {
+                                    builders[col_idx].append_value(val);
+                                }
                             }
-                        }
 
-                        // Convert builders to Arrow arrays
-                        let column_arrays: Vec<Arc<dyn Array>> = builders
-                            .into_iter()
-                            .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
-                            .collect();
+                            // Convert builders to Arrow arrays
+                            let column_arrays: Vec<Arc<dyn Array>> = builders
+                                .into_iter()
+                                .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
+                                .collect();
 
-                        let output_batch = match RecordBatch::try_new(schema.clone(), column_arrays) {
-                            Ok(b) => b,
-                            Err(e) => return Err(anyhow::anyhow!("Failed to create output batch: {}", e)),
-                        };
+                            let output_batch =
+                                match RecordBatch::try_new(schema.clone(), column_arrays) {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        return Err(anyhow::anyhow!(
+                                            "Failed to create output batch: {}",
+                                            e
+                                        ));
+                                    }
+                                };
 
-                        if writer.write(&output_batch).is_err() {
-                            return Err(anyhow::anyhow!("Failed to write batch"));
-                        }
-                    } else {
-                        let mut builders: Vec<Int32Builder> =
-                            (0..descriptor_size)
+                            if writer.write(&output_batch).is_err() {
+                                return Err(anyhow::anyhow!("Failed to write batch"));
+                            }
+                        } else {
+                            let mut builders: Vec<Int32Builder> = (0..descriptor_size)
                                 .map(|_| Int32Builder::with_capacity(batch_size))
                                 .collect();
 
-                        // Build columns directly (no ListArray overhead)
-                        for desc in &descriptors {
-                            for (col_idx, &val) in desc.iter().enumerate() {
-                                builders[col_idx].append_value(val);
+                            // Build columns directly (no ListArray overhead)
+                            for desc in &descriptors {
+                                for (col_idx, &val) in desc.iter().enumerate() {
+                                    builders[col_idx].append_value(val);
+                                }
+                            }
+
+                            // Convert builders to Arrow arrays
+                            let column_arrays: Vec<Arc<dyn Array>> = builders
+                                .into_iter()
+                                .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
+                                .collect();
+
+                            let output_batch =
+                                match RecordBatch::try_new(schema.clone(), column_arrays) {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        return Err(anyhow::anyhow!(
+                                            "Failed to create output batch: {}",
+                                            e
+                                        ));
+                                    }
+                                };
+
+                            if writer.write(&output_batch).is_err() {
+                                return Err(anyhow::anyhow!("Failed to write batch"));
                             }
                         }
 
-                        // Convert builders to Arrow arrays
-                        let column_arrays: Vec<Arc<dyn Array>> = builders
-                            .into_iter()
-                            .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
-                            .collect();
+                        total_batches_written += 1;
+                        next_write_idx += 1;
 
-                        let output_batch = match RecordBatch::try_new(schema.clone(), column_arrays) {
-                            Ok(b) => b,
-                            Err(e) => return Err(anyhow::anyhow!("Failed to create output batch: {}", e)),
-                        };
-
-                        if writer.write(&output_batch).is_err() {
-                            return Err(anyhow::anyhow!("Failed to write batch"));
+                        if total_batches_written % 100 == 0 {
+                            println!("[写入进度] {} 个描述符", total_descriptors);
                         }
                     }
+                }
 
-                    total_batches_written += 1;
-                    next_write_idx += 1;
-
-                    if total_batches_written % 100 == 0 {
-                        println!("[写入进度] {} 个描述符", total_descriptors);
+                // Finalize writer
+                match writer.close() {
+                    Ok(_) => {
+                        println!("[写入完成] {} 个描述符", total_descriptors);
+                        Ok((total_descriptors, total_batches_written))
                     }
+                    Err(e) => Err(anyhow::anyhow!("Failed to close writer: {}", e)),
                 }
-            }
-
-            // Finalize writer
-            match writer.close() {
-                Ok(_) => {
-                    println!("[写入完成] {} 个描述符", total_descriptors);
-                    Ok((total_descriptors, total_batches_written))
-                }
-                Err(e) => Err(anyhow::anyhow!("Failed to close writer: {}", e)),
-            }
-        });
+            });
 
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 6: Wait for all threads and collect results
         ////////////////////////////////////////////////////////////////////////////////
-        let reader_result = reader_handle.join()
+        let reader_result = reader_handle
+            .join()
             .map_err(|e| anyhow::anyhow!("Reader thread panicked: {:?}", e))?
             .with_context(|| "Reader thread failed")?;
 
@@ -740,12 +782,14 @@ pub mod parquet_batch {
 
         // Wait for all worker threads
         for (i, handle) in worker_handles.into_iter().enumerate() {
-            handle.join()
+            handle
+                .join()
                 .map_err(|e| anyhow::anyhow!("Worker thread {} panicked: {:?}", i, e))?
                 .with_context(|| format!("Worker thread {} failed", i))?;
         }
 
-        let writer_result = writer_handle.join()
+        let writer_result = writer_handle
+            .join()
             .map_err(|e| anyhow::anyhow!("Writer thread panicked: {:?}", e))?
             .with_context(|| "Writer thread failed")?;
 
@@ -753,8 +797,14 @@ pub mod parquet_batch {
 
         println!("====================================");
         println!("处理完成！");
-        println!("输入 CSF: {} | 生成描述符: {}", total_csfs, total_descriptors);
-        println!("轨道数: {} | 描述符大小: {}", orbital_count, descriptor_size);
+        println!(
+            "输入 CSF: {} | 生成描述符: {}",
+            total_csfs, total_descriptors
+        );
+        println!(
+            "轨道数: {} | 描述符大小: {}",
+            orbital_count, descriptor_size
+        );
         println!("====================================");
 
         Ok(BatchDescriptorStats {

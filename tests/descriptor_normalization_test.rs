@@ -34,12 +34,22 @@ fn test_convert_full_to_angular_list() {
     use _rcsfs::descriptor_normalization::convert_full_to_angular_list;
 
     // Test list conversion
-    let full = vec!["2s".to_string(), "2p-".to_string(), "2p".to_string(), "3s".to_string()];
+    let full = vec![
+        "2s".to_string(),
+        "2p-".to_string(),
+        "2p".to_string(),
+        "3s".to_string(),
+    ];
     let angular = convert_full_to_angular_list(&full);
     assert_eq!(angular, vec!["s ", "p-", "p ", "s "]);
 
     // Test with more complex list
-    let full = vec!["5s".to_string(), "4d-".to_string(), "4d".to_string(), "5p-".to_string()];
+    let full = vec![
+        "5s".to_string(),
+        "4d-".to_string(),
+        "4d".to_string(),
+        "5p-".to_string(),
+    ];
     let angular = convert_full_to_angular_list(&full);
     assert_eq!(angular, vec!["s ", "d-", "d ", "p-"]);
 }
@@ -72,19 +82,19 @@ fn test_get_max_subshell_electrons() {
 fn test_get_kappa_squared() {
     use _rcsfs::descriptor_normalization::get_kappa_squared;
 
-    assert_eq!(get_kappa_squared("s "), Some(1));   // kappa = -1
-    assert_eq!(get_kappa_squared("p-"), Some(1));   // kappa = 1
-    assert_eq!(get_kappa_squared("p "), Some(4));   // kappa = -2
-    assert_eq!(get_kappa_squared("d-"), Some(4));   // kappa = 2
-    assert_eq!(get_kappa_squared("d "), Some(9));   // kappa = -3
-    assert_eq!(get_kappa_squared("f-"), Some(9));   // kappa = 3
-    assert_eq!(get_kappa_squared("f "), Some(16));  // kappa = -4
-    assert_eq!(get_kappa_squared("g-"), Some(16));  // kappa = 4
-    assert_eq!(get_kappa_squared("g "), Some(25));  // kappa = -5
-    assert_eq!(get_kappa_squared("h-"), Some(25));  // kappa = 5
-    assert_eq!(get_kappa_squared("h "), Some(36));  // kappa = -6
-    assert_eq!(get_kappa_squared("i-"), Some(36));  // kappa = 6
-    assert_eq!(get_kappa_squared("i "), Some(49));  // kappa = -7
+    assert_eq!(get_kappa_squared("s "), Some(1)); // kappa = -1
+    assert_eq!(get_kappa_squared("p-"), Some(1)); // kappa = 1
+    assert_eq!(get_kappa_squared("p "), Some(4)); // kappa = -2
+    assert_eq!(get_kappa_squared("d-"), Some(4)); // kappa = 2
+    assert_eq!(get_kappa_squared("d "), Some(9)); // kappa = -3
+    assert_eq!(get_kappa_squared("f-"), Some(9)); // kappa = 3
+    assert_eq!(get_kappa_squared("f "), Some(16)); // kappa = -4
+    assert_eq!(get_kappa_squared("g-"), Some(16)); // kappa = 4
+    assert_eq!(get_kappa_squared("g "), Some(25)); // kappa = -5
+    assert_eq!(get_kappa_squared("h-"), Some(25)); // kappa = 5
+    assert_eq!(get_kappa_squared("h "), Some(36)); // kappa = -6
+    assert_eq!(get_kappa_squared("i-"), Some(36)); // kappa = 6
+    assert_eq!(get_kappa_squared("i "), Some(49)); // kappa = -7
     assert_eq!(get_kappa_squared("xyz"), None);
 }
 
@@ -117,10 +127,7 @@ fn test_normalize_electron_count() {
 fn test_batch_normalize_descriptors() {
     use _rcsfs::descriptor_normalization::batch_normalize_descriptors;
 
-    let descriptors = vec![
-        vec![1, 1, 1, 3, 9, 6],
-        vec![1, 1, 1, 1, 5, 6],
-    ];
+    let descriptors = vec![vec![1, 1, 1, 3, 9, 6], vec![1, 1, 1, 1, 5, 6]];
     let subshells = vec!["s ".to_string(), "d ".to_string()];
     let two_j_target = 6;
 
@@ -207,9 +214,9 @@ fn test_normalize_descriptor_per_csf_d_half_filled() {
     let subshells = vec!["d ".to_string()];
     let result = normalize_descriptor_per_csf(&descriptor, &subshells, 9).unwrap();
 
-    assert!((result[0] - 0.5).abs() < 1e-5);  // 3/6
-    assert!((result[1] - 1.0).abs() < 1e-5);  // 9/9
-    assert!((result[2] - 1.0).abs() < 1e-5);  // 9/9
+    assert!((result[0] - 0.5).abs() < 1e-5); // 3/6
+    assert!((result[1] - 1.0).abs() < 1e-5); // 9/9
+    assert!((result[2] - 1.0).abs() < 1e-5); // 9/9
 }
 
 #[test]
@@ -223,7 +230,7 @@ fn test_normalize_descriptor_per_csf_d_non_half_filled() {
     let result = normalize_descriptor_per_csf(&descriptor, &subshells, 5).unwrap();
 
     assert!((result[0] - (1.0 / 6.0)).abs() < 1e-5);
-    assert!((result[1] - 1.0).abs() < 1e-5);  // 5/5, not 5/9
+    assert!((result[1] - 1.0).abs() < 1e-5); // 5/5, not 5/9
     assert!((result[2] - 1.0).abs() < 1e-5);
 }
 
@@ -236,18 +243,18 @@ fn test_normalize_descriptor_per_csf_two_subshells_prefix_suffix() {
     // 2J_target=2
     // i=0: U=min(1, 2+1)=1  → 2J_cum[0]/1
     // i=1: U=min(2, 2+0)=2  → 2J_cum[1]/2
-    let descriptor = vec![1, 1, 1,  1, 1, 2];
+    let descriptor = vec![1, 1, 1, 1, 1, 2];
     let subshells = vec!["s ".to_string(), "s ".to_string()];
     let result = normalize_descriptor_per_csf(&descriptor, &subshells, 2).unwrap();
 
     // i=0
     assert!((result[0] - 0.5).abs() < 1e-5);
     assert!((result[1] - 1.0).abs() < 1e-5);
-    assert!((result[2] - 1.0).abs() < 1e-5);  // 1/min(1,3)=1/1
+    assert!((result[2] - 1.0).abs() < 1e-5); // 1/min(1,3)=1/1
     // i=1
     assert!((result[3] - 0.5).abs() < 1e-5);
     assert!((result[4] - 1.0).abs() < 1e-5);
-    assert!((result[5] - 1.0).abs() < 1e-5);  // 2/min(2,2)=1.0
+    assert!((result[5] - 1.0).abs() < 1e-5); // 2/min(2,2)=1.0
 }
 
 #[test]
@@ -290,12 +297,10 @@ fn test_normalize_descriptor_per_csf_full_notation_subshells() {
 
     // Full notation "2s" and angular notation "s " must produce identical results
     let descriptor = vec![1, 1, 1];
-    let result_angular = normalize_descriptor_per_csf(
-        &descriptor, &vec!["s ".to_string()], 1
-    ).unwrap();
-    let result_full = normalize_descriptor_per_csf(
-        &descriptor, &vec!["2s".to_string()], 1
-    ).unwrap();
+    let result_angular =
+        normalize_descriptor_per_csf(&descriptor, &vec!["s ".to_string()], 1).unwrap();
+    let result_full =
+        normalize_descriptor_per_csf(&descriptor, &vec!["2s".to_string()], 1).unwrap();
 
     for (a, b) in result_angular.iter().zip(result_full.iter()) {
         assert!((a - b).abs() < 1e-6);
@@ -321,7 +326,7 @@ fn test_normalize_descriptor_per_csf_rear_constraint_binding() {
     // two_j_target=2
     // i=0 (f): U=min(16, 2+1)=3  ← rear constraint is binding (3 << prefix=16)
     // i=1 (s): U=min(17, 2+0)=2  ← rear constraint is binding
-    let descriptor = vec![4, 12, 3,  1, 1, 2];
+    let descriptor = vec![4, 12, 3, 1, 1, 2];
     let subshells = vec!["f ".to_string(), "s ".to_string()];
     let result = normalize_descriptor_per_csf(&descriptor, &subshells, 2).unwrap();
 
@@ -345,7 +350,7 @@ fn test_normalize_descriptor_per_csf_heterogeneous_partial_occupation() {
     // two_j_target=5
     // i=0 (p-): U=min(1, 5+8)=1  ← front constraint binding
     // i=1 (d ): U=min(9, 5+0)=5  ← rear constraint binding (5 < prefix=9)
-    let descriptor = vec![1, 1, 1,  2, 6, 5];
+    let descriptor = vec![1, 1, 1, 2, 6, 5];
     let subshells = vec!["p-".to_string(), "d ".to_string()];
     let result = normalize_descriptor_per_csf(&descriptor, &subshells, 5).unwrap();
 

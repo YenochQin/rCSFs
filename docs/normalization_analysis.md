@@ -1,6 +1,6 @@
 # 描述符归一化方案分析报告
 
-基于 GRASP `rcsfgenerate90`(`D:\ProjectFiles\grasp_raw\src\appl\rcsfgenerate90`) 源码审查（`genb.f90`, `kopp1.f90`, `kopp2.f90`）及 rCSFs 当前实现（`src/descriptor_normalization.rs`, `src/csfs_descriptor.rs`）。
+基于 GRASP `rcsfgenerate90` 源码审查（`genb.f90`, `kopp1.f90`, `kopp2.f90`）及 rCSFs 当前实现（`src/descriptor_normalization.rs`, `src/csfs_descriptor.rs`）。
 
 ---
 

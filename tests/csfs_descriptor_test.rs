@@ -47,10 +47,11 @@ fn test_descriptor_generator_parse_csf_basic() {
     assert_eq!(descriptor[4], 0);  // J_middle = 0
     assert_eq!(descriptor[5], 0);  // J_coupling = 0
 
-    // Verify third orbital (4d): [6, 3, 2]
+    // Verify third orbital (4d): [6, 3, 3]
+    // coupling line is empty for this position so it falls back to middle_item (3/2 -> 3)
     assert_eq!(descriptor[6], 6);  // 6 electrons
     assert_eq!(descriptor[7], 3);  // J_middle = 3/2 -> 3
-    assert_eq!(descriptor[8], 2);  // J_coupling = 2
+    assert_eq!(descriptor[8], 3);  // J_coupling falls back to J_middle = 3
 
     // Verify last orbital (6s): [2, 0, 8] (last orbital gets final J)
     assert_eq!(descriptor[15], 2);  // 2 electrons
@@ -132,10 +133,9 @@ fn test_descriptor_generator_get_config() {
     let subshells = vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()];
     let generator = CSFDescriptorGenerator::new(subshells.clone());
 
-    // Test get_config() method
-    let config = generator.get_config();
-    assert_eq!(config.get("orbital_count"), Some(&3));
-    assert_eq!(config.get("peel_subshells"), Some(&subshells));
+    // Verify config via available public methods
+    assert_eq!(generator.orbital_count(), 3);
+    assert_eq!(generator.peel_subshells(), subshells.as_slice());
 }
 
 #[test]

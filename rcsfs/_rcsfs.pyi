@@ -84,6 +84,7 @@ def py_generate_descriptors_from_parquet(
     output_file: str,
     peel_subshells: list[str],
     num_workers: Optional[int] = None,
+    normalize: bool = False,
 ) -> DescriptorGenerationStats: ...
 
 def py_read_peel_subshells(header_path: str) -> list[str]: ...

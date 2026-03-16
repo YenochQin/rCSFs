@@ -122,7 +122,6 @@ pub mod parquet_batch {
     /// * `peel_subshells` - Optional list of subshell names (auto-detected if None)
     /// * `header_path` - Optional path to header TOML file
     /// * `normalize` - Whether to normalize descriptors (default: false)
-    /// * `max_cumulative_doubled_j` - Maximum cumulative 2J value for normalization (required if normalize=true)
     ///
     /// # Returns
     /// * `Ok(BatchDescriptorStats)` - Statistics about the batch operation
@@ -137,7 +136,6 @@ pub mod parquet_batch {
         peel_subshells: Option<Vec<String>>,
         header_path: Option<PathBuf>,
         normalize: bool,
-        max_cumulative_doubled_j: Option<i32>,
     ) -> Result<BatchDescriptorStats> {
         // Step 1: Determine peel_subshells
         let peel_subshells = match peel_subshells {
@@ -155,25 +153,6 @@ pub mod parquet_batch {
 
         let orbital_count = peel_subshells.len();
         let descriptor_size = 3 * orbital_count;
-
-        // Validate normalization parameters
-        let max_cumulative_doubled_j = if normalize {
-            match max_cumulative_doubled_j {
-                Some(v) => v,
-                None => return Err(anyhow::anyhow!("max_cumulative_doubled_j is required when normalize=true")),
-            }
-        } else {
-            0  // Unused when normalize=false
-        };
-
-        // Pre-compute normalization reciprocals if needed
-        let normalization_reciprocals: Option<Vec<f32>> = if normalize {
-            use crate::descriptor_normalization::{get_subshells_properties, compute_properties_reciprocals};
-            let denominators = get_subshells_properties(&peel_subshells, max_cumulative_doubled_j)?;
-            Some(compute_properties_reciprocals(&denominators)?)
-        } else {
-            None
-        };
 
         // Step 2: Create descriptor generator
         let generator = super::CSFDescriptorGenerator::new(peel_subshells.clone());
@@ -264,12 +243,12 @@ pub mod parquet_batch {
                     // Initialize builders for each column (avoids transpose overhead)
                     // Use Float32Builder for normalized output, Int32Builder for raw descriptors
                     if normalize {
+                        use crate::descriptor_normalization::normalize_descriptor_per_csf;
+
                         let mut builders: Vec<Float32Builder> =
                             (0..descriptor_size)
                                 .map(|_| arrow::array::Float32Builder::with_capacity(batch_size))
                                 .collect();
-
-                        let reciprocals = normalization_reciprocals.as_ref().unwrap();
 
                         for i in 0..batch_size {
                             let line1 = line1_col.value(i);
@@ -279,17 +258,27 @@ pub mod parquet_batch {
 
                             match generator.parse_csf(line1, line2, line3) {
                                 Ok(descriptor) => {
-                                    // Normalize and append directly to column builders
-                                    for (col_idx, &val) in descriptor.iter().enumerate() {
-                                        let normalized_val = val as f32 * reciprocals[col_idx];
-                                        builders[col_idx].append_value(normalized_val);
+                                    let two_j_target = descriptor[descriptor_size - 1];
+                                    let normalized = normalize_descriptor_per_csf(
+                                        &descriptor,
+                                        &peel_subshells,
+                                        two_j_target,
+                                    )
+                                    .with_context(|| {
+                                        format!("Failed to normalize CSF at index {}", idx)
+                                    })?;
+                                    for (col_idx, &val) in normalized.iter().enumerate() {
+                                        builders[col_idx].append_value(val);
                                     }
-                                    descriptor_count += 1;
                                 }
                                 Err(e) => {
                                     eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
+                                    for col_idx in 0..descriptor_size {
+                                        builders[col_idx].append_value(0.0f32);
+                                    }
                                 }
                             }
+                            descriptor_count += 1;
                         }
 
                         // Convert builders to Arrow arrays
@@ -325,12 +314,15 @@ pub mod parquet_batch {
                                     for (col_idx, &val) in descriptor.iter().enumerate() {
                                         builders[col_idx].append_value(val);
                                     }
-                                    descriptor_count += 1;
                                 }
                                 Err(e) => {
                                     eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
+                                    for col_idx in 0..descriptor_size {
+                                        builders[col_idx].append_value(0i32);
+                                    }
                                 }
                             }
+                            descriptor_count += 1;
                         }
 
                         // Convert builders to Arrow arrays
@@ -407,14 +399,12 @@ pub mod parquet_batch {
     /// * `peel_subshells` - List of subshell names
     /// * `num_workers` - Number of worker threads (default: CPU core count)
     /// * `normalize` - Whether to normalize descriptors (default: false)
-    /// * `max_cumulative_doubled_j` - Maximum cumulative 2J value for normalization (required if normalize=true)
     pub fn generate_descriptors_from_parquet_parallel(
         input_parquet: &Path,
         output_file: &Path,
         peel_subshells: Vec<String>,
         num_workers: Option<usize>,
         normalize: bool,
-        max_cumulative_doubled_j: Option<i32>,
     ) -> Result<BatchDescriptorStats> {
         use arrow::array::{Array, StringArray, UInt64Array};
         use arrow::datatypes::{DataType, Field, Schema};
@@ -434,30 +424,11 @@ pub mod parquet_batch {
         let orbital_count = peel_subshells.len();
         let descriptor_size = 3 * orbital_count;
 
-        // Validate normalization parameters
-        let max_cumulative_doubled_j = if normalize {
-            match max_cumulative_doubled_j {
-                Some(v) => v,
-                None => return Err(anyhow::anyhow!("max_cumulative_doubled_j is required when normalize=true")),
-            }
-        } else {
-            0  // Unused when normalize=false
-        };
-
-        // Pre-compute normalization reciprocals if needed
-        let normalization_reciprocals: Option<Vec<f32>> = if normalize {
-            use crate::descriptor_normalization::{get_subshells_properties, compute_properties_reciprocals};
-            let denominators = get_subshells_properties(&peel_subshells, max_cumulative_doubled_j)?;
-            Some(compute_properties_reciprocals(&denominators)?)
-        } else {
-            None
-        };
-
         println!("开始生成描述符...");
         println!("输入: {:?} | 输出: {:?}", input_parquet, output_file);
         println!("Worker: {} | 轨道: {} | 描述符大小: {}", num_workers, orbital_count, descriptor_size);
         if normalize {
-            println!("归一化: 启用 (max_cumulative_doubled_j = {})", max_cumulative_doubled_j);
+            println!("归一化: 启用 (per-CSF physics-correct normalization)");
         }
 
         ////////////////////////////////////////////////////////////////////////////////
@@ -597,6 +568,7 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 4: Multiple Worker threads - compete to process items from channel
         ////////////////////////////////////////////////////////////////////////////////
+        let peel_subshells_for_writer = peel_subshells.clone();
         let generator = Arc::new(super::CSFDescriptorGenerator::new(peel_subshells));
         let mut worker_handles = Vec::new();
 
@@ -651,14 +623,12 @@ pub mod parquet_batch {
         let writer_handle: std::thread::JoinHandle<Result<(usize, usize)>> =
             std::thread::spawn(move || {
             use arrow::array::{Int32Builder, Float32Builder};
+            use crate::descriptor_normalization::normalize_descriptor_per_csf;
 
             let mut pending: BTreeMap<usize, Vec<Vec<i32>>> = BTreeMap::new();
             let mut next_write_idx = 0usize;
             let mut total_descriptors = 0usize;
             let mut total_batches_written = 0usize;
-
-            // Clone normalization reciprocals for writer thread
-            let normalization_reciprocals_clone = normalization_reciprocals.clone();
 
             while let Ok(result_item) = result_rx.recv() {
                 let batch_idx = result_item.batch_idx;
@@ -678,17 +648,22 @@ pub mod parquet_batch {
 
                     // Build and write batch based on normalization setting
                     if normalize {
-                        let reciprocals = normalization_reciprocals_clone.as_ref().unwrap();
                         let mut builders: Vec<Float32Builder> =
                             (0..descriptor_size)
                                 .map(|_| Float32Builder::with_capacity(batch_size))
                                 .collect();
 
-                        // Build normalized columns
+                        // Build per-CSF normalized columns
                         for desc in &descriptors {
-                            for (col_idx, &val) in desc.iter().enumerate() {
-                                let normalized_val = val as f32 * reciprocals[col_idx];
-                                builders[col_idx].append_value(normalized_val);
+                            let two_j_target = desc[descriptor_size - 1];
+                            let normalized = normalize_descriptor_per_csf(
+                                desc,
+                                &peel_subshells_for_writer,
+                                two_j_target,
+                            )
+                            .with_context(|| "Failed to normalize descriptor batch item")?;
+                            for (col_idx, &val) in normalized.iter().enumerate() {
+                                builders[col_idx].append_value(val);
                             }
                         }
 
@@ -1046,8 +1021,7 @@ use pyo3::prelude::*;
     output_file,
     peel_subshells,
     num_workers=None,
-    normalize=false,
-    max_cumulative_doubled_j=None
+    normalize=false
 ))]
 fn py_generate_descriptors_from_parquet(
     py: Python,
@@ -1056,7 +1030,6 @@ fn py_generate_descriptors_from_parquet(
     peel_subshells: Vec<String>,
     num_workers: Option<usize>,
     normalize: bool,
-    max_cumulative_doubled_j: Option<i32>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     use pyo3::types::PyDict;
     use std::path::Path;
@@ -1073,7 +1046,6 @@ fn py_generate_descriptors_from_parquet(
                 peel_subshells,
                 num_workers,
                 normalize,
-                max_cumulative_doubled_j,
             )
         })
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
@@ -1120,22 +1092,22 @@ mod tests {
 
     #[test]
     fn test_j_to_double_j_fractional() {
-        assert_eq!(j_to_double_j("3/2"), Ok(3));
-        assert_eq!(j_to_double_j("5/2"), Ok(5));
-        assert_eq!(j_to_double_j("1/2"), Ok(1));
+        assert_eq!(j_to_double_j("3/2").unwrap(), 3);
+        assert_eq!(j_to_double_j("5/2").unwrap(), 5);
+        assert_eq!(j_to_double_j("1/2").unwrap(), 1);
     }
 
     #[test]
     fn test_j_to_double_j_integer() {
-        assert_eq!(j_to_double_j("2"), Ok(4));
-        assert_eq!(j_to_double_j("3"), Ok(6));
-        assert_eq!(j_to_double_j("4"), Ok(8));
+        assert_eq!(j_to_double_j("2").unwrap(), 4);
+        assert_eq!(j_to_double_j("3").unwrap(), 6);
+        assert_eq!(j_to_double_j("4").unwrap(), 8);
     }
 
     #[test]
     fn test_j_to_double_j_with_parity() {
-        assert_eq!(j_to_double_j("4-"), Ok(8));
-        assert_eq!(j_to_double_j("3+"), Ok(6));
+        assert_eq!(j_to_double_j("4-").unwrap(), 8);
+        assert_eq!(j_to_double_j("3+").unwrap(), 6);
     }
 
     #[test]

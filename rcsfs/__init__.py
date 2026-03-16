@@ -207,7 +207,6 @@ def generate_descriptors_from_parquet(
     peel_subshells: list[str],
     num_workers: Optional[int] = None,
     normalize: bool = False,
-    max_cumulative_doubled_j: Optional[int] = None,
 ) -> DescriptorGenerationStats:
     """
     Generate CSF descriptors from a parquet file using parallel processing.
@@ -228,8 +227,11 @@ def generate_descriptors_from_parquet(
         output_parquet: Path to output Parquet file for descriptors
         peel_subshells: List of subshell names (e.g., ['5s', '4d-', '4d', '5p-', '5p', '6s'])
         num_workers: Number of worker threads (default: CPU core count)
-        normalize: Whether to normalize descriptors (default: False)
-        max_cumulative_doubled_j: Maximum cumulative 2J value for normalization (required if normalize=True)
+        normalize: Whether to normalize descriptors using per-CSF physics-correct
+            denominators (default: False). When True, each descriptor triplet
+            [n_i, 2Q_i, 2J_cum,i] is normalized by [g_i, n_i*(g_i-n_i),
+            min(prefix_i, 2J_target+suffix_i)] respectively, where 2J_target is
+            read from the final coupling value of each individual CSF.
 
     Returns:
         Dictionary containing generation statistics:
@@ -265,7 +267,6 @@ def generate_descriptors_from_parquet(
         ...     "descriptors_normalized.parquet",
         ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s'],
         ...     normalize=True,
-        ...     max_cumulative_doubled_j=10
         ... )
 
         >>> # With custom worker count for large files
@@ -299,7 +300,6 @@ def generate_descriptors_from_parquet(
         peel_subshells=peel_subshells,
         num_workers=num_workers,
         normalize=normalize,
-        max_cumulative_doubled_j=max_cumulative_doubled_j,
     )
 
 

@@ -10,8 +10,8 @@ python = ["dep:pyo3"]
 
 [dependencies]
 arrow = "58.0.0"
-parquet = "57.1.0"
-pyo3 = { version = "0.27.2", optional = true }
+parquet = "58.0.0"
+pyo3 = { version = "0.28.2", optional = true }
 toml = "0.9.8"
 serde = { version = "1.0.215", features = ["derive"] }
 crossbeam-channel = "0.5.13"

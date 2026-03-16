@@ -88,6 +88,7 @@ fn test_get_kappa_squared() {
     assert_eq!(get_kappa_squared("xyz"), None);
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_get_subshell_properties() {
     use _rcsfs::descriptor_normalization::get_subshell_properties;
@@ -114,6 +115,7 @@ fn test_get_subshell_properties() {
     assert!(get_subshell_properties("xyz", 10).is_err());
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_get_subshells_properties() {
     use _rcsfs::descriptor_normalization::get_subshells_properties;
@@ -153,6 +155,7 @@ fn test_get_subshells_properties() {
     assert!(get_subshells_properties(&invalid_subshells, 10).is_err());
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_get_subshells_properties_with_full_notation() {
     use _rcsfs::descriptor_normalization::get_subshells_properties;
@@ -184,6 +187,7 @@ fn test_get_subshells_properties_with_full_notation() {
 // Reciprocal Computation Tests
 //////////////////////////////////////////////////////////////////////////////
 
+#[allow(deprecated)]
 #[test]
 fn test_compute_properties_reciprocals() {
     use _rcsfs::descriptor_normalization::compute_properties_reciprocals;
@@ -211,6 +215,7 @@ fn test_compute_properties_reciprocals() {
     assert!(compute_properties_reciprocals(&with_zero).is_err());
 
     // Test combined with get_subshells_properties
+    use _rcsfs::descriptor_normalization::get_subshells_properties;
     let subshells = vec!["s ".to_string(), "p ".to_string()];
     let props = get_subshells_properties(&subshells, 10).unwrap();
     let reciprocals = compute_properties_reciprocals(&props).unwrap();
@@ -234,13 +239,13 @@ fn test_normalize_electron_count() {
     use _rcsfs::descriptor_normalization::normalize_electron_count;
 
     // s orbital: 2/2 = 1.0
-    assert_eq!(normalize_electron_count(2, "s "), Ok(1.0));
+    assert!((normalize_electron_count(2, "s ").unwrap() - 1.0).abs() < 1e-5);
 
     // d orbital: 6/6 = 1.0
-    assert_eq!(normalize_electron_count(6, "d "), Ok(1.0));
+    assert!((normalize_electron_count(6, "d ").unwrap() - 1.0).abs() < 1e-5);
 
     // p- orbital: 2/2 = 1.0 (full)
-    assert_eq!(normalize_electron_count(2, "p-"), Ok(1.0));
+    assert!((normalize_electron_count(2, "p-").unwrap() - 1.0).abs() < 1e-5);
 
     // p orbital: 3/4 = 0.75 (partially filled)
     let result = normalize_electron_count(3, "p ").unwrap();
@@ -250,41 +255,39 @@ fn test_normalize_electron_count() {
     assert!(normalize_electron_count(5, "xyz").is_err());
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_normalize_descriptor() {
     use _rcsfs::descriptor_normalization::normalize_descriptor;
 
-    let descriptor = vec![2, 3, 4, 6, 3, 8]; // 2 orbitals
+    // s (i=0): g=2, u=1*(2-1)=1; prefix=[1], suffix=[9]
+    //   n/g=0.5, 2Q/u=1/1=1.0, U=min(1, 10+9)=1, 2J/U=1/1=1.0
+    // d (i=1): g=6, u=3*(6-3)=9; prefix=[1,10], suffix=[0]
+    //   n/g=3/6=0.5, 2Q/u=9/9=1.0, U=min(10, 10+0)=10, 2J/U=10/10=1.0
+    let descriptor = vec![1, 1, 1, 3, 9, 10];
     let subshells = vec!["s ".to_string(), "d ".to_string()];
-    let max_cumulative_doubled_j = 10;
+    let two_j_target = 10;
 
-    let result = normalize_descriptor(&descriptor, &subshells, max_cumulative_doubled_j).unwrap();
+    let result = normalize_descriptor(&descriptor, &subshells, two_j_target).unwrap();
 
-    // get_subshells_properties => [2, 1, 10, 6, 9, 10]
-    // reciprocals => [0.5, 1.0, 0.1, 0.167, 0.111, 0.1]
-    // result: [2*0.5, 3*1.0, 4*0.1, 6*0.167, 3*0.111, 8*0.1]
-    //       = [1.0, 3.0, 0.4, 1.0, 0.333, 0.8]
-
-    // First orbital (s): 2*0.5=1.0, 3*1.0=3.0, 4*0.1=0.4
-    assert!((result[0] - 1.0).abs() < 0.01);
-    assert!((result[1] - 3.0).abs() < 0.01);
-    assert!((result[2] - 0.4).abs() < 0.01);
-
-    // Second orbital (d): 6*0.167=1.0, 3*0.111=0.333, 8*0.1=0.8
-    assert!((result[3] - 1.0).abs() < 0.01);
-    assert!((result[4] - 0.333).abs() < 0.01);
-    assert!((result[5] - 0.8).abs() < 0.01);
+    assert!((result[0] - 0.5).abs() < 1e-5);
+    assert!((result[1] - 1.0).abs() < 1e-5);
+    assert!((result[2] - 1.0).abs() < 1e-5);
+    assert!((result[3] - 0.5).abs() < 1e-5);
+    assert!((result[4] - 1.0).abs() < 1e-5);
+    assert!((result[5] - 1.0).abs() < 1e-5);
 }
 
+#[allow(deprecated)]
 #[test]
 fn test_normalize_descriptor_length_mismatch() {
     use _rcsfs::descriptor_normalization::normalize_descriptor;
 
     let descriptor = vec![2, 3, 4, 6]; // Wrong length (should be 6 for 2 orbitals)
     let subshells = vec!["s ".to_string(), "d ".to_string()];
-    let max_cumulative_doubled_j = 10;
+    let two_j_target = 10;
 
-    assert!(normalize_descriptor(&descriptor, &subshells, max_cumulative_doubled_j).is_err());
+    assert!(normalize_descriptor(&descriptor, &subshells, two_j_target).is_err());
 }
 
 #[test]
@@ -292,25 +295,21 @@ fn test_batch_normalize_descriptors() {
     use _rcsfs::descriptor_normalization::batch_normalize_descriptors;
 
     let descriptors = vec![
-        vec![1, 3, 4, 3, 3, 8],
-        vec![2, 3, 4, 6, 3, 8],
+        vec![1, 1, 1, 3, 9, 6],
+        vec![1, 1, 1, 1, 5, 6],
     ];
     let subshells = vec!["s ".to_string(), "d ".to_string()];
-    let max_cumulative_doubled_j = 10;
+    let two_j_target = 6;
 
-    let results = batch_normalize_descriptors(&descriptors, &subshells, max_cumulative_doubled_j).unwrap();
+    let results = batch_normalize_descriptors(&descriptors, &subshells, two_j_target).unwrap();
 
     assert_eq!(results.len(), 2);
 
-    // reciprocals: [0.5, 1.0, 0.1, 0.167, 0.111, 0.1]
-
-    // First descriptor: [1, 3, 4, 3, 3, 8] * reciprocals
-    assert!((results[0][0] - 0.5).abs() < 0.01);  // 1*0.5
-    assert!((results[0][3] - 0.5).abs() < 0.01);  // 3*0.167
-
-    // Second descriptor: [2, 3, 4, 6, 3, 8] * reciprocals
-    assert!((results[1][0] - 1.0).abs() < 0.01);  // 2*0.5
-    assert!((results[1][3] - 1.0).abs() < 0.01);  // 6*0.167
+    assert!((results[0][0] - 0.5).abs() < 1e-5);
+    assert!((results[0][5] - 1.0).abs() < 1e-5);
+    assert!((results[1][0] - 0.5).abs() < 1e-5);
+    assert!((results[1][4] - 1.0).abs() < 1e-5);
+    assert!((results[1][5] - 1.0).abs() < 1e-5);
 }
 
 #[test]
@@ -323,4 +322,216 @@ fn test_get_all_subshell_limits() {
     assert_eq!(limits.get("p-"), Some(&2.0));
     assert_eq!(limits.get("d "), Some(&6.0));
     assert_eq!(limits.get("f-"), Some(&6.0));
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// Per-CSF Physics-Correct Normalization Tests
+//////////////////////////////////////////////////////////////////////////////
+
+#[test]
+fn test_normalize_descriptor_per_csf_s_orbital() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    // s orbital: g=2, n=1, u=1*(2-1)=1
+    // prefix[0]=1, suffix[0]=0
+    // U_0 = min(1, 1+0) = 1
+    // n_i/g=0.5, 2Q/u=1/1=1.0, 2J/U=1/1=1.0
+    let descriptor = vec![1, 1, 1];
+    let subshells = vec!["s ".to_string()];
+    let result = normalize_descriptor_per_csf(&descriptor, &subshells, 1).unwrap();
+
+    assert!((result[0] - 0.5).abs() < 1e-5);
+    assert!((result[1] - 1.0).abs() < 1e-5);
+    assert!((result[2] - 1.0).abs() < 1e-5);
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_empty_subshell() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    // n=0: u=0 → 2Q and 2J_cum fields must output 0.0
+    let descriptor = vec![0, 0, 0];
+    let subshells = vec!["p ".to_string()];
+    let result = normalize_descriptor_per_csf(&descriptor, &subshells, 0).unwrap();
+
+    assert!((result[0] - 0.0).abs() < 1e-5);
+    assert!((result[1] - 0.0).abs() < 1e-5);
+    assert!((result[2] - 0.0).abs() < 1e-5);
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_full_subshell() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    // d orbital full: n=6=g, u=0 → n_i/g=1.0, others 0.0
+    let descriptor = vec![6, 0, 0];
+    let subshells = vec!["d ".to_string()];
+    let result = normalize_descriptor_per_csf(&descriptor, &subshells, 0).unwrap();
+
+    assert!((result[0] - 1.0).abs() < 1e-5);
+    assert!((result[1] - 0.0).abs() < 1e-5);
+    assert!((result[2] - 0.0).abs() < 1e-5);
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_d_half_filled() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    // d orbital half-filled: n=3, g=6, u=3*(6-3)=9
+    // At half-filling u == kappa^2, so 2Q_max/u = 9/9 = 1.0
+    // prefix[0]=9, suffix[0]=0, U_0=min(9,9+0)=9
+    let descriptor = vec![3, 9, 9];
+    let subshells = vec!["d ".to_string()];
+    let result = normalize_descriptor_per_csf(&descriptor, &subshells, 9).unwrap();
+
+    assert!((result[0] - 0.5).abs() < 1e-5);  // 3/6
+    assert!((result[1] - 1.0).abs() < 1e-5);  // 9/9
+    assert!((result[2] - 1.0).abs() < 1e-5);  // 9/9
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_d_non_half_filled() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    // d orbital with n=1: u=1*(6-1)=5  (kappa^2=9 would be loose; u=5 is tighter)
+    // 2Q_max for n=1 in d orbital is 5, so 5/5 = 1.0 (not 5/9 as with kappa^2)
+    let descriptor = vec![1, 5, 5];
+    let subshells = vec!["d ".to_string()];
+    let result = normalize_descriptor_per_csf(&descriptor, &subshells, 5).unwrap();
+
+    assert!((result[0] - (1.0 / 6.0)).abs() < 1e-5);
+    assert!((result[1] - 1.0).abs() < 1e-5);  // 5/5, not 5/9
+    assert!((result[2] - 1.0).abs() < 1e-5);
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_two_subshells_prefix_suffix() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    // Two s orbitals: g=[2,2], n=[1,1], u=[1,1]
+    // prefix=[1,2], suffix=[1,0]
+    // 2J_target=2
+    // i=0: U=min(1, 2+1)=1  → 2J_cum[0]/1
+    // i=1: U=min(2, 2+0)=2  → 2J_cum[1]/2
+    let descriptor = vec![1, 1, 1,  1, 1, 2];
+    let subshells = vec!["s ".to_string(), "s ".to_string()];
+    let result = normalize_descriptor_per_csf(&descriptor, &subshells, 2).unwrap();
+
+    // i=0
+    assert!((result[0] - 0.5).abs() < 1e-5);
+    assert!((result[1] - 1.0).abs() < 1e-5);
+    assert!((result[2] - 1.0).abs() < 1e-5);  // 1/min(1,3)=1/1
+    // i=1
+    assert!((result[3] - 0.5).abs() < 1e-5);
+    assert!((result[4] - 1.0).abs() < 1e-5);
+    assert!((result[5] - 1.0).abs() < 1e-5);  // 2/min(2,2)=1.0
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_last_position_is_one() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    // When prefix[N-1] >= 2J_target, the last coupling always normalizes to 1.0
+    // p orbital: n=2, g=4, u=2*(4-2)=4; 2J_target=4
+    // prefix[0]=4, suffix[0]=0, U_0=min(4,4)=4
+    // last coupling = 2J_target = 4 → 4/4=1.0
+    let descriptor = vec![2, 4, 4];
+    let subshells = vec!["p ".to_string()];
+    let result = normalize_descriptor_per_csf(&descriptor, &subshells, 4).unwrap();
+
+    assert!((result[2] - 1.0).abs() < 1e-5);
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_length_mismatch() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    let descriptor = vec![1, 1]; // too short for 1 orbital (needs 3)
+    let subshells = vec!["s ".to_string()];
+    assert!(normalize_descriptor_per_csf(&descriptor, &subshells, 1).is_err());
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_empty_descriptor() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    let descriptor = vec![];
+    let subshells = vec![];
+    let result = normalize_descriptor_per_csf(&descriptor, &subshells, 0).unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_full_notation_subshells() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    // Full notation "2s" and angular notation "s " must produce identical results
+    let descriptor = vec![1, 1, 1];
+    let result_angular = normalize_descriptor_per_csf(
+        &descriptor, &vec!["s ".to_string()], 1
+    ).unwrap();
+    let result_full = normalize_descriptor_per_csf(
+        &descriptor, &vec!["2s".to_string()], 1
+    ).unwrap();
+
+    for (a, b) in result_angular.iter().zip(result_full.iter()) {
+        assert!((a - b).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_unknown_subshell() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    let descriptor = vec![1, 1, 1];
+    let subshells = vec!["xyz".to_string()];
+    assert!(normalize_descriptor_per_csf(&descriptor, &subshells, 1).is_err());
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_rear_constraint_binding() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    // subshells = ["f ", "s "]  g=[8, 2]
+    // n=[4, 1], u=[4*(8-4)=16, 1*(2-1)=1]
+    // prefix=[16, 17], suffix=[1, 0]
+    // two_j_target=2
+    // i=0 (f): U=min(16, 2+1)=3  ← rear constraint is binding (3 << prefix=16)
+    // i=1 (s): U=min(17, 2+0)=2  ← rear constraint is binding
+    let descriptor = vec![4, 12, 3,  1, 1, 2];
+    let subshells = vec!["f ".to_string(), "s ".to_string()];
+    let result = normalize_descriptor_per_csf(&descriptor, &subshells, 2).unwrap();
+
+    // i=0 (f): n/g=4/8=0.5, 2Q/u=12/16=0.75, 2J/U=3/3=1.0
+    assert!((result[0] - 0.5).abs() < 1e-5);
+    assert!((result[1] - 0.75).abs() < 1e-5);
+    assert!((result[2] - 1.0).abs() < 1e-5);
+    // i=1 (s): n/g=1/2=0.5, 2Q/u=1/1=1.0, 2J/U=2/2=1.0
+    assert!((result[3] - 0.5).abs() < 1e-5);
+    assert!((result[4] - 1.0).abs() < 1e-5);
+    assert!((result[5] - 1.0).abs() < 1e-5);
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_heterogeneous_partial_occupation() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    // subshells = ["p-", "d "]  g=[2, 6]
+    // n=[1, 2], u=[1*(2-1)=1, 2*(6-2)=8]
+    // prefix=[1, 9], suffix=[8, 0]
+    // two_j_target=5
+    // i=0 (p-): U=min(1, 5+8)=1  ← front constraint binding
+    // i=1 (d ): U=min(9, 5+0)=5  ← rear constraint binding (5 < prefix=9)
+    let descriptor = vec![1, 1, 1,  2, 6, 5];
+    let subshells = vec!["p-".to_string(), "d ".to_string()];
+    let result = normalize_descriptor_per_csf(&descriptor, &subshells, 5).unwrap();
+
+    // i=0 (p-): n/g=1/2=0.5, 2Q/u=1/1=1.0, 2J/U=1/1=1.0
+    assert!((result[0] - 0.5).abs() < 1e-5);
+    assert!((result[1] - 1.0).abs() < 1e-5);
+    assert!((result[2] - 1.0).abs() < 1e-5);
+    // i=1 (d ): n/g=2/6=1/3, 2Q/u=6/8=0.75, 2J/U=5/5=1.0
+    assert!((result[3] - (1.0 / 3.0)).abs() < 1e-5);
+    assert!((result[4] - 0.75).abs() < 1e-5);
+    assert!((result[5] - 1.0).abs() < 1e-5);
 }

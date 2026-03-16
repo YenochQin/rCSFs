@@ -84,7 +84,9 @@ fn safe_parent_dir(path: &Path) -> PathBuf {
 
 /// Extracts the first CSF_HEADER_LINE_COUNT header lines from a CSF file.
 /// Returns a vector of exactly CSF_HEADER_LINE_COUNT strings (empty strings if file has fewer lines).
-fn extract_header_lines(csfs_path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+fn extract_header_lines(
+    csfs_path: &Path,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     let input_file = File::open(csfs_path)?;
     let reader = BufReader::new(input_file);
     let mut lines_iter = reader.lines();
@@ -283,7 +285,13 @@ pub fn convert_csfs_to_parquet_parallel(
             .enumerate()
             .map(|(i, chunk)| {
                 if chunk.len() != 3 {
-                    return ((csf_count + i) as u64, String::new(), String::new(), String::new(), false);
+                    return (
+                        (csf_count + i) as u64,
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        false,
+                    );
                 }
 
                 let process_line = |line: &str, max_len: usize| -> (String, bool) {
@@ -307,9 +315,12 @@ pub fn convert_csfs_to_parquet_parallel(
 
         // Write results in order (par_iter + collect preserves order)
         let mut idx_builder = UInt64Builder::with_capacity(num_full_csfs);
-        let mut line1_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
-        let mut line2_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
-        let mut line3_builder = StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
+        let mut line1_builder =
+            StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
+        let mut line2_builder =
+            StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
+        let mut line3_builder =
+            StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
 
         for (idx, line1, line2, line3, truncated) in batch_results {
             idx_builder.append_value(idx);
@@ -350,7 +361,10 @@ pub fn convert_csfs_to_parquet_parallel(
     println!("CSF 数量: {}", csf_count);
     println!("截断行数: {}", truncated_count);
     if truncated_count > 0 {
-        println!("警告: {} 行被截断，考虑增加 max_line_len 参数", truncated_count);
+        println!(
+            "警告: {} 行被截断，考虑增加 max_line_len 参数",
+            truncated_count
+        );
     }
 
     // --- 5. 创建 TOML 头部文件 ---
@@ -473,7 +487,8 @@ pub fn convert_csfs_to_parquet(
                     if line.len() > MAX_LINE_WARNING_THRESHOLD {
                         eprintln!(
                             "警告: 第 {} 行过长 ({} bytes)，可能消耗大量内存",
-                            total_lines, line.len()
+                            total_lines,
+                            line.len()
                         );
                     }
 

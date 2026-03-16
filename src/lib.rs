@@ -1,5 +1,5 @@
+use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::exceptions::{PyValueError, PyIOError};
 use pyo3::types::{PyDict, PyDictMethods};
 use std::path::Path;
 
@@ -20,7 +20,6 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-
 /// Get Parquet file basic information and metadata
 ///
 /// Args:
@@ -29,10 +28,7 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// Returns:
 /// Dictionary containing file information and metadata
 #[pyfunction]
-fn get_parquet_info(
-    py: Python,
-    input_path: String,
-) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+fn get_parquet_info(py: Python, input_path: String) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     py.detach(|| {
         csfs_conversion::get_parquet_metadata(Path::new(&input_path))
             .map_err(|e| PyIOError::new_err(format!("Failed to get Parquet file info: {}", e)))
@@ -118,8 +114,11 @@ fn convert_csfs(
             stats.set_item("truncated_count", conversion_stats.truncated_count)?;
 
             // Try to read [input_file_stem]_header.toml file path
-            let output_dir = Path::new(&output_path).parent().unwrap_or_else(|| Path::new("."));
-            let input_file_stem = Path::new(&input_path).file_stem()
+            let output_dir = Path::new(&output_path)
+                .parent()
+                .unwrap_or_else(|| Path::new("."));
+            let input_file_stem = Path::new(&input_path)
+                .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("csfs");
             let header_filename = format!("{}_header.toml", input_file_stem);

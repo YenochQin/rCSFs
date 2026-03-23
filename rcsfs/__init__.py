@@ -59,7 +59,7 @@ try:
     except PackageNotFoundError:
         __version__ = "0.1.0"
 except ImportError:
-    __version__ = "1.1.2-dev"
+    __version__ = "1.2.1-beta.2"
 
 # Import from the Rust extension module
 from ._rcsfs import (

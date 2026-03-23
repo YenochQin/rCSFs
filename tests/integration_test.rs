@@ -55,11 +55,13 @@ fn create_minimal_csf(path: &Path) {
 
 /// Create a CSF file with long lines (truncation test)
 fn create_long_line_csf(path: &Path, line_length: usize) {
-    let mut content = String::from("  Header line 1\n\
+    let mut content = String::from(
+        "  Header line 1\n\
                                       Header line 2\n\
                                       Header line 3\n\
                                       Header line 4\n\
-                                     Header line 5\n");
+                                     Header line 5\n",
+    );
 
     let long_string = "x".repeat(line_length);
     for _ in 0..3 {
@@ -73,11 +75,13 @@ fn create_long_line_csf(path: &Path, line_length: usize) {
 
 /// Create a large CSF file with many CSFs
 fn create_large_csf(path: &Path, csf_count: usize) {
-    let mut content = String::from("  Header line 1\n\
+    let mut content = String::from(
+        "  Header line 1\n\
                                       Header line 2\n\
                                       Header line 3\n\
                                       Header line 4\n\
-                                     Header line 5\n");
+                                     Header line 5\n",
+    );
 
     for _ in 0..csf_count {
         content.push_str("  5s ( 2)  4d-( 4)  4d ( 6)  5p-( 2)  5p ( 4)  6s ( 2)\n");
@@ -109,7 +113,10 @@ fn test_parquet_io_basic() {
     assert!(result.is_ok(), "Conversion should succeed");
     let stats = result.unwrap();
     assert_eq!(stats.csf_count, 2, "Should process 2 CSFs");
-    assert_eq!(stats.total_lines, 6, "Should have 6 total lines (2 CSFs * 3 lines)");
+    assert_eq!(
+        stats.total_lines, 6,
+        "Should have 6 total lines (2 CSFs * 3 lines)"
+    );
 }
 
 #[test]
@@ -129,8 +136,14 @@ fn test_parquet_io_creates_header_file() {
 
     // Verify header file contains expected data
     let header_content = fs::read_to_string(&header_path).unwrap();
-    assert!(header_content.contains("header_lines"), "Header file should contain header_lines");
-    assert!(header_content.contains("conversion_stats"), "Header file should contain conversion_stats");
+    assert!(
+        header_content.contains("header_lines"),
+        "Header file should contain header_lines"
+    );
+    assert!(
+        header_content.contains("conversion_stats"),
+        "Header file should contain conversion_stats"
+    );
 
     cleanup_test_file(&input_path);
     cleanup_test_file(&output_path);
@@ -146,7 +159,10 @@ fn test_parquet_io_invalid_input_path() {
 
     let result = convert_csfs_to_parquet(&input_path, &output_path, 256, 1000);
 
-    assert!(result.is_err(), "Conversion should fail for non-existent input file");
+    assert!(
+        result.is_err(),
+        "Conversion should fail for non-existent input file"
+    );
 }
 
 #[test]
@@ -162,7 +178,10 @@ fn test_parquet_io_invalid_output_directory() {
 
     cleanup_test_file(&input_path);
 
-    assert!(result.is_err(), "Conversion should fail for invalid output directory");
+    assert!(
+        result.is_err(),
+        "Conversion should fail for invalid output directory"
+    );
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -186,7 +205,10 @@ fn test_line_truncation() {
     assert!(result.is_ok(), "Conversion should succeed");
     let stats = result.unwrap();
     assert!(stats.truncated_count > 0, "Should truncate some lines");
-    assert!(stats.truncated_count <= 9, "Should truncate at most 9 lines (3 per CSF)");
+    assert!(
+        stats.truncated_count <= 9,
+        "Should truncate at most 9 lines (3 per CSF)"
+    );
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -297,7 +319,10 @@ fn test_incomplete_csf() {
     cleanup_test_file(&input_path);
     cleanup_test_file(&output_path);
 
-    assert!(result.is_ok(), "Incomplete CSF should be skipped gracefully");
+    assert!(
+        result.is_ok(),
+        "Incomplete CSF should be skipped gracefully"
+    );
     let stats = result.unwrap();
     assert_eq!(stats.csf_count, 0, "Should skip incomplete CSF");
 }
@@ -340,7 +365,10 @@ fn test_large_file_sequential() {
     cleanup_test_file(&input_path);
     cleanup_test_file(&output_path);
 
-    assert!(result.is_ok(), "Large file sequential conversion should succeed");
+    assert!(
+        result.is_ok(),
+        "Large file sequential conversion should succeed"
+    );
     let stats = result.unwrap();
     assert_eq!(stats.csf_count, 1000, "Should process all 1000 CSFs");
 }
@@ -360,7 +388,10 @@ fn test_large_file_parallel() {
     cleanup_test_file(&input_path);
     cleanup_test_file(&output_path);
 
-    assert!(result.is_ok(), "Large file parallel conversion should succeed");
+    assert!(
+        result.is_ok(),
+        "Large file parallel conversion should succeed"
+    );
     let stats = result.unwrap();
     assert_eq!(stats.csf_count, 1000, "Should process all 1000 CSFs");
 }
@@ -379,7 +410,8 @@ fn test_large_file_integrity() {
     create_large_csf(&input_path2, 100);
 
     let result_seq = convert_csfs_to_parquet(&input_path1, &output_path1, 256, 10000);
-    let result_par = convert_csfs_to_parquet_parallel(&input_path2, &output_path2, 256, 5000, Some(4));
+    let result_par =
+        convert_csfs_to_parquet_parallel(&input_path2, &output_path2, 256, 5000, Some(4));
 
     cleanup_test_file(&input_path1);
     cleanup_test_file(&input_path2);
@@ -393,7 +425,16 @@ fn test_large_file_integrity() {
     let stats_par = result_par.unwrap();
 
     // Both should produce identical results
-    assert_eq!(stats_seq.csf_count, stats_par.csf_count, "CSF count should match");
-    assert_eq!(stats_seq.total_lines, stats_par.total_lines, "Total lines should match");
-    assert_eq!(stats_seq.truncated_count, stats_par.truncated_count, "Truncated count should match");
+    assert_eq!(
+        stats_seq.csf_count, stats_par.csf_count,
+        "CSF count should match"
+    );
+    assert_eq!(
+        stats_seq.total_lines, stats_par.total_lines,
+        "Total lines should match"
+    );
+    assert_eq!(
+        stats_seq.truncated_count, stats_par.truncated_count,
+        "Truncated count should match"
+    );
 }

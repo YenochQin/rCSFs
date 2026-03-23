@@ -4,16 +4,14 @@ build-backend = "maturin"
 
 [project]
 name = "rcsfs"
-description = "High-performance Rust-powered library for CSF-to-Parquet conversion and ML descriptor generation"
-requires-python = ">=3.13,<3.14"
-version = "1.0.0"
+description = "Rust-powered Python library for converting atomic-physics CSF data to Parquet and generating ML-ready descriptors"
+requires-python = ">=3.14"
 authors = [
     {name = "YenochQin", email = "yenochqin@hotmail.com"},
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",

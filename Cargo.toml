@@ -1,17 +1,20 @@
 [package]
 name = "rCSFs"
-version = "1.0.0"
+
+version =  "1.2.1"
+
 edition = "2024"
 license = "MIT"
+description = "Rust-powered Python library for converting atomic-physics CSF data to Parquet and generating ML-ready descriptors"
 
 [features]
 default = ["python"]
 python = ["dep:pyo3"]
 
 [dependencies]
-arrow = "57.1.0"
-parquet = "57.1.0"
-pyo3 = { version = "0.27.2", optional = true }
+arrow = "58.0.0"
+parquet = "58.0.0"
+pyo3 = { version = "0.28.2", optional = true }
 toml = "0.9.8"
 serde = { version = "1.0.215", features = ["derive"] }
 crossbeam-channel = "0.5.13"

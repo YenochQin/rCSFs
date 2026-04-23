@@ -72,10 +72,8 @@ const CSF_HEADER_LINE_COUNT: usize = 5;
 /// Lines exceeding this threshold will trigger a warning but still be processed.
 const MAX_LINE_WARNING_THRESHOLD: usize = 1024 * 1024; // 1 MB
 
-/// Validate and get the parent directory of a path, preventing directory traversal.
-/// Returns the parent directory or the current directory if the path has no parent.
-/// This function ensures that the returned path is canonicalized to prevent
-/// path traversal attacks via `..` components.
+/// Return a canonicalized parent directory for a path.
+/// Falls back to the current directory if the path has no parent or resolution fails.
 fn safe_parent_dir(path: &Path) -> PathBuf {
     path.parent()
         .and_then(|p| p.canonicalize().ok())
@@ -156,7 +154,7 @@ struct HeaderData {
 ///
 /// # Architecture
 ///
-/// ```
+/// ```text
 /// File → [Read batch] → [Rayon parallel process] → [Write ordered] → repeat
 /// ```
 ///
@@ -175,24 +173,18 @@ pub fn convert_csfs_to_parquet_parallel(
     chunk_size: usize,
     num_workers: Option<usize>,
 ) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
-    // Configure rayon thread pool if num_workers is specified
-    // Note: build_global() can only be called once per program lifetime
-    if let Some(n) = num_workers {
-        match rayon::ThreadPoolBuilder::new()
-            .num_threads(n)
-            .build_global()
-        {
-            Ok(_) => {
-                println!("配置 Rayon 线程池，使用 {} 个 worker", n);
-            }
-            Err(_) => {
-                eprintln!(
-                    "警告: Rayon 线程池已配置，忽略 num_workers={} 参数 (使用现有配置)",
-                    n
-                );
-            }
+    let thread_pool = match num_workers {
+        Some(n) => {
+            println!("配置 Rayon 线程池，使用 {} 个 worker", n);
+            Some(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(n)
+                    .build()
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+            )
         }
-    }
+        None => None,
+    };
 
     println!("开始并行转换 CSF 文件");
     println!("输入文件: {:?}", csfs_path);
@@ -263,15 +255,11 @@ pub fn convert_csfs_to_parquet_parallel(
             if lines_read == 0 {
                 break;
             }
-            // Prevent infinite loop: if we read lines but cannot form a complete CSF
-            if batch_lines.len() < 3 {
-                eprintln!(
-                    "警告: 文件末尾有 {} 行不完整的数据，将被忽略",
-                    batch_lines.len()
-                );
-                break;
-            }
-            continue;
+            eprintln!(
+                "警告: 文件末尾有 {} 行不完整的数据，将被忽略",
+                batch_lines.len()
+            );
+            break;
         }
 
         let lines_to_process: Vec<String> = batch_lines.drain(..num_full_csfs * 3).collect();
@@ -280,38 +268,44 @@ pub fn convert_csfs_to_parquet_parallel(
         let chunks: Vec<&[String]> = lines_to_process.chunks(3).collect();
 
         // Process batch in parallel using rayon
-        let batch_results: Vec<(u64, String, String, String, bool)> = chunks
-            .into_par_iter()
-            .enumerate()
-            .map(|(i, chunk)| {
-                if chunk.len() != 3 {
-                    return (
-                        (csf_count + i) as u64,
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                        false,
-                    );
-                }
-
-                let process_line = |line: &str, max_len: usize| -> (String, bool) {
-                    if line.len() > MAX_LINE_WARNING_THRESHOLD {
-                        eprintln!("警告: 行过长 ({} bytes)", line.len());
+        let process_chunks = || {
+            chunks
+                .into_par_iter()
+                .enumerate()
+                .map(|(i, chunk)| {
+                    if chunk.len() != 3 {
+                        return (
+                            (csf_count + i) as u64,
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                            false,
+                        );
                     }
-                    if line.len() > max_len {
-                        (line.chars().take(max_len).collect::<String>(), true)
-                    } else {
-                        (line.to_string(), false)
-                    }
-                };
 
-                let (line1, t1) = process_line(&chunk[0], max_line_len);
-                let (line2, t2) = process_line(&chunk[1], max_line_len);
-                let (line3, t3) = process_line(&chunk[2], max_line_len);
+                    let process_line = |line: &str, max_len: usize| -> (String, bool) {
+                        if line.len() > MAX_LINE_WARNING_THRESHOLD {
+                            eprintln!("警告: 行过长 ({} bytes)", line.len());
+                        }
+                        if line.len() > max_len {
+                            (line.chars().take(max_len).collect::<String>(), true)
+                        } else {
+                            (line.to_string(), false)
+                        }
+                    };
 
-                ((csf_count + i) as u64, line1, line2, line3, t1 || t2 || t3)
-            })
-            .collect();
+                    let (line1, t1) = process_line(&chunk[0], max_line_len);
+                    let (line2, t2) = process_line(&chunk[1], max_line_len);
+                    let (line3, t3) = process_line(&chunk[2], max_line_len);
+
+                    ((csf_count + i) as u64, line1, line2, line3, t1 || t2 || t3)
+                })
+                .collect::<Vec<_>>()
+        };
+        let batch_results: Vec<(u64, String, String, String, bool)> = match &thread_pool {
+            Some(pool) => pool.install(process_chunks),
+            None => process_chunks(),
+        };
 
         // Write results in order (par_iter + collect preserves order)
         let mut idx_builder = UInt64Builder::with_capacity(num_full_csfs);
@@ -459,7 +453,7 @@ pub fn convert_csfs_to_parquet(
     let output_file = File::create(output_path)?;
     let props = WriterProperties::builder()
         .set_compression(parquet::basic::Compression::UNCOMPRESSED)
-        .set_write_batch_size(chunk_size as usize)
+        .set_write_batch_size(chunk_size)
         .build();
 
     let writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
@@ -644,7 +638,8 @@ pub fn convert_csfs_to_parquet(
 /// * `file_size` - File size in bytes
 /// * `num_rows` - Number of rows in the file
 /// * `num_columns` - Number of columns
-/// * `compression` - Compression method used (e.g., "GZIP")
+/// * `compression` - Compression method used for the first column chunk (e.g., "ZSTD")
+/// * `created_by` - Writer identifier stored in parquet metadata
 ///
 /// # Errors
 ///
@@ -671,6 +666,14 @@ pub fn get_parquet_metadata(
     let schema = metadata.file_metadata().schema();
     let num_columns = schema.get_fields().len();
 
+    let compression = metadata
+        .row_groups()
+        .first()
+        .and_then(|row_group| row_group.columns().first())
+        .map(|column| format!("{:?}", column.compression()))
+        .unwrap_or_else(|| "Unknown".to_string());
+    let created_by = metadata.file_metadata().created_by().unwrap_or("Unknown");
+
     // 创建 Python 字典并返回
     Python::attach(|py| {
         let dict = PyDict::new(py);
@@ -678,10 +681,8 @@ pub fn get_parquet_metadata(
         dict.set_item("file_size", file_size)?;
         dict.set_item("num_rows", num_rows)?;
         dict.set_item("num_columns", num_columns)?;
-        dict.set_item(
-            "compression",
-            metadata.file_metadata().created_by().unwrap_or("Unknown"),
-        )?;
+        dict.set_item("compression", compression)?;
+        dict.set_item("created_by", created_by)?;
 
         Ok(dict.into())
     })

@@ -54,7 +54,7 @@ ruff format .
 mypy rcsfs/
 ```
 
-**Note:** `tests/rcsfs_test.py` uses the old API (`convert_csfs_parallel`, `export_descriptors_with_polars_parallel`) and may fail. The canonical API is in `rcsfs/__init__.py`.
+**Note:** `tests/rcsfs_test.py` exercises the canonical API from `rcsfs/__init__.py`.
 
 ## Code Architecture
 
@@ -63,19 +63,19 @@ mypy rcsfs/
 **Rust Backend (`src/`):**
 - `lib.rs` — PyO3 module entry point: registers `convert_csfs`, `get_parquet_info`, and the descriptor submodule
 - `csfs_conversion.rs` — CSF-to-Parquet conversion (parallel via rayon, streaming batches)
-- `csfs_descriptor.rs` — `CSFDescriptorGenerator` class and batch `generate_descriptors_from_parquet_parallel()`
+- `csfs_descriptor.rs` — descriptor parsing core and batch `generate_descriptors_from_parquet_parallel()`
 - `descriptor_normalization.rs` — Normalization utilities: converts descriptor values using relativistic subshell physics (`max_electrons`, `kappa²`, `max_cumulative_2J`)
 
 **Python Frontend (`rcsfs/`):**
 - `__init__.py` — Public API; wraps Rust functions with `pathlib.Path` support
-- `_rcsfs.pyi` — Type stubs for the compiled extension (includes `CSFProcessor` and `CSFDescriptorGenerator`)
+- `_rcsfs.pyi` — Type stubs for the compiled extension
 - `py.typed` — PEP 561 marker
 
 **Tests (`tests/`):**
 - `integration_test.rs` — Rust integration tests for `csfs_conversion`
 - `csfs_descriptor_test.rs` — Rust integration tests for `CSFDescriptorGenerator`
 - `descriptor_normalization_test.rs` — Rust unit tests for normalization functions
-- `rcsfs_test.py` — Python integration tests (uses outdated API)
+- `rcsfs_test.py` — Python integration tests for the public wrapper API
 
 ### Public Python API (`rcsfs/__init__.py`)
 
@@ -88,7 +88,7 @@ mypy rcsfs/
 | `ConversionStats` | TypedDict for `convert_csfs` return |
 | `DescriptorGenerationStats` | TypedDict for descriptor generation return |
 
-`CSFProcessor` and `CSFDescriptorGenerator` are available directly from `rcsfs._rcsfs` (the Rust extension) but are not re-exported from `rcsfs`.
+`rcsfs` only exposes function-based Python APIs today. `CSFProcessor` and `CSFDescriptorGenerator` are internal Rust types and are not importable from `rcsfs._rcsfs`.
 
 ### Key Data Flow
 

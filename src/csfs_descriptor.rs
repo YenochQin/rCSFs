@@ -392,7 +392,7 @@ pub mod parquet_batch {
     /// Result item sent from workers to writer
     struct ResultItem {
         batch_idx: usize,
-        descriptors: Vec<Vec<i32>>,
+        descriptors: Vec<(u64, Vec<i32>)>,
     }
 
     /// Generate descriptors from parquet with full pipeline parallelization
@@ -613,11 +613,11 @@ pub mod parquet_batch {
                     }
 
                     let batch_idx = work_item.batch_idx;
-                    let descriptors: Vec<Vec<i32>> = work_item
+                    let descriptors: Vec<(u64, Vec<i32>)> = work_item
                         .rows
                         .into_par_iter()
                         .map(|(idx, ref line1, ref line2, ref line3)| {
-                            match generator_clone.parse_csf(line1, line2, line3) {
+                            let descriptor = match generator_clone.parse_csf(line1, line2, line3) {
                                 Ok(desc) => desc,
                                 Err(e) => {
                                     eprintln!(
@@ -626,7 +626,8 @@ pub mod parquet_batch {
                                     );
                                     vec![0i32; descriptor_size]
                                 }
-                            }
+                            };
+                            (idx, descriptor)
                         })
                         .collect();
 
@@ -656,7 +657,7 @@ pub mod parquet_batch {
                 };
                 use arrow::array::{Float32Builder, Int32Builder};
 
-                let mut pending: BTreeMap<usize, Vec<Vec<i32>>> = BTreeMap::new();
+                let mut pending: BTreeMap<usize, Vec<(u64, Vec<i32>)>> = BTreeMap::new();
                 let mut next_write_idx = 0usize;
                 let mut total_descriptors = 0usize;
                 let mut total_batches_written = 0usize;
@@ -684,14 +685,22 @@ pub mod parquet_batch {
                                 .collect();
 
                             // Build per-CSF normalized columns
-                            for desc in &descriptors {
+                            for (idx, desc) in &descriptors {
                                 let two_j_target = infer_two_j_target(desc);
-                                let normalized = normalize_descriptor_per_csf(
+                                let normalized = match normalize_descriptor_per_csf(
                                     desc,
                                     &peel_subshells_for_writer,
                                     two_j_target,
-                                )
-                                .with_context(|| "Failed to normalize descriptor batch item")?;
+                                ) {
+                                    Ok(normalized) => normalized,
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Warning: Failed to normalize CSF at index {}: {}",
+                                            idx, e
+                                        );
+                                        vec![0.0f32; descriptor_size]
+                                    }
+                                };
                                 for (col_idx, &val) in normalized.iter().enumerate() {
                                     builders[col_idx].append_value(val);
                                 }
@@ -723,7 +732,7 @@ pub mod parquet_batch {
                                 .collect();
 
                             // Build columns directly (no ListArray overhead)
-                            for desc in &descriptors {
+                            for (_, desc) in &descriptors {
                                 for (col_idx, &val) in desc.iter().enumerate() {
                                     builders[col_idx].append_value(val);
                                 }
@@ -936,7 +945,6 @@ impl CSFDescriptorGenerator {
     pub fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> Result<Vec<i32>> {
         // Initialize descriptor array with zeros
         let mut descriptor = vec![0i32; 3 * self.orbital_count];
-        let mut occupied_orbitals = Vec::new();
 
         // Step 1: Preprocess the three lines
         let subshells_line = line1.trim_end();
@@ -1033,8 +1041,6 @@ impl CSFDescriptorGenerator {
                         descriptor[descriptor_idx + 1] = temp_middle_item;
                         descriptor[descriptor_idx + 2] = temp_coupling_item;
                     }
-
-                    occupied_orbitals.push(orbs_idx);
                 }
             } else {
                 // Warning: subshell not in list (skip as Python does)

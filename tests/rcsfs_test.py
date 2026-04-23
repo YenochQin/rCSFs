@@ -1,51 +1,73 @@
-# %% cell 1
-import graspkit as gk
-import numpy as np
-import polars as pl
+from pathlib import Path
 
 from rcsfs import (
-    convert_csfs_parallel,
-    export_descriptors_with_polars_parallel,
-    generate_descriptors_from_parquet_parallel,
+    convert_csfs,
+    generate_descriptors_from_parquet,
+    get_parquet_info,
     read_peel_subshells,
 )
 
-# %%
-raw_csfs_path = "/Users/yiqin/Documents/PythonProjects/as3_odd4/cv4odd1as3_odd4_1.c"
-# %%
-raw_csfs = gk.GraspFileLoad.from_filepath(raw_csfs_path, "CSF").get_csfs_data()
 
-# %%
-rout_path = "/Users/yiqin/Documents/PythonProjects/as3_odd4/cv4odd1as3_odd4_1.parquet"
-rust_load = convert_csfs_parallel(raw_csfs_path, rout_path)
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+SAMPLE_CSF = FIXTURES_DIR / "sample.csf"
 
-# %%
-rout_path = "/Users/yiqin/Documents/PythonProjects/as3_odd4/cv4odd1as3_odd4_1.parquet"
-# convert_csfs = pl.read_parquet(rout_path)
 
-# %%
-header_file_path = (
-    "/Users/yiqin/Documents/PythonProjects/as3_odd4/cv4odd1as3_odd4_1_header.toml"
-)
-peel_subshell = read_peel_subshells(header_file_path)
+def test_end_to_end_public_python_api(tmp_path: Path) -> None:
+    csf_parquet = tmp_path / "sample.parquet"
 
-rout_desc_path = (
-    "/Users/yiqin/Documents/PythonProjects/as3_odd4/cv4odd1as3_odd4_1_desc.parquet"
-)
+    stats = convert_csfs(SAMPLE_CSF, csf_parquet, chunk_size=90, num_workers=2)
 
-gen_result = export_descriptors_with_polars_parallel(
-    rout_path, rout_desc_path, peel_subshell
-)
-# %%
-#
-gen_result
+    assert stats["success"] is True
+    assert stats["csf_count"] > 0
+    assert Path(stats["header_file"]).exists()
 
-# %%
-py_desc = np.load(
-    "/Users/yiqin/Documents/PythonProjects/as3_odd4/cv4odd1as3_odd4_1_desc.npy"
-)
-# %%
-rcsfs_desc = pl.read_parquet(rout_desc_path)
-# %%
-rcsfs_desc_np = rcsfs_desc.to_numpy()
-np.array_equal(py_desc, rcsfs_desc_np)
+    parquet_info = get_parquet_info(csf_parquet)
+    assert parquet_info["num_rows"] == stats["csf_count"]
+    assert parquet_info["num_columns"] == 4
+    assert "UNCOMPRESSED" in parquet_info["compression"]
+    assert "created_by" in parquet_info
+
+    peel_subshells = read_peel_subshells(stats["header_file"])
+    assert peel_subshells
+
+    descriptor_parquet = tmp_path / "descriptors.parquet"
+    descriptor_stats = generate_descriptors_from_parquet(
+        csf_parquet,
+        descriptor_parquet,
+        peel_subshells=peel_subshells,
+        num_workers=2,
+        normalize=False,
+    )
+
+    assert descriptor_stats["success"] is True
+    assert descriptor_stats["csf_count"] == stats["csf_count"]
+    assert descriptor_stats["descriptor_count"] == stats["csf_count"]
+    assert descriptor_stats["descriptor_size"] == 3 * len(peel_subshells)
+
+    descriptor_info = get_parquet_info(descriptor_parquet)
+    assert descriptor_info["num_rows"] == stats["csf_count"]
+    assert "ZSTD" in descriptor_info["compression"]
+
+
+def test_normalize_path_tolerates_normalization_errors(tmp_path: Path) -> None:
+    csf_parquet = tmp_path / "sample.parquet"
+    convert_stats = convert_csfs(SAMPLE_CSF, csf_parquet, chunk_size=90, num_workers=2)
+
+    bad_subshells = ["xyz"]
+    normalized_output = tmp_path / "normalized_bad_subshells.parquet"
+    normalized_stats = generate_descriptors_from_parquet(
+        csf_parquet,
+        normalized_output,
+        peel_subshells=bad_subshells,
+        num_workers=2,
+        normalize=True,
+    )
+
+    assert normalized_stats["success"] is True
+    assert normalized_stats["csf_count"] == convert_stats["csf_count"]
+    assert normalized_stats["descriptor_count"] == convert_stats["csf_count"]
+    assert normalized_stats["descriptor_size"] == 3 * len(bad_subshells)
+
+    normalized_info = get_parquet_info(normalized_output)
+    assert normalized_info["num_rows"] == convert_stats["csf_count"]
+    assert "ZSTD" in normalized_info["compression"]

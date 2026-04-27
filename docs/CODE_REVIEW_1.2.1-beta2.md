@@ -1,30 +1,30 @@
-# Code Review — rCSFs 1.2.1-beta.2
+# 代码审查 — rCSFs 1.2.1-beta.2
 
-**Branch:** `1.2.1-beta2`
-**Reviewer:** Claude Code
-**Date:** 2026-04-23
-**Scope:** Full pass over the Rust backend (`src/`), the Python frontend (`rcsfs/`), and the test suite (`tests/`).
-
----
-
-## 1. Overview
-
-`rcsfs` is a PyO3 Rust extension that converts GRASP-style CSF text files to Parquet and generates fixed-length integer/float descriptor arrays for ML use. The architecture is well-considered:
-
-- **Conversion pipeline** (`src/csfs_conversion.rs`) streams a CSF file in `chunk_size`-line batches, parses each batch in parallel via rayon, and writes uncompressed Parquet with an RAII file-cleanup guard (`ParquetFileGuard`) that removes partial output on error.
-- **Descriptor pipeline** (`src/csfs_descriptor.rs`) uses a three-stage producer/consumer topology over `crossbeam-channel`: a reader thread streams 65 536-row Parquet batches, N worker threads compete on the work channel and each run rayon `par_iter` internally, and a single writer thread reorders results via a `BTreeMap` keyed by `batch_idx`. Output is ZSTD-3 compressed multi-column Parquet (one column per descriptor position — no ListArray overhead).
-- **Normalization** (`src/descriptor_normalization.rs`) implements per-CSF physics-correct denominators with front/rear prefix-sum constraints, and is well covered by unit tests.
-- **PyO3 bindings** release the GIL correctly (`py.detach(|| …)`) around both long-running operations.
-
-Overall the code is careful about memory, ordering, and large-file throughput. The issues below are concentrated in API contract details and in the normalization branch's error handling.
+**分支：** `1.2.1-beta2`
+**审查者：** Claude Code
+**日期：** 2026-04-23
+**范围：** 对 Rust 后端（`src/`）、Python 前端（`rcsfs/`）以及测试套件（`tests/`）进行完整审查。
 
 ---
 
-## 2. Real Bugs (fix before tagging 1.2.1)
+## 1. 概览
 
-### 2.1 `get_parquet_info` reports `created_by`, labelled as `compression`
+`rcsfs` 是一个 PyO3 Rust 扩展，用于将 GRASP 风格的 CSF 文本文件转换为 Parquet，并生成用于机器学习的固定长度整数/浮点描述符数组。整体架构设计得很周全：
 
-**File:** `src/csfs_conversion.rs:682-684`
+- **转换流水线**（`src/csfs_conversion.rs`）以 `chunk_size` 行为一批流式读取 CSF 文件，通过 rayon 并行解析每个批次，并写出未压缩的 Parquet；同时使用 RAII 文件清理守卫（`ParquetFileGuard`），在出错时删除不完整输出。
+- **描述符流水线**（`src/csfs_descriptor.rs`）基于 `crossbeam-channel` 使用三阶段生产者/消费者拓扑：一个读取线程流式读取 65,536 行的 Parquet 批次，N 个工作线程竞争工作通道且各自内部运行 rayon `par_iter`，一个写入线程通过按 `batch_idx` 索引的 `BTreeMap` 对结果重新排序。输出是 ZSTD-3 压缩的多列 Parquet（每个描述符位置一列，没有 ListArray 开销）。
+- **归一化**（`src/descriptor_normalization.rs`）实现了每个 CSF 的物理正确分母，并带有前缀/后缀前缀和约束；单元测试覆盖良好。
+- **PyO3 绑定** 在两个长时间运行操作周围都正确释放了 GIL（`py.detach(|| …)`）。
+
+总体来说，代码在内存、排序和大文件吞吐方面处理得很谨慎。下面的问题主要集中在 API 契约细节，以及归一化分支的错误处理上。
+
+---
+
+## 2. 真实缺陷（标记 1.2.1 前修复）
+
+### 2.1 `get_parquet_info` 返回的是 `created_by`，却标记为 `compression`
+
+**文件：** `src/csfs_conversion.rs:682-684`
 
 ```rust
 dict.set_item(
@@ -33,9 +33,9 @@ dict.set_item(
 )?;
 ```
 
-`FileMetaData::created_by()` returns a writer-identification string (e.g. `"parquet-rs version 58.0.0"`), not a compression codec. Both the Rust doc-comment (`src/csfs_conversion.rs:647`) and the Python docstring (`rcsfs/__init__.py:177`) promise the field is "compression method used". Any caller that branches on this value will be looking at the wrong data.
+`FileMetaData::created_by()` 返回的是写入器标识字符串（例如 `"parquet-rs version 58.0.0"`），不是压缩编解码器。Rust 文档注释（`src/csfs_conversion.rs:647`）和 Python docstring（`rcsfs/__init__.py:177`）都承诺该字段是“使用的压缩方法”。任何基于这个值做分支判断的调用者都会读到错误数据。
 
-**Fix:** The Parquet compression codec is a per-column property, not per-file, but for this library every column uses the same codec. A correct reading is:
+**修复：** Parquet 压缩编解码器是按列的属性，不是按文件的属性；不过本库每一列都使用相同编解码器。正确读取方式是：
 
 ```rust
 let compression = metadata
@@ -45,13 +45,13 @@ let compression = metadata
 dict.set_item("compression", format!("{:?}", compression))?;
 ```
 
-…guarded for the empty-file case, and exposing `created_by` under its own key if still desired.
+同时需要为空文件场景加保护；如果仍然需要，也可以把 `created_by` 暴露到单独的键下。
 
 ---
 
-### 2.2 Python `__version__` fallback is effectively dead code
+### 2.2 Python `__version__` fallback 实际上是死代码
 
-**File:** `rcsfs/__init__.py:54-62`
+**文件：** `rcsfs/__init__.py:54-62`
 
 ```python
 try:
@@ -64,9 +64,9 @@ except ImportError:
     __version__ = "1.2.1-beta.2"
 ```
 
-`importlib.metadata` is part of the stdlib on every supported Python, so the outer `except ImportError` never fires. When the package is not installed (editable/dev builds), the inner `PackageNotFoundError` branch runs and `__version__` becomes `"0.1.0"` — not the string bumped by the release commit. The `"1.2.1-beta.2"` fallback is unreachable.
+`importlib.metadata` 在所有受支持的 Python 中都是标准库的一部分，因此外层 `except ImportError` 永远不会触发。当包未安装时（editable/dev 构建），会进入内层 `PackageNotFoundError` 分支，`__version__` 变成 `"0.1.0"`，而不是发布提交中更新的字符串。`"1.2.1-beta.2"` fallback 不可达。
 
-**Fix:** Put the literal fallback in the branch that can actually run:
+**修复：** 把字面量 fallback 放到实际可能运行的分支里：
 
 ```python
 try:
@@ -75,15 +75,15 @@ except PackageNotFoundError:
     __version__ = "1.2.1-beta.2"
 ```
 
-Drop the outer `try/except ImportError` entirely.
+完全删除外层 `try/except ImportError`。
 
 ---
 
-### 2.3 Type stubs advertise classes that are not registered
+### 2.3 类型 stub 声称存在未注册的类
 
-**Files:** `rcsfs/_rcsfs.pyi:50-113`, `src/csfs_descriptor.rs:878`, `src/csfs_descriptor.rs:1123-1133`, `CLAUDE.md`
+**文件：** `rcsfs/_rcsfs.pyi:50-113`、`src/csfs_descriptor.rs:878`、`src/csfs_descriptor.rs:1123-1133`、`CLAUDE.md`
 
-The stub declares two classes:
+stub 声明了两个类：
 
 ```python
 class CSFDescriptorGenerator:
@@ -97,28 +97,28 @@ class CSFProcessor:
     # … etc.
 ```
 
-Neither class is actually exposed to Python:
+这两个类实际上都没有暴露给 Python：
 
-- `CSFDescriptorGenerator` is defined in Rust as a **plain struct** (no `#[pyclass]`, no `#[pymethods]` block).
-- `register_descriptor_module` only registers `py_generate_descriptors_from_parquet` and `py_read_peel_subshells`.
-- `CSFProcessor` has **no corresponding Rust type at all**.
+- `CSFDescriptorGenerator` 在 Rust 中定义为一个**普通 struct**（没有 `#[pyclass]`，也没有 `#[pymethods]` 块）。
+- `register_descriptor_module` 只注册了 `py_generate_descriptors_from_parquet` 和 `py_read_peel_subshells`。
+- `CSFProcessor` **完全没有对应的 Rust 类型**。
 
-`CLAUDE.md` claims "`CSFProcessor` and `CSFDescriptorGenerator` are available directly from `rcsfs._rcsfs`" — this is false. `from rcsfs._rcsfs import CSFDescriptorGenerator` raises `ImportError` at runtime while type-checking as valid, which is the worst possible failure mode for a stub.
+`CLAUDE.md` 声称“`CSFProcessor` 和 `CSFDescriptorGenerator` 可以直接从 `rcsfs._rcsfs` 使用”——这是错误的。`from rcsfs._rcsfs import CSFDescriptorGenerator` 在运行时会抛出 `ImportError`，但类型检查却认为合法，这是 stub 最糟糕的失败模式。
 
-**Fix options:**
+**修复选项：**
 
-1. Delete the class declarations from `_rcsfs.pyi` and the corresponding claim in `CLAUDE.md`.
-2. Or, if the intent is to expose them, add `#[pyclass]` + a `#[pymethods]` impl + `m.add_class::<CSFDescriptorGenerator>()?` calls and fill in the actual `CSFProcessor` type.
+1. 从 `_rcsfs.pyi` 删除这些类声明，并删除 `CLAUDE.md` 中对应的说法。
+2. 或者，如果意图是暴露它们，则添加 `#[pyclass]`、`#[pymethods]` impl、`m.add_class::<CSFDescriptorGenerator>()?` 调用，并补齐真实的 `CSFProcessor` 类型。
 
-Option 1 matches current runtime behavior and is the lower-risk choice for the release.
+选项 1 匹配当前运行时行为，是本次发布风险更低的选择。
 
 ---
 
-### 2.4 Normalize path is less tolerant of bad CSFs than raw path
+### 2.4 归一化路径对坏 CSF 的容忍度低于原始路径
 
-**File:** `src/csfs_descriptor.rs`
+**文件：** `src/csfs_descriptor.rs`
 
-In the raw (non-normalized) worker path:
+在原始（非归一化）worker 路径中：
 
 ```rust
 // src/csfs_descriptor.rs:620-629
@@ -131,9 +131,9 @@ match generator_clone.parse_csf(line1, line2, line3) {
 }
 ```
 
-A single unparseable CSF is logged and zero-filled; the batch and the overall job continue.
+单个无法解析的 CSF 会被记录日志并用零填充；批次和整个任务都会继续。
 
-In the normalized writer path:
+在归一化写入路径中：
 
 ```rust
 // src/csfs_descriptor.rs:687-698
@@ -149,17 +149,17 @@ for desc in &descriptors {
 }
 ```
 
-The `?` propagates any per-CSF failure up through the writer thread, which then fails the whole job. The same CSF data that would produce a warning with `normalize=False` will abort the entire pipeline with `normalize=True`.
+`?` 会把任何单个 CSF 的失败向上传播到写入线程，进而让整个任务失败。同一份 CSF 数据在 `normalize=False` 时只会产生警告，但在 `normalize=True` 时会中止整条流水线。
 
-Given that `normalize_descriptor_per_csf` can fail for any of: length mismatch, unknown subshell, or a future physics-constraint addition, this inconsistency is a real footgun for long-running batch jobs.
+考虑到 `normalize_descriptor_per_csf` 可能因长度不匹配、未知 subshell，或未来新增的物理约束而失败，这种不一致对长时间运行的批处理任务来说是一个真实陷阱。
 
-**Fix:** Mirror the raw-path semantics — on error, log with the CSF index (recoverable from ordering), emit `vec![0.0f32; descriptor_size]`, and continue. If strict behavior is desired, make it opt-in via a flag and apply it symmetrically to both paths.
+**修复：** 对齐原始路径语义：出错时记录带有 CSF 索引的日志（可从排序信息恢复），输出 `vec![0.0f32; descriptor_size]`，然后继续。如果需要严格行为，应通过一个 flag 显式启用，并对两条路径对称应用。
 
 ---
 
-### 2.5 `cargo test` currently fails because a doc comment is parsed as Rust code
+### 2.5 `cargo test` 当前失败，因为 doc comment 被解析为 Rust 代码
 
-**File:** `src/csfs_conversion.rs:159-160`
+**文件：** `src/csfs_conversion.rs:159-160`
 
 ```rust
 /// ```
@@ -167,23 +167,23 @@ Given that `normalize_descriptor_per_csf` can fail for any of: length mismatch, 
 /// ```
 ```
 
-This fenced block sits inside a Rust doc comment, so `cargo test` treats it as a doctest. The contents are prose, not Rust code, and the unicode arrows (`→`) cause the doctest compile step to fail:
+这个 fenced block 位于 Rust doc comment 中，因此 `cargo test` 会把它当作 doctest。内容是说明性文字，不是 Rust 代码，而且 Unicode 箭头（`→`）会导致 doctest 编译步骤失败：
 
 ```text
 error: unknown start of token: \u{2192}
 ```
 
-As of 2026-04-24, `cargo test` passes all unit/integration tests but still exits non-zero because this doctest fails. That makes the repository's primary Rust validation command red.
+截至 2026-04-24，`cargo test` 中所有单元/集成测试都通过，但仍因该 doctest 失败而以非零状态退出。这会让仓库的主要 Rust 验证命令处于失败状态。
 
-**Fix:** Mark the block as text (` ```text `) or `ignore`, or rewrite it as a normal bullet list outside a Rust code fence.
+**修复：** 将代码块标记为 text（` ```text `）或 `ignore`，或者把它改写为 Rust 代码围栏之外的普通项目列表。
 
 ---
 
-## 3. API / Documentation Issues
+## 3. API / 文档问题
 
-### 3.1 `num_workers` silently sticks on first call
+### 3.1 `num_workers` 在第一次调用后会静默固定
 
-**File:** `src/csfs_conversion.rs:180-195`
+**文件：** `src/csfs_conversion.rs:180-195`
 
 ```rust
 if let Some(n) = num_workers {
@@ -194,16 +194,16 @@ if let Some(n) = num_workers {
 }
 ```
 
-`rayon::ThreadPoolBuilder::build_global()` can only succeed once per process — subsequent calls return `Err` regardless of the `n` argument. The code handles this with a warning but silently reuses the first configuration. The Python docstring (`rcsfs/__init__.py:137`) only says `num_workers` defaults to CPU count; it does not warn that calls after the first ignore this parameter.
+`rayon::ThreadPoolBuilder::build_global()` 在每个进程中只能成功一次；后续调用无论 `n` 参数是什么都会返回 `Err`。代码只用警告处理这个错误，但会静默复用第一次配置。Python docstring（`rcsfs/__init__.py:137`）只说 `num_workers` 默认等于 CPU 数，没有警告第一次之后的调用会忽略该参数。
 
-From the user's perspective:
+从用户视角看：
 
 ```python
-convert_csfs("a.csf", "a.parquet", num_workers=4)   # runs on 4 threads
-convert_csfs("b.csf", "b.parquet", num_workers=16)  # still runs on 4 threads!
+convert_csfs("a.csf", "a.parquet", num_workers=4)   # 使用 4 个线程运行
+convert_csfs("b.csf", "b.parquet", num_workers=16)  # 仍然使用 4 个线程！
 ```
 
-**Fix:** Use a scoped pool per call:
+**修复：** 每次调用使用 scoped pool：
 
 ```rust
 let pool = rayon::ThreadPoolBuilder::new()
@@ -212,13 +212,13 @@ let pool = rayon::ThreadPoolBuilder::new()
 pool.install(|| { /* batch work */ });
 ```
 
-This is the idiomatic rayon pattern for library code and avoids the global-mutable-state problem entirely. The `generate_descriptors_from_parquet_parallel` path does not call `build_global` and should also be audited for the same pattern.
+这是库代码中 idiomatic rayon 模式，也可以完全避免全局可变状态问题。`generate_descriptors_from_parquet_parallel` 路径没有调用 `build_global`，但也应审查是否存在相同模式。
 
 ---
 
-### 3.2 `safe_parent_dir` docstring overstates its protection
+### 3.2 `safe_parent_dir` docstring 夸大了保护能力
 
-**File:** `src/csfs_conversion.rs:75-83`
+**文件：** `src/csfs_conversion.rs:75-83`
 
 ```rust
 /// Validate and get the parent directory of a path, preventing directory traversal.
@@ -232,21 +232,21 @@ fn safe_parent_dir(path: &Path) -> PathBuf {
 }
 ```
 
-The function canonicalizes the parent of the user-supplied path, which resolves `..` components *inside that parent* — but:
+该函数会 canonicalize 用户提供路径的父目录，这会解析该父目录内部的 `..` 组件；但：
 
-1. `..` in the output path itself (e.g. `/safe/dir/../../etc/file`) is already collapsed by `path.parent()` before canonicalization kicks in, and the resolved destination depends on symlinks, not on any allowlist.
-2. The function does not validate against a configured base directory — so it "prevents traversal" only in the trivial sense that it returns *some* canonical absolute path.
-3. Output Parquet creation (`File::create(output_path)`) uses the original path, not the canonicalized one.
+1. 输出路径本身中的 `..`（例如 `/safe/dir/../../etc/file`）在 canonicalization 生效前已经被 `path.parent()` 折叠，解析后的目标取决于符号链接，而不是任何 allowlist。
+2. 该函数没有针对配置的 base directory 做校验，所以它“防止 traversal”仅仅是在返回“某个”canonical absolute path 这个很浅的意义上成立。
+3. 输出 Parquet 创建（`File::create(output_path)`）使用的是原始路径，不是 canonicalize 后的路径。
 
-This is fine for a library that trusts its Python caller, but the docstring as written would mislead an auditor.
+对于一个信任其 Python 调用者的库来说，这没问题，但当前 docstring 会误导审计人员。
 
-**Fix:** Narrow the docstring to what the function does: "Return a canonicalized absolute path to `path`'s parent, falling back to `.` if the parent can't be resolved." Drop the "prevents directory traversal attacks" claim.
+**修复：** 将 docstring 收窄到函数实际行为：“Return a canonicalized absolute path to `path`'s parent, falling back to `.` if the parent can't be resolved.” 删除“prevents directory traversal attacks”的说法。
 
 ---
 
-## 4. Minor / Dead Code
+## 4. 次要问题 / 死代码
 
-### 4.1 Unreachable `continue` — `src/csfs_conversion.rs:261-275`
+### 4.1 不可达的 `continue` — `src/csfs_conversion.rs:261-275`
 
 ```rust
 let num_full_csfs = batch_lines.len() / 3;
@@ -262,9 +262,9 @@ if num_full_csfs == 0 {
 }
 ```
 
-When `num_full_csfs == 0`, `batch_lines.len() < 3` is always true, so the second `if` always breaks. The `continue` is dead.
+当 `num_full_csfs == 0` 时，`batch_lines.len() < 3` 总为 true，因此第二个 `if` 总会 `break`。`continue` 是死代码。
 
-### 4.2 `occupied_orbitals` is populated but never read — `src/csfs_descriptor.rs:939, 1037`
+### 4.2 `occupied_orbitals` 被填充但从未读取 — `src/csfs_descriptor.rs:939, 1037`
 
 ```rust
 let mut occupied_orbitals = Vec::new();
@@ -272,25 +272,25 @@ let mut occupied_orbitals = Vec::new();
 occupied_orbitals.push(orbs_idx);
 ```
 
-The `Vec` is grown once per occupied orbital and then dropped at end-of-scope. Either use it (e.g. to collapse an explicit zero-fill for unoccupied positions) or remove it.
+这个 `Vec` 会按每个占据轨道增长，随后在作用域末尾被丢弃。要么使用它（例如用来折叠对未占据位置的显式零填充），要么删除它。
 
-### 4.3 No-op cast — `src/csfs_conversion.rs:462`
+### 4.3 无意义 cast — `src/csfs_conversion.rs:462`
 
 ```rust
 .set_write_batch_size(chunk_size as usize)
 ```
 
-`chunk_size: usize` already. Remove the cast.
+`chunk_size: usize` 已经是 `usize`。移除该 cast。
 
-### 4.4 Verbose `writer_guard.writer.as_mut().unwrap()` — `src/csfs_conversion.rs:345, 578`
+### 4.4 冗长的 `writer_guard.writer.as_mut().unwrap()` — `src/csfs_conversion.rs:345, 578`
 
-Correct (the `Option` is only `None` post-`finish()`), but a tiny accessor on `ParquetFileGuard` (e.g. `fn writer_mut(&mut self) -> &mut ArrowWriter<File>`) would remove the `.unwrap()` and hide the invariant.
+逻辑上是正确的（`Option` 只会在 `finish()` 后变为 `None`），但在 `ParquetFileGuard` 上加一个小访问器（例如 `fn writer_mut(&mut self) -> &mut ArrowWriter<File>`）可以移除 `.unwrap()` 并隐藏该不变量。
 
-### 4.5 Duplicate "Import from the Rust extension module" comment — `rcsfs/__init__.py:52, 64`
+### 4.5 重复的 “Import from the Rust extension module” 注释 — `rcsfs/__init__.py:52, 64`
 
-Two identical comments separated by a version-handling block; the first one is misplaced.
+两个相同注释被版本处理块隔开；第一个位置不合适。
 
-### 4.6 `j_to_double_j` numerator semantics — `src/csfs_descriptor.rs:840-858`
+### 4.6 `j_to_double_j` 的分子语义 — `src/csfs_descriptor.rs:840-858`
 
 ```rust
 if let Some(slash_pos) = trimmed.find('/') {
@@ -299,15 +299,15 @@ if let Some(slash_pos) = trimmed.find('/') {
 }
 ```
 
-The function assumes fractional J values are always `x/2`, so it returns the numerator as-is. That's correct for every physical J value (always half-integer), but a malformed header with `"4/3"` would silently return 4 instead of erroring. If you want to be defensive, verify the denominator equals `2`.
+该函数假定分数形式的 J 值总是 `x/2`，因此直接返回分子。对所有物理 J 值来说这是正确的（总是半整数），但格式错误的 header（如 `"4/3"`）会静默返回 4，而不是报错。如果想更防御性一些，应验证分母等于 `2`。
 
 ---
 
-## 5. Performance Notes
+## 5. 性能备注
 
-### 5.1 Row-by-row `Arc<str>` conversion in the reader thread
+### 5.1 读取线程中逐行 `Arc<str>` 转换
 
-**File:** `src/csfs_descriptor.rs:557-566`
+**文件：** `src/csfs_descriptor.rs:557-566`
 
 ```rust
 let rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)> = (0..batch_size)
@@ -322,30 +322,30 @@ let rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)> = (0..batch_size)
     .collect();
 ```
 
-For 65 536-row batches this is ~260 K small heap allocations per batch (four `Arc<str>` per row). `StringArray::value()` already returns `&str` pointing into the batch's underlying buffer; a cleaner option is to send the `RecordBatch` itself through the channel and slice in workers. That would remove the per-row allocation and the 4-tuple `Arc` clone cost.
+对 65,536 行批次来说，这大约是每批 260K 次小堆分配（每行四个 `Arc<str>`）。`StringArray::value()` 已经返回指向批次底层 buffer 的 `&str`；更干净的做法是把 `RecordBatch` 本身通过 channel 发送，然后在 worker 中切片。这样可以消除逐行分配和 4 元组 `Arc` clone 成本。
 
-### 5.2 Nested parallelism (OS threads × rayon)
+### 5.2 嵌套并行（OS 线程 × rayon）
 
-**File:** `src/csfs_descriptor.rs:603-644`
+**文件：** `src/csfs_descriptor.rs:603-644`
 
-Each of `num_workers` OS threads calls `work_item.rows.into_par_iter()` on the **global rayon pool**. When the outer thread count is close to core count, rayon's workers and the outer threads will oversubscribe. Empirically rayon usually recovers via work-stealing, but if you measure contention at high `num_workers`:
+每个 `num_workers` OS 线程都会在**全局 rayon pool** 上调用 `work_item.rows.into_par_iter()`。当外层线程数接近核心数时，rayon 的 worker 和外层线程会超额订阅。经验上 rayon 通常可以通过 work-stealing 恢复，但如果在较高 `num_workers` 下观察到竞争：
 
-- Option A: Drop the outer `std::thread::spawn` workers; let a single rayon `par_iter` over the work channel do all the parallelism (matches the raw-batch path in `generate_descriptors_from_parquet`).
-- Option B: Keep the outer threads, but make each one parse serially — the parallelism already comes from running N of them.
+- 选项 A：去掉外层 `std::thread::spawn` worker；让单个 rayon `par_iter` 覆盖 work channel 上的所有并行工作（这与 `generate_descriptors_from_parquet` 中的 raw-batch 路径匹配）。
+- 选项 B：保留外层线程，但每个线程内部串行解析——并行性已经来自同时运行的 N 个线程。
 
-Option B is probably the cleanest: the current structure gets you rayon's work-stealing within each batch *and* coarse-grained parallelism across batches, but the two compete for the same threads.
+选项 B 可能最干净：当前结构让你同时获得每批内 rayon 的 work-stealing 和跨批次的粗粒度并行，但这两者会竞争同一批线程。
 
-### 5.3 `uncompressed` output for CSF→Parquet
+### 5.3 CSF→Parquet 输出未压缩
 
-The conversion writes uncompressed Parquet (`src/csfs_conversion.rs:215-216`). For 34 GB inputs this is fine (throughput-first), but users downstream may expect at least Snappy. A `compression` parameter exposed to Python (default `None`) would be a cheap improvement.
+转换会写出未压缩 Parquet（`src/csfs_conversion.rs:215-216`）。对 34 GB 输入来说这没问题（优先吞吐），但下游用户可能期望至少使用 Snappy。向 Python 暴露一个 `compression` 参数（默认 `None`）会是一个低成本改进。
 
 ---
 
-## 6. Testing
+## 6. 测试
 
-### 6.1 Broken Python test — delete or rewrite
+### 6.1 损坏的 Python 测试 — 删除或重写
 
-**File:** `tests/rcsfs_test.py`
+**文件：** `tests/rcsfs_test.py`
 
 ```python
 from rcsfs import (
@@ -356,69 +356,69 @@ from rcsfs import (
 )
 ```
 
-None of `convert_csfs_parallel`, `export_descriptors_with_polars_parallel`, or `generate_descriptors_from_parquet_parallel` exist in the public API (`rcsfs/__init__.py:310-322`). The test also hardcodes `/Users/yiqin/Documents/PythonProjects/as3_odd4/cv4odd1as3_odd4_1.c`, making it unrunnable anywhere but the author's laptop.
+`convert_csfs_parallel`、`export_descriptors_with_polars_parallel` 或 `generate_descriptors_from_parquet_parallel` 都不存在于公共 API 中（`rcsfs/__init__.py:310-322`）。该测试还硬编码了 `/Users/yiqin/Documents/PythonProjects/as3_odd4/cv4odd1as3_odd4_1.c`，导致它只能在作者本机运行。
 
-This is not just stale coverage; it is currently broken in two independent ways:
+这不只是过期覆盖；它目前以两个相互独立的方式损坏：
 
-- `pytest -q` fails during collection on a clean environment because `graspkit` is not declared in the dev dependencies.
-- Even if `graspkit` were installed, the imported `rcsfs` symbols do not exist in the current public API.
+- `pytest -q` 在干净环境中会于 collection 阶段失败，因为 `graspkit` 没有声明为 dev dependency。
+- 即使安装了 `graspkit`，导入的 `rcsfs` 符号在当前公共 API 中也不存在。
 
-`CLAUDE.md` already notes the API drift. The presence of `tests/rcsfs_test.py` suggests Python integration coverage exists, but the file is not runnable in the repository's documented setup.
+`CLAUDE.md` 已经记录了 API drift。`tests/rcsfs_test.py` 的存在暗示仓库中有 Python 集成覆盖，但该文件无法在仓库记录的环境中运行。
 
-**Fix:** Delete it, or port it to the current API with `tmp_path` fixtures and a small on-disk CSF fixture.
+**修复：** 删除它，或使用 `tmp_path` fixture 和一个小型磁盘 CSF fixture，将其移植到当前 API。
 
-### 6.2 Missing integration coverage for normalized parallel path
+### 6.2 缺少 normalized parallel path 的集成覆盖
 
-Unit tests in `descriptor_normalization.rs` cover `normalize_descriptor_per_csf` well (front-constraint binding, rear-constraint binding, trailing empty subshells, heterogeneous occupation). What's missing is end-to-end coverage of `generate_descriptors_from_parquet_parallel(…, normalize=true)`. Given issue 2.4 (normalize path is less tolerant), a test that feeds a batch including one malformed CSF through both `normalize=False` and `normalize=True` would catch the asymmetry.
+`descriptor_normalization.rs` 中的单元测试很好地覆盖了 `normalize_descriptor_per_csf`（前向约束绑定、后向约束绑定、尾部空 subshell、异质占据）。缺失的是 `generate_descriptors_from_parquet_parallel(…, normalize=true)` 的端到端覆盖。考虑到问题 2.4（归一化路径容忍度更低），一个将包含单个畸形 CSF 的批次分别通过 `normalize=False` 和 `normalize=True` 的测试可以捕获这种不对称。
 
-### 6.3 Integration tests share a single directory
+### 6.3 集成测试共享同一个目录
 
-All Rust integration tests write to `target/test_outputs/` (`tests/integration_test.rs:18-22`). Filenames are unique per test, so `cargo test` in isolation is fine, but the convention would be friendlier to `tempfile::tempdir()` — each test gets an isolated directory, nothing to clean up, no risk of cross-test interference if someone later reuses a filename.
+所有 Rust 集成测试都会写入 `target/test_outputs/`（`tests/integration_test.rs:18-22`）。文件名在每个测试中唯一，所以单独运行 `cargo test` 没问题，但约定上使用 `tempfile::tempdir()` 会更友好——每个测试都有隔离目录，不需要清理，也不会在未来有人复用文件名时产生跨测试干扰风险。
 
-### 6.4 Verified current test status (2026-04-24)
+### 6.4 已验证的当前测试状态（2026-04-24）
 
-Re-running the repository checks today gives:
+今天重新运行仓库检查得到：
 
-- `cargo test`: Rust unit tests and integration tests pass, but doctests fail because of issue 2.5.
-- `pytest -q`: fails at collection time on `tests/rcsfs_test.py` with `ModuleNotFoundError: No module named 'graspkit'`.
+- `cargo test`：Rust 单元测试和集成测试通过，但 doctest 因问题 2.5 失败。
+- `pytest -q`：在 `tests/rcsfs_test.py` collection 阶段失败，错误为 `ModuleNotFoundError: No module named 'graspkit'`。
 
-So the repository is not currently in a state where both advertised validation commands pass end-to-end.
-
----
-
-## 7. Security
-
-Nothing serious for a library that trusts its Python caller:
-
-- All paths come from user code; no network input, no untrusted CSF sources in the threat model.
-- The "path-traversal prevention" docstring (issue 3.2) is misleading but the actual behavior is fine.
-- Parquet reading uses the upstream `parquet` crate — any CVE there affects the library, so keep the `58.0.0` pin current.
-- No unsafe code in the reviewed modules.
+因此，仓库当前并不处于两个公开验证命令都能端到端通过的状态。
 
 ---
 
-## 8. Priority Summary
+## 7. 安全
 
-| # | Issue | Severity | Cost | Recommended for 1.2.1? |
+对于一个信任其 Python 调用者的库来说，没有严重问题：
+
+- 所有路径都来自用户代码；威胁模型中没有网络输入，也没有不受信任的 CSF 来源。
+- “path-traversal prevention” docstring（问题 3.2）具有误导性，但实际行为没问题。
+- Parquet 读取使用上游 `parquet` crate——其中任何 CVE 都会影响本库，因此应保持 `58.0.0` pin 更新。
+- 被审查模块中没有 unsafe 代码。
+
+---
+
+## 8. 优先级摘要
+
+| # | 问题 | 严重性 | 成本 | 是否建议纳入 1.2.1？ |
 |---|---|---|---|---|
-| 2.1 | `compression` field is `created_by` | High (user-visible wrong data) | Low | **Yes** |
-| 2.2 | `__version__` fallback unreachable | Medium (cosmetic but misleading) | Trivial | **Yes** |
-| 2.3 | Type stubs lie about `CSFDescriptorGenerator`/`CSFProcessor` | High (runtime ImportError where types say OK) | Low (delete stubs) | **Yes** |
-| 2.4 | Normalize path aborts on bad CSF | Medium (long batch jobs fail) | Low | **Yes** |
-| 2.5 | `cargo test` fails due to broken doctest | High (primary Rust validation command is red) | Trivial | **Yes** |
-| 3.1 | `num_workers` sticks on first call | Medium (silently wrong behavior) | Medium (switch to scoped pool) | Next release |
-| 3.2 | `safe_parent_dir` overclaiming | Low (doc only) | Trivial | Next release |
-| 4.x | Dead code / minor cleanups | Low | Trivial | Optional |
-| 5.x | Performance improvements | Low-Medium | Medium | Measure first |
-| 6.1 | Broken `tests/rcsfs_test.py` | Medium (misleading) | Low (delete) | **Yes** |
-| 6.2 | No end-to-end normalize=true test | Medium | Medium | Next release |
-| 6.4 | Documented validation commands do not both pass | Medium | Low | **Yes** |
+| 2.1 | `compression` 字段实际是 `created_by` | 高（用户可见的错误数据） | 低 | **是** |
+| 2.2 | `__version__` fallback 不可达 | 中（表面问题但具有误导性） | 极低 | **是** |
+| 2.3 | 类型 stub 对 `CSFDescriptorGenerator`/`CSFProcessor` 撒谎 | 高（类型显示 OK，运行时 ImportError） | 低（删除 stub） | **是** |
+| 2.4 | 归一化路径遇到坏 CSF 会中止 | 中（长批处理任务失败） | 低 | **是** |
+| 2.5 | `cargo test` 因损坏 doctest 失败 | 高（主要 Rust 验证命令失败） | 极低 | **是** |
+| 3.1 | `num_workers` 在第一次调用后固定 | 中（静默错误行为） | 中（切换到 scoped pool） | 下个版本 |
+| 3.2 | `safe_parent_dir` 过度宣称 | 低（仅文档） | 极低 | 下个版本 |
+| 4.x | 死代码 / 次要清理 | 低 | 极低 | 可选 |
+| 5.x | 性能改进 | 低-中 | 中 | 先测量 |
+| 6.1 | 损坏的 `tests/rcsfs_test.py` | 中（误导性） | 低（删除） | **是** |
+| 6.2 | 没有端到端 normalize=true 测试 | 中 | 中 | 下个版本 |
+| 6.4 | 文档中的验证命令没有同时通过 | 中 | 低 | **是** |
 
-**Go / no-go for 1.2.1:** I'd block the tag on 2.1, 2.2, 2.3, 2.4, 2.5, and 6.1. The rest can follow in a 1.2.2 cleanup pass.
+**1.2.1 发布 go / no-go：** 我会阻止在 2.1、2.2、2.3、2.4、2.5 和 6.1 修复前打 tag。其余问题可以在 1.2.2 清理轮次中处理。
 
 ---
 
-## Appendix A — Files Read
+## 附录 A — 已读取文件
 
 - `Cargo.toml`
 - `src/lib.rs`
@@ -431,9 +431,9 @@ Nothing serious for a library that trusts its Python caller:
 - `tests/rcsfs_test.py`
 - `CLAUDE.md`
 
-## Appendix B — Branch State
+## 附录 B — 分支状态
 
-Only commit on `1.2.1-beta2` beyond `main` is the version bump `9c35568`:
+`1.2.1-beta2` 相对 `main` 只有一个版本号更新提交 `9c35568`：
 
 ```
  Cargo.toml        | 2 +-
@@ -441,4 +441,4 @@ Only commit on `1.2.1-beta2` beyond `main` is the version bump `9c35568`:
  rcsfs/__init__.py | 2 +-
 ```
 
-All three files consistently declare `1.2.1-beta.2`. No functional changes on this branch — the issues above live in code that was already on `main`.
+三个文件都一致声明 `1.2.1-beta.2`。该分支没有功能变更——上面的问题存在于已经位于 `main` 的代码中。

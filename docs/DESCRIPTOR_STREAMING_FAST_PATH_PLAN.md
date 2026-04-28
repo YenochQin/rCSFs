@@ -1,14 +1,28 @@
 # Descriptor 流式 fast path 可行性与实现计划
 
-## 0. 可行性结论
+## 0. 当前状态
 
-整体方向可行，但应分阶段推进：
+截至 `1.2.2-beta.1`，本计划中的**结果侧列式 buffer 优化已完成并验证**，但 parser fast path、strict mode 和 RecordBatch work item 尚未实现。
 
-1. **低分配 parser fast path 可行且应优先做。** 当前 `parse_csf()` 的主要额外开销来自补齐字符串、`chunk_string()`、临时 `Vec<&str>` 和 subshell 临时字符串。改为 ASCII 字节切片、按原始 9 字节 block 解析，可以在保持核心语义的前提下降低分配。
-2. **用 fast parser 替换 worker 内部解析可作为第一阶段落地。** 这一阶段不改 reader/worker/writer 的 channel 结构，风险最低，便于用现有测试和 benchmark 对比。
-3. **RecordBatch 直接传 worker 技术上可行，但性能收益不确定。** 仓库已有性能日志记录过一次 “RecordBatch Instead of Arc<str>” 尝试并回滚，原因是 CPU 利用率下降。因此这一步必须作为独立实验，用 benchmark 证明收益后再合入。
-4. **严格错误策略会改变当前公开行为。** 当前实现对未知 subshell 和 per-block J 解析失败采取 warning/写零/跳过等容错行为。改成直接报错退出不是纯性能优化，应通过 strict mode 或单独 breaking change 处理。
-5. **若要在并行流水线中遇错即停，需要补充取消机制。** 不能只在 worker 中 `return Err(...)`，还要避免 reader 阻塞在 bounded channel，并确保 writer 能正确结束或清理输出文件。
+已完成：
+
+1. **结果侧列式 buffer。** 并行 worker 不再返回 `Vec<(idx, Vec<i32>)>` 给 writer，而是输出列式 descriptor batch。raw 路径输出 `Vec<Vec<i32>>`，normalized 路径输出 `Vec<Vec<f32>>`。
+2. **normalized 归一化移到 worker 侧。** `normalize=True` 时，per-CSF normalization 从 writer 线程移动到 worker 线程并行执行，writer 只负责按 batch 顺序写入 Arrow arrays。
+3. **输出格式保持不变。** descriptor Parquet 仍为 `col_0..col_N` 多列布局；raw 为 `Int32`，normalized 为 `Float32`。
+4. **正确性验证通过。** 385,600 个 CSFs 的真实数据上，`1.2.2-beta.1` normalized descriptor 与 `1.2.1-beta3` 正确基线完全一致：`exact equal: True`，`overall max abs diff: 0.0`，`changed columns: 0`。
+5. **性能验证通过。** 同一份真实数据 descriptor 生成耗时从约 `2.4s` 降至约 `0.8s`。
+
+未完成 / 暂缓：
+
+1. **`parse_csf_fast()` 未实现。** 当前 worker 仍调用现有 `parse_csf()`。
+2. **strict mode 未实现。** 未知 subshell、per-block J 解析失败等仍保持兼容模式。
+3. **RecordBatch work item 未实现。** 该方向曾有历史性能回退记录，继续保持为后续独立实验。
+4. **strict mode cancellation 未实现。** 如果后续引入遇错即停，需要另行设计 reader/worker/writer 的取消机制。
+
+当前结论：
+
+- 对 `normalize=True` 的 descriptor 生成，已经找到主要瓶颈并完成有效优化。
+- 下一阶段不应默认继续推进 RecordBatch work item；应先在服务器上做大数据压力测试，确认列式 buffer 在更大数据规模下的内存峰值、吞吐和稳定性。
 
 ## 1. 背景
 
@@ -37,13 +51,13 @@ o1j1qas5.c
 
 ## 2. 目标
 
-实现一个 descriptor 生成 fast path，分为保守阶段和实验阶段：
+原始目标是实现一个 descriptor 生成 fast path，分为保守阶段和实验阶段：
 
 1. 仍然流式读取 `name.parquet`，不把完整 Parquet 一次性读入内存。
-2. 第一阶段不改 pipeline 数据结构，只在 worker 中按原始 CSF 固定宽度 block 直接提取字段并生成 descriptor。
+2. 第一阶段不改 reader 到 worker 的输入数据结构。
 3. 严格保持现有 `parse_csf()` 对 `line2`、`line3`、`;`、fallback 和 final J 的语义。
 4. 第一阶段默认保持现有容错行为；未知 subshell 直接报错应作为 strict mode 或后续行为变更处理。
-5. 第二阶段再实验以 `RecordBatch` 为单位处理，目标是减少逐行字符串复制和 `Arc<str>` 分配；必须用 benchmark 验证。
+5. 后续可实验以 `RecordBatch` 为单位处理，目标是减少逐行字符串复制和 `Arc<str>` 分配；必须用 benchmark 验证。
 6. 保持输出格式不变：descriptor Parquet 仍是多列 `col_0..col_N`，raw 为 `Int32`，normalized 为 `Float32`。
 
 非目标：
@@ -113,7 +127,7 @@ coupling_line = coupling_trimmed 左对齐补空格到 line_length
 
 ## 5. 建议实现步骤
 
-### 5.1 抽出可复用 parser 核心
+### 5.1 抽出可复用 parser 核心（未实现，暂缓）
 
 新增一个低分配 parser 函数，例如：
 
@@ -139,7 +153,7 @@ fn parse_csf_fast(
 - strict 模式下：未知 subshell、非 ASCII、固定宽度不完整、J 解析失败均返回 `Err`。
 - parser 核心应避免构造 subshell `String`；可用 `&str` 或 `[u8]` lookup，必要时给 `CSFDescriptorGenerator` 增加只读查询方法，避免暴露可变内部结构。
 
-### 5.2 用 fast parser 替换 worker 内部解析
+### 5.2 用 fast parser 替换 worker 内部解析（未实现，暂缓）
 
 当前并行 worker 内部逻辑是：
 
@@ -157,29 +171,31 @@ parse_csf_fast(line1, line2, line3, &generator_clone, false)
 
 注意：第一阶段不应默认修正未知 subshell 为硬错误；否则现有 Python 调用和测试期望会改变。建议先新增 strict 行为，但 Python API 默认保持兼容。
 
-### 5.3 优先优化结果侧列式 buffer
+### 5.3 优先优化结果侧列式 buffer（已完成）
 
-在 parser 行为稳定后，优先把 `Vec<(u64, Vec<i32>)>` 优化为 batch 级列式 buffer：
+已把并行 pipeline 中的 `Vec<(u64, Vec<i32>)>` 优化为 batch 级列式 buffer。当前实现使用等价的内部结构：
 
 ```rust
-struct RawDescriptorBatch {
-    idx: Vec<u64>,
-    columns: Vec<Vec<i32>>,
+enum DescriptorColumns {
+    Raw(Vec<Vec<i32>>),
+    Normalized(Vec<Vec<f32>>),
+}
+
+struct ResultItem {
+    batch_idx: usize,
+    batch_size: usize,
+    columns: DescriptorColumns,
 }
 ```
 
-normalized 路径可输出：
+writer 只需要把列 buffer 转成 Arrow arrays，避免 writer 线程逐行归一化和逐行构建列。该优化没有改变 reader 到 worker 的所有权模型，风险低于直接传 `RecordBatch`。
 
-```rust
-struct NormalizedDescriptorBatch {
-    idx: Vec<u64>,
-    columns: Vec<Vec<f32>>,
-}
-```
+实际结果：
 
-这样 writer 只需要把列 buffer 转成 Arrow arrays，避免 `Vec<i32>` per row 的分配。该优化不改变 reader 到 worker 的所有权模型，通常比直接传 `RecordBatch` 风险更低。
+- 真实数据输出与 `1.2.1-beta3` 正确基线完全一致。
+- `normalize=True` 场景下，385,600 个 CSFs descriptor 生成耗时从约 `2.4s` 降至约 `0.8s`。
 
-### 5.4 实验：将 reader 到 worker 的数据从 rows 改为 RecordBatch
+### 5.4 实验：将 reader 到 worker 的数据从 rows 改为 RecordBatch（未实现，暂缓）
 
 后续可单独实验改 pipeline：
 
@@ -266,36 +282,46 @@ strict 模式，即后续可选行为变更：
 
 ## 8. 性能验证计划
 
-建议用同一份中间 Parquet 做三组 benchmark：
+本地已完成的验证：
 
-1. 当前实现：reader 转 `Arc<str>`，worker 调用 `parse_csf()`。
-2. 阶段一：reader 仍转 rows，但 worker 使用 `parse_csf_fast()`。
-3. 阶段二：reader 仍转 rows，但 worker/writer 使用 batch 级列式 buffer，避免 `Vec<i32>` per row。
-4. 实验阶段：reader 发送 `RecordBatch`，worker 直接从 Arrow arrays 读取并调用 fast parser。
+1. 当前 `1.2.2-beta.1`：reader 仍转 rows，worker/writer 使用 batch 级列式 buffer，normalized 在 worker 侧并行完成。
+2. 正确基线：`1.2.1-beta3` 生成的 normalized descriptor。
+3. 数据规模：385,600 个 CSFs，87 列 descriptor。
 
-记录指标：
+本地结果：
+
+- shape: `(385600, 87)`
+- schema equal: `True`
+- columns equal: `True`
+- exact equal: `True`
+- overall max abs diff: `0.0`
+- changed columns: `0`
+- descriptor 生成耗时：约 `0.8s`，基线约 `2.4s`。
+
+服务器压力测试建议继续记录：
 
 - 总耗时。
 - 峰值内存。
 - CPU 利用率。
 - 每秒处理 CSF 数。
 - 输出 Parquet 行数和校验 hash。
+- raw 和 normalized 两条路径分别测试。
+- `num_workers` 建议至少测试：`1`、`物理核心数 / 4`、`物理核心数 / 2`、`物理核心数`。
+- 数据规模建议覆盖：当前 385,600 CSFs、百万级 CSFs，以及服务器目标最大数据集。
 
 合入门槛：
 
-- 阶段一必须在正常样例上与旧 parser 输出完全一致。
-- 阶段一若没有明显性能提升，也可以保留为 parser 简化，但不应继续推进更高风险 pipeline 改动。
+- 列式 buffer 优化必须保持 descriptor 输出完全一致。
+- 在服务器大数据压力测试中，不应出现内存峰值不可接受、worker 侧 OOM 或 writer 阻塞导致吞吐下降。
 - RecordBatch 实验只有在同机、同数据、同 worker 数下稳定优于阶段一时才合入；否则保留现有 rows channel。
 
 对 `o1j1qas5.parquet` 这类 1.6G 中间文件，仍建议保持流式处理。操作系统文件缓存会让重复读取接近内存速度，默认全量加载的收益未必能抵消内存峰值和实现复杂度。
 
 ---
 
-## 9. 推荐落地顺序
+## 9. 后续建议
 
-1. 把未知 subshell 策略从 warning 改为 error，并加测试。
-2. 新增 `parse_csf_fast()`，严格复刻现有 block、`;`、fallback 和 final J 语义。
-3. 用单元测试证明 `parse_csf_fast()` 与现有 parser 在正常输入上一致。
-4. 在 worker 内切换到 `parse_csf_fast()`。
-5. 再把 `WorkItem.rows` 改成 `WorkItem.batch: RecordBatch`，减少 reader 端分配。
-6. 性能测试后决定是否继续做列式 buffer 输出。
+1. **先做服务器压力测试。** 使用当前 `1.2.2-beta.1` wheel 在目标服务器上验证大数据集下的耗时、内存峰值和输出一致性。
+2. **暂不继续推进 RecordBatch work item。** 除非服务器 profiling 明确显示 reader 端 `Arc<str>` 分配成为主要瓶颈。
+3. **暂不引入 strict mode。** strict mode 会改变公开行为，应作为单独功能变更设计，并补 reader/worker/writer cancellation。
+4. **如需继续优化 parser，再单独实现 `parse_csf_fast()`。** 该优化必须先证明与现有 `parse_csf()` 在真实样例上完全一致，再考虑替换 worker 调用。

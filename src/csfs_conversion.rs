@@ -244,6 +244,7 @@ pub fn convert_csfs_to_parquet_parallel(
     let output_file = File::create(&output_path)?;
     let props = WriterProperties::builder()
         .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+        .set_write_batch_size(chunk_size)
         .build();
     let writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
     let mut writer_guard = ParquetFileGuard::new(writer, &output_path);
@@ -269,6 +270,9 @@ pub fn convert_csfs_to_parquet_parallel(
     println!("开始并行处理 CSF 数据...");
 
     loop {
+        let pending_lines_before_read = batch_lines.len();
+        let mut hit_eof = false;
+
         // Read a batch of lines
         let mut lines_read = 0;
         for _ in 0..chunk_size {
@@ -279,7 +283,10 @@ pub fn convert_csfs_to_parquet_parallel(
                     batch_lines.push(line);
                 }
                 Some(Err(e)) => return Err(e.into()),
-                None => break,
+                None => {
+                    hit_eof = true;
+                    break;
+                }
             }
         }
 
@@ -290,14 +297,23 @@ pub fn convert_csfs_to_parquet_parallel(
         // Ensure we have complete CSFs (3 lines each)
         let num_full_csfs = batch_lines.len() / 3;
         if num_full_csfs == 0 {
-            if lines_read == 0 {
+            if hit_eof {
+                eprintln!(
+                    "警告: 文件末尾有 {} 行不完整的数据，将被忽略",
+                    batch_lines.len()
+                );
                 break;
             }
+            debug_assert!(lines_read > 0 || pending_lines_before_read > 0);
+            continue;
+        }
+
+        if hit_eof && batch_lines.len() % 3 != 0 {
             eprintln!(
                 "警告: 文件末尾有 {} 行不完整的数据，将被忽略",
-                batch_lines.len()
+                batch_lines.len() % 3
             );
-            break;
+            batch_lines.truncate(num_full_csfs * 3);
         }
 
         let lines_to_process: Vec<String> = batch_lines.drain(..num_full_csfs * 3).collect();
@@ -306,7 +322,7 @@ pub fn convert_csfs_to_parquet_parallel(
         let chunks: Vec<&[String]> = lines_to_process.chunks(3).collect();
 
         // Process batch in parallel using rayon
-        let batch_start_line = total_lines - lines_to_process.len() + 1;
+        let batch_start_line = total_lines - lines_read - pending_lines_before_read + 1;
         let process_chunks = || {
             chunks
                 .into_par_iter()
@@ -499,6 +515,8 @@ pub fn convert_csfs_to_parquet(
     println!("开始处理 CSF 数据...");
 
     loop {
+        let mut hit_eof = false;
+
         // 读取 chunk_size 行
         let mut lines_read_this_iteration = 0;
         for _ in 0..chunk_size {
@@ -525,7 +543,10 @@ pub fn convert_csfs_to_parquet(
                     batch_lines.push(processed_line);
                 }
                 Some(Err(e)) => return Err(e.into()),
-                None => break,
+                None => {
+                    hit_eof = true;
+                    break;
+                }
             }
         }
 
@@ -536,12 +557,7 @@ pub fn convert_csfs_to_parquet(
         // 确保是 3 的倍数
         let num_full_csfs = batch_lines.len() / 3;
         if num_full_csfs == 0 {
-            // No more lines to read and incomplete CSF remaining - discard and exit
-            if lines_read_this_iteration == 0 {
-                break;
-            }
-            // Prevent infinite loop: if we read lines but cannot form a complete CSF
-            if batch_lines.len() < 3 {
+            if hit_eof {
                 eprintln!(
                     "警告: 文件末尾有 {} 行不完整的数据，将被忽略",
                     batch_lines.len()
@@ -549,6 +565,7 @@ pub fn convert_csfs_to_parquet(
                 break;
             }
             // 保留剩余行给下一轮
+            debug_assert!(lines_read_this_iteration > 0);
             continue;
         }
 

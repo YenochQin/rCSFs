@@ -7,6 +7,7 @@
 //! - Large file handling
 
 use std::fs;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 //////////////////////////////////////////////////////////////////////////////
@@ -90,6 +91,68 @@ fn create_large_csf(path: &Path, csf_count: usize) {
     }
 
     fs::write(path, content).expect("Failed to create large CSF file");
+}
+
+fn read_i32_descriptor_columns(path: &Path) -> Vec<Vec<i32>> {
+    use arrow::array::Int32Array;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+    let file = File::open(path).expect("Failed to open descriptor parquet");
+    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .expect("Failed to create parquet reader")
+        .build()
+        .expect("Failed to build parquet reader");
+
+    let mut columns: Vec<Vec<i32>> = Vec::new();
+    for batch in reader {
+        let batch = batch.expect("Failed to read parquet batch");
+        if columns.is_empty() {
+            columns = (0..batch.num_columns()).map(|_| Vec::new()).collect();
+        }
+        for (col_idx, values) in columns.iter_mut().enumerate() {
+            let array = batch
+                .column(col_idx)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("Descriptor column should be Int32");
+            for row_idx in 0..array.len() {
+                values.push(array.value(row_idx));
+            }
+        }
+    }
+
+    columns
+}
+
+fn read_f32_descriptor_columns(path: &Path) -> Vec<Vec<f32>> {
+    use arrow::array::Float32Array;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+    let file = File::open(path).expect("Failed to open descriptor parquet");
+    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .expect("Failed to create parquet reader")
+        .build()
+        .expect("Failed to build parquet reader");
+
+    let mut columns: Vec<Vec<f32>> = Vec::new();
+    for batch in reader {
+        let batch = batch.expect("Failed to read parquet batch");
+        if columns.is_empty() {
+            columns = (0..batch.num_columns()).map(|_| Vec::new()).collect();
+        }
+        for (col_idx, values) in columns.iter_mut().enumerate() {
+            let array = batch
+                .column(col_idx)
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .expect("Descriptor column should be Float32");
+            for row_idx in 0..array.len() {
+                values.push(array.value(row_idx));
+            }
+        }
+    }
+
+    columns
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -373,6 +436,85 @@ fn test_descriptor_parallel_rejects_zero_workers() {
         !descriptor_path.exists(),
         "Rejected descriptor run should not create output"
     );
+}
+
+#[test]
+fn test_descriptor_parallel_matches_sequential_outputs() {
+    use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
+    use _rcsfs::csfs_descriptor::parquet_batch::{
+        generate_descriptors_from_parquet, generate_descriptors_from_parquet_parallel,
+        read_peel_subshells_from_header,
+    };
+
+    let input_path = temp_dir().join("test_descriptor_consistency.csf");
+    let parquet_path = temp_dir().join("test_descriptor_consistency.parquet");
+    let header_path = temp_dir().join("test_descriptor_consistency_header.toml");
+    let sequential_raw_path = temp_dir().join("test_descriptor_consistency_seq_raw.parquet");
+    let parallel_raw_path = temp_dir().join("test_descriptor_consistency_par_raw.parquet");
+    let sequential_norm_path = temp_dir().join("test_descriptor_consistency_seq_norm.parquet");
+    let parallel_norm_path = temp_dir().join("test_descriptor_consistency_par_norm.parquet");
+
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.csf"),
+        &input_path,
+    )
+    .expect("Failed to copy sample CSF fixture");
+    convert_csfs_to_parquet(&input_path, &parquet_path, 256, 1000)
+        .expect("Fixture conversion should succeed");
+
+    let peel_subshells =
+        read_peel_subshells_from_header(&header_path).expect("Peel subshells should be readable");
+
+    generate_descriptors_from_parquet(
+        &parquet_path,
+        &sequential_raw_path,
+        Some(peel_subshells.clone()),
+        None,
+        false,
+    )
+    .expect("Sequential raw descriptor generation should succeed");
+    generate_descriptors_from_parquet_parallel(
+        &parquet_path,
+        &parallel_raw_path,
+        peel_subshells.clone(),
+        Some(2),
+        false,
+    )
+    .expect("Parallel raw descriptor generation should succeed");
+
+    generate_descriptors_from_parquet(
+        &parquet_path,
+        &sequential_norm_path,
+        Some(peel_subshells.clone()),
+        None,
+        true,
+    )
+    .expect("Sequential normalized descriptor generation should succeed");
+    generate_descriptors_from_parquet_parallel(
+        &parquet_path,
+        &parallel_norm_path,
+        peel_subshells,
+        Some(2),
+        true,
+    )
+    .expect("Parallel normalized descriptor generation should succeed");
+
+    assert_eq!(
+        read_i32_descriptor_columns(&sequential_raw_path),
+        read_i32_descriptor_columns(&parallel_raw_path)
+    );
+    assert_eq!(
+        read_f32_descriptor_columns(&sequential_norm_path),
+        read_f32_descriptor_columns(&parallel_norm_path)
+    );
+
+    cleanup_test_file(&input_path);
+    cleanup_test_file(&parquet_path);
+    cleanup_test_file(&header_path);
+    cleanup_test_file(&sequential_raw_path);
+    cleanup_test_file(&parallel_raw_path);
+    cleanup_test_file(&sequential_norm_path);
+    cleanup_test_file(&parallel_norm_path);
 }
 
 //////////////////////////////////////////////////////////////////////////////

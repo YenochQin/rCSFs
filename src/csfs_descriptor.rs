@@ -14,8 +14,45 @@ pub mod parquet_batch {
     use super::*;
     use arrow::array::{StringArray, UInt64Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::arrow_writer::ArrowWriter;
+    use std::fs::File;
     use std::path::PathBuf;
     use std::sync::Arc;
+
+    struct ParquetFileGuard {
+        writer: Option<ArrowWriter<File>>,
+        path: PathBuf,
+        cleanup_on_drop: bool,
+    }
+
+    impl ParquetFileGuard {
+        fn new(writer: ArrowWriter<File>, path: PathBuf) -> Self {
+            Self {
+                writer: Some(writer),
+                path,
+                cleanup_on_drop: true,
+            }
+        }
+
+        fn finish(mut self) -> Result<()> {
+            if let Some(writer) = self.writer.take() {
+                writer
+                    .close()
+                    .with_context(|| "Failed to close Parquet writer")?;
+            }
+            self.cleanup_on_drop = false;
+            Ok(())
+        }
+    }
+
+    impl Drop for ParquetFileGuard {
+        fn drop(&mut self) {
+            let _ = self.writer.take().map(|w| w.close());
+            if self.cleanup_on_drop {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
+    }
 
     /// Read peel subshells from a header TOML file
     ///
@@ -180,7 +217,6 @@ pub mod parquet_batch {
 
         // Step 4: Create output Parquet writer (ZSTD compression)
         use arrow::datatypes::{DataType, Field, Schema};
-        use parquet::arrow::arrow_writer::ArrowWriter;
         use parquet::file::properties::WriterProperties;
         use std::sync::Arc;
 
@@ -207,9 +243,9 @@ pub mod parquet_batch {
             ))
             .build();
 
-        let mut writer =
-            ArrowWriter::try_new(output_file_handle, output_schema.clone(), Some(props))
-                .with_context(|| "Failed to create Parquet writer")?;
+        let writer = ArrowWriter::try_new(output_file_handle, output_schema.clone(), Some(props))
+            .with_context(|| "Failed to create Parquet writer")?;
+        let mut writer_guard = ParquetFileGuard::new(writer, output_file.to_path_buf());
 
         // Step 5: Process each batch
         let mut total_csfs = 0;
@@ -269,14 +305,20 @@ pub mod parquet_batch {
                             match generator.parse_csf(line1, line2, line3) {
                                 Ok(descriptor) => {
                                     let two_j_target = infer_two_j_target(&descriptor);
-                                    let normalized = normalize_descriptor_per_csf(
+                                    let normalized = match normalize_descriptor_per_csf(
                                         &descriptor,
                                         &peel_subshells,
                                         two_j_target,
-                                    )
-                                    .with_context(|| {
-                                        format!("Failed to normalize CSF at index {}", idx)
-                                    })?;
+                                    ) {
+                                        Ok(normalized) => normalized,
+                                        Err(e) => {
+                                            eprintln!(
+                                                "Warning: Failed to normalize CSF at index {}: {}",
+                                                idx, e
+                                            );
+                                            vec![0.0f32; descriptor_size]
+                                        }
+                                    };
                                     for (col_idx, &val) in normalized.iter().enumerate() {
                                         builders[col_idx].append_value(val);
                                     }
@@ -306,7 +348,10 @@ pub mod parquet_batch {
                             RecordBatch::try_new(output_schema.clone(), column_arrays)
                                 .with_context(|| "Failed to create output batch")?;
 
-                        writer
+                        writer_guard
+                            .writer
+                            .as_mut()
+                            .expect("writer exists until finish")
                             .write(&output_batch)
                             .with_context(|| "Failed to write batch")?;
                     } else {
@@ -352,7 +397,10 @@ pub mod parquet_batch {
                             RecordBatch::try_new(output_schema.clone(), column_arrays)
                                 .with_context(|| "Failed to create output batch")?;
 
-                        writer
+                        writer_guard
+                            .writer
+                            .as_mut()
+                            .expect("writer exists until finish")
                             .write(&output_batch)
                             .with_context(|| "Failed to write batch")?;
                     }
@@ -367,7 +415,7 @@ pub mod parquet_batch {
         }
 
         // Step 6: Finalize writer
-        writer.finish().with_context(|| "Failed to finish writer")?;
+        writer_guard.finish()?;
 
         Ok(BatchDescriptorStats {
             input_file: input_parquet.to_string_lossy().to_string(),
@@ -423,7 +471,6 @@ pub mod parquet_batch {
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use crossbeam_channel::{Receiver, Sender, bounded};
-        use parquet::arrow::arrow_writer::ArrowWriter;
         use parquet::file::properties::WriterProperties;
         use std::collections::BTreeMap;
         use std::sync::Arc;
@@ -433,6 +480,9 @@ pub mod parquet_batch {
             let default = num_cpus::get();
             default
         });
+        if num_workers == 0 {
+            return Err(anyhow::anyhow!("num_workers must be greater than 0"));
+        }
 
         let orbital_count = peel_subshells.len();
         let descriptor_size = 3 * orbital_count;
@@ -479,8 +529,9 @@ pub mod parquet_batch {
             ))
             .build();
 
-        let mut writer = ArrowWriter::try_new(output_file_handle, schema.clone(), Some(props))
+        let writer = ArrowWriter::try_new(output_file_handle, schema.clone(), Some(props))
             .with_context(|| "Failed to create Parquet writer")?;
+        let mut writer_guard = ParquetFileGuard::new(writer, output_file.to_path_buf());
 
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 3: Spawn reader thread
@@ -723,7 +774,13 @@ pub mod parquet_batch {
                                     }
                                 };
 
-                            if writer.write(&output_batch).is_err() {
+                            if writer_guard
+                                .writer
+                                .as_mut()
+                                .expect("writer exists until finish")
+                                .write(&output_batch)
+                                .is_err()
+                            {
                                 return Err(anyhow::anyhow!("Failed to write batch"));
                             }
                         } else {
@@ -755,7 +812,13 @@ pub mod parquet_batch {
                                     }
                                 };
 
-                            if writer.write(&output_batch).is_err() {
+                            if writer_guard
+                                .writer
+                                .as_mut()
+                                .expect("writer exists until finish")
+                                .write(&output_batch)
+                                .is_err()
+                            {
                                 return Err(anyhow::anyhow!("Failed to write batch"));
                             }
                         }
@@ -769,14 +832,9 @@ pub mod parquet_batch {
                     }
                 }
 
-                // Finalize writer
-                match writer.close() {
-                    Ok(_) => {
-                        println!("[写入完成] {} 个描述符", total_descriptors);
-                        Ok((total_descriptors, total_batches_written))
-                    }
-                    Err(e) => Err(anyhow::anyhow!("Failed to close writer: {}", e)),
-                }
+                writer_guard.finish()?;
+                println!("[写入完成] {} 个描述符", total_descriptors);
+                Ok((total_descriptors, total_batches_written))
             });
 
         ////////////////////////////////////////////////////////////////////////////////
@@ -877,7 +935,7 @@ pub fn j_to_double_j(j_str: &str) -> Result<i32> {
 fn chunk_string(s: &str, chunk_size: usize) -> Vec<&str> {
     s.as_bytes()
         .chunks(chunk_size)
-        .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
+        .map(|chunk| std::str::from_utf8(chunk).expect("ASCII input keeps chunks valid UTF-8"))
         .collect()
 }
 
@@ -943,6 +1001,10 @@ impl CSFDescriptorGenerator {
     /// line3: "                        4-  "
     /// ```
     pub fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> Result<Vec<i32>> {
+        if !line1.is_ascii() || !line2.is_ascii() || !line3.is_ascii() {
+            return Err(anyhow::anyhow!("CSF lines must be ASCII fixed-width text"));
+        }
+
         // Initialize descriptor array with zeros
         let mut descriptor = vec![0i32; 3 * self.orbital_count];
 
@@ -1092,6 +1154,12 @@ fn py_generate_descriptors_from_parquet(
 
     let input_path = Path::new(&input_parquet).to_path_buf();
     let output_path = Path::new(&output_file).to_path_buf();
+
+    if matches!(num_workers, Some(0)) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "num_workers must be greater than 0",
+        ));
+    }
 
     // Release the GIL during the long-running operation
     let stats = py

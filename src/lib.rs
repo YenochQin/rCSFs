@@ -88,6 +88,9 @@ fn convert_csfs(
     if chunk_size == 0 {
         return Err(PyValueError::new_err("chunk_size must be greater than 0"));
     }
+    if matches!(num_workers, Some(0)) {
+        return Err(PyValueError::new_err("num_workers must be greater than 0"));
+    }
 
     // Execute parallel conversion
     let result = py.detach(|| {

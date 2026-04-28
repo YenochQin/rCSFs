@@ -8,7 +8,7 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Error as IoError, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use toml;
@@ -41,22 +41,22 @@ impl<'a> ParquetFileGuard<'a> {
     ///
     /// Returns a ParquetError if the writer fails to close properly.
     fn finish(mut self) -> Result<(), ParquetError> {
-        self.cleanup_on_drop = false;
         if let Some(writer) = self.writer.take() {
             writer.close()?;
         }
+        self.cleanup_on_drop = false;
         Ok(())
     }
 }
 
 impl<'a> Drop for ParquetFileGuard<'a> {
     fn drop(&mut self) {
+        // Ensure the writer is closed before removing the path so cleanup works on all platforms.
+        let _ = self.writer.take().map(|w| w.close());
         // Clean up incomplete output file if an error occurred
         if self.cleanup_on_drop {
             let _ = std::fs::remove_file(self.path);
         }
-        // Ensure the writer is closed (idempotent if already closed via finish())
-        let _ = self.writer.take().map(|w| w.close());
     }
 }
 
@@ -78,6 +78,36 @@ fn safe_parent_dir(path: &Path) -> PathBuf {
     path.parent()
         .and_then(|p| p.canonicalize().ok())
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn process_csf_data_line(
+    line: &str,
+    max_line_len: usize,
+    data_line_number: usize,
+) -> Result<(String, bool), IoError> {
+    if !line.is_ascii() {
+        return Err(IoError::new(
+            ErrorKind::InvalidData,
+            format!(
+                "CSF data line {} contains non-ASCII text; fixed-width CSF parsing requires ASCII input",
+                data_line_number
+            ),
+        ));
+    }
+
+    if line.len() > MAX_LINE_WARNING_THRESHOLD {
+        eprintln!(
+            "警告: 第 {} 条 CSF 数据行过长 ({} bytes)",
+            data_line_number,
+            line.len()
+        );
+    }
+
+    if line.len() > max_line_len {
+        Ok((line[..max_line_len].to_string(), true))
+    } else {
+        Ok((line.to_string(), false))
+    }
 }
 
 /// Extracts the first CSF_HEADER_LINE_COUNT header lines from a CSF file.
@@ -173,6 +203,14 @@ pub fn convert_csfs_to_parquet_parallel(
     chunk_size: usize,
     num_workers: Option<usize>,
 ) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
+    if matches!(num_workers, Some(0)) {
+        return Err(IoError::new(
+            ErrorKind::InvalidInput,
+            "num_workers must be greater than 0",
+        )
+        .into());
+    }
+
     let thread_pool = match num_workers {
         Some(n) => {
             println!("配置 Rayon 线程池，使用 {} 个 worker", n);
@@ -268,44 +306,38 @@ pub fn convert_csfs_to_parquet_parallel(
         let chunks: Vec<&[String]> = lines_to_process.chunks(3).collect();
 
         // Process batch in parallel using rayon
+        let batch_start_line = total_lines - lines_to_process.len() + 1;
         let process_chunks = || {
             chunks
                 .into_par_iter()
                 .enumerate()
                 .map(|(i, chunk)| {
                     if chunk.len() != 3 {
-                        return (
+                        return Ok((
                             (csf_count + i) as u64,
                             String::new(),
                             String::new(),
                             String::new(),
-                            false,
-                        );
+                            0usize,
+                        ));
                     }
 
-                    let process_line = |line: &str, max_len: usize| -> (String, bool) {
-                        if line.len() > MAX_LINE_WARNING_THRESHOLD {
-                            eprintln!("警告: 行过长 ({} bytes)", line.len());
-                        }
-                        if line.len() > max_len {
-                            (line.chars().take(max_len).collect::<String>(), true)
-                        } else {
-                            (line.to_string(), false)
-                        }
-                    };
+                    let line_number = batch_start_line + i * 3;
+                    let (line1, t1) = process_csf_data_line(&chunk[0], max_line_len, line_number)?;
+                    let (line2, t2) =
+                        process_csf_data_line(&chunk[1], max_line_len, line_number + 1)?;
+                    let (line3, t3) =
+                        process_csf_data_line(&chunk[2], max_line_len, line_number + 2)?;
+                    let truncated_lines = t1 as usize + t2 as usize + t3 as usize;
 
-                    let (line1, t1) = process_line(&chunk[0], max_line_len);
-                    let (line2, t2) = process_line(&chunk[1], max_line_len);
-                    let (line3, t3) = process_line(&chunk[2], max_line_len);
-
-                    ((csf_count + i) as u64, line1, line2, line3, t1 || t2 || t3)
+                    Ok(((csf_count + i) as u64, line1, line2, line3, truncated_lines))
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, IoError>>()
         };
-        let batch_results: Vec<(u64, String, String, String, bool)> = match &thread_pool {
+        let batch_results: Vec<(u64, String, String, String, usize)> = match &thread_pool {
             Some(pool) => pool.install(process_chunks),
             None => process_chunks(),
-        };
+        }?;
 
         // Write results in order (par_iter + collect preserves order)
         let mut idx_builder = UInt64Builder::with_capacity(num_full_csfs);
@@ -316,14 +348,12 @@ pub fn convert_csfs_to_parquet_parallel(
         let mut line3_builder =
             StringBuilder::with_capacity(num_full_csfs, num_full_csfs * max_line_len);
 
-        for (idx, line1, line2, line3, truncated) in batch_results {
+        for (idx, line1, line2, line3, truncated_lines) in batch_results {
             idx_builder.append_value(idx);
             line1_builder.append_value(&line1);
             line2_builder.append_value(&line2);
             line3_builder.append_value(&line3);
-            if truncated {
-                truncated_count += 1;
-            }
+            truncated_count += truncated_lines;
         }
 
         let batch = RecordBatch::try_new(
@@ -351,7 +381,7 @@ pub fn convert_csfs_to_parquet_parallel(
     };
 
     println!("\n并行转换完成！");
-    println!("总行数: {}", total_lines);
+    println!("CSF 数据行数: {}", total_lines);
     println!("CSF 数量: {}", csf_count);
     println!("截断行数: {}", truncated_count);
     if truncated_count > 0 {
@@ -477,22 +507,14 @@ pub fn convert_csfs_to_parquet(
                     total_lines += 1;
                     lines_read_this_iteration += 1;
 
-                    // Warn about excessively long lines (potential memory issue)
-                    if line.len() > MAX_LINE_WARNING_THRESHOLD {
-                        eprintln!(
-                            "警告: 第 {} 行过长 ({} bytes)，可能消耗大量内存",
-                            total_lines,
-                            line.len()
-                        );
-                    }
-
-                    // 检查是否需要截断
-                    if line.len() > max_line_len {
+                    let (processed_line, truncated) =
+                        process_csf_data_line(&line, max_line_len, total_lines)?;
+                    if truncated {
                         truncated_count += 1;
                         if truncated_count <= 5 {
                             // 只打印前5个截断警告
                             println!(
-                                "警告: 第 {} 行被截断 ({} > {})",
+                                "警告: 第 {} 条 CSF 数据行被截断 ({} > {})",
                                 total_lines,
                                 line.len(),
                                 max_line_len
@@ -500,12 +522,6 @@ pub fn convert_csfs_to_parquet(
                         }
                     }
 
-                    // 截断到 max_line_len
-                    let processed_line = if line.len() > max_line_len {
-                        line.chars().take(max_line_len).collect::<String>()
-                    } else {
-                        line
-                    };
                     batch_lines.push(processed_line);
                 }
                 Some(Err(e)) => return Err(e.into()),
@@ -606,7 +622,7 @@ pub fn convert_csfs_to_parquet(
     // 统计信息
     println!("\n转换完成！");
     println!("================ 统计信息 ================");
-    println!("总行数: {}", total_lines);
+    println!("CSF 数据行数: {}", total_lines);
     println!("CSF 数量: {}", csf_count);
     println!("截断行数: {}", truncated_count);
     if truncated_count > 0 {

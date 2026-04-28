@@ -317,6 +317,28 @@ fn test_normalize_descriptor_per_csf_unknown_subshell() {
 }
 
 #[test]
+fn test_normalize_descriptor_per_csf_rejects_invalid_electron_count() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    let too_many = vec![3, 0, 0];
+    let negative = vec![-1, 0, 0];
+    let subshells = vec!["s ".to_string()];
+
+    assert!(normalize_descriptor_per_csf(&too_many, &subshells, 0).is_err());
+    assert!(normalize_descriptor_per_csf(&negative, &subshells, 0).is_err());
+}
+
+#[test]
+fn test_normalize_descriptor_per_csf_rejects_negative_target_j() {
+    use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
+
+    let descriptor = vec![1, 1, 1];
+    let subshells = vec!["s ".to_string()];
+
+    assert!(normalize_descriptor_per_csf(&descriptor, &subshells, -1).is_err());
+}
+
+#[test]
 fn test_normalize_descriptor_per_csf_rear_constraint_binding() {
     use _rcsfs::descriptor_normalization::normalize_descriptor_per_csf;
 

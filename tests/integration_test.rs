@@ -211,6 +211,64 @@ fn test_line_truncation() {
     );
 }
 
+#[test]
+fn test_truncated_count_matches_sequential_and_parallel() {
+    use _rcsfs::csfs_conversion::{convert_csfs_to_parquet, convert_csfs_to_parquet_parallel};
+
+    let input_path = temp_dir().join("test_truncate_consistency.csf");
+    let seq_output = temp_dir().join("test_truncate_consistency_seq.parquet");
+    let par_output = temp_dir().join("test_truncate_consistency_par.parquet");
+
+    let long_line = "x".repeat(80);
+    let content = format!(
+        "  Header line 1\n  Header line 2\n  Header line 3\n  Header line 4\n  Header line 5\n{}\n{}\n{}\n",
+        long_line, long_line, long_line
+    );
+    fs::write(&input_path, content).expect("Failed to create truncation consistency CSF file");
+
+    let seq_result = convert_csfs_to_parquet(&input_path, &seq_output, 10, 30);
+    let par_result = convert_csfs_to_parquet_parallel(&input_path, &par_output, 10, 30, Some(2));
+
+    cleanup_test_file(&input_path);
+    cleanup_test_file(&seq_output);
+    cleanup_test_file(&par_output);
+
+    assert!(seq_result.is_ok(), "Sequential conversion should succeed");
+    assert!(par_result.is_ok(), "Parallel conversion should succeed");
+
+    let seq_stats = seq_result.unwrap();
+    let par_stats = par_result.unwrap();
+    assert_eq!(seq_stats.truncated_count, 3);
+    assert_eq!(seq_stats.truncated_count, par_stats.truncated_count);
+}
+
+#[test]
+fn test_non_ascii_csf_data_rejected_and_output_cleaned() {
+    use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
+
+    let input_path = temp_dir().join("test_non_ascii.csf");
+    let output_path = temp_dir().join("test_non_ascii.parquet");
+
+    let content = "  Header line 1\n\
+                   Header line 2\n\
+                   Header line 3\n\
+                   Header line 4\n\
+                   Header line 5\n\
+                   测试 ( 2)\n\
+                            3/2\n\
+                              4-\n";
+    fs::write(&input_path, content).expect("Failed to create non-ASCII CSF file");
+
+    let result = convert_csfs_to_parquet(&input_path, &output_path, 256, 1000);
+
+    cleanup_test_file(&input_path);
+    assert!(result.is_err(), "Non-ASCII CSF data should be rejected");
+    assert!(
+        !output_path.exists(),
+        "Failed conversion should clean incomplete parquet output"
+    );
+}
+
 //////////////////////////////////////////////////////////////////////////////
 // Parallel Processing Tests
 //////////////////////////////////////////////////////////////////////////////
@@ -266,6 +324,55 @@ fn test_parallel_processing_many_workers() {
     cleanup_test_file(&output_path);
 
     assert!(result.is_ok(), "Many workers conversion should succeed");
+}
+
+#[test]
+fn test_parallel_conversion_rejects_zero_workers() {
+    use _rcsfs::csfs_conversion::convert_csfs_to_parquet_parallel;
+
+    let input_path = temp_dir().join("test_parallel_zero_workers.csf");
+    let output_path = temp_dir().join("test_parallel_zero_workers.parquet");
+
+    create_minimal_csf(&input_path);
+
+    let result = convert_csfs_to_parquet_parallel(&input_path, &output_path, 256, 1000, Some(0));
+
+    cleanup_test_file(&input_path);
+    cleanup_test_file(&output_path);
+
+    assert!(result.is_err(), "num_workers=0 should be rejected");
+}
+
+#[test]
+fn test_descriptor_parallel_rejects_zero_workers() {
+    use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
+    use _rcsfs::csfs_descriptor::parquet_batch::generate_descriptors_from_parquet_parallel;
+
+    let input_path = temp_dir().join("test_descriptor_zero_workers.csf");
+    let parquet_path = temp_dir().join("test_descriptor_zero_workers.parquet");
+    let descriptor_path = temp_dir().join("test_descriptor_zero_workers_desc.parquet");
+
+    create_minimal_csf(&input_path);
+    let conversion = convert_csfs_to_parquet(&input_path, &parquet_path, 256, 1000);
+    assert!(conversion.is_ok(), "Fixture conversion should succeed");
+
+    let result = generate_descriptors_from_parquet_parallel(
+        &parquet_path,
+        &descriptor_path,
+        vec!["5s".to_string()],
+        Some(0),
+        false,
+    );
+
+    cleanup_test_file(&input_path);
+    cleanup_test_file(&parquet_path);
+    cleanup_test_file(&descriptor_path);
+
+    assert!(result.is_err(), "num_workers=0 should be rejected");
+    assert!(
+        !descriptor_path.exists(),
+        "Rejected descriptor run should not create output"
+    );
 }
 
 //////////////////////////////////////////////////////////////////////////////

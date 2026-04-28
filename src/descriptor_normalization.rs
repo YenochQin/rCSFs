@@ -246,6 +246,12 @@ pub fn normalize_descriptor_per_csf(
     if n == 0 {
         return Ok(Vec::new());
     }
+    if two_j_target < 0 {
+        return Err(anyhow::anyhow!(
+            "Invalid target 2J value: {} must be non-negative",
+            two_j_target
+        ));
+    }
 
     // Step 1: Compute g_i for each subshell (static, depends only on subshell type)
     let g: Vec<i32> = peel_subshells
@@ -260,6 +266,17 @@ pub fn normalize_descriptor_per_csf(
 
     // Step 2: Extract n_i from descriptor and compute u_i = n_i * (g_i - n_i)
     let n_elec: Vec<i32> = (0..n).map(|i| descriptor[3 * i]).collect();
+    for i in 0..n {
+        if n_elec[i] < 0 || n_elec[i] > g[i] {
+            return Err(anyhow::anyhow!(
+                "Invalid electron count for subshell {} at index {}: {} exceeds physical range 0..={}",
+                peel_subshells[i],
+                i,
+                n_elec[i],
+                g[i]
+            ));
+        }
+    }
     let u: Vec<i32> = (0..n).map(|i| n_elec[i] * (g[i] - n_elec[i])).collect();
 
     // Step 3: Prefix sums  prefix[i] = sum_{k=0}^{i} u[k]

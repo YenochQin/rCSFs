@@ -89,6 +89,21 @@ fn test_descriptor_generator_parse_csf_empty_orbital() {
 }
 
 #[test]
+fn test_descriptor_generator_rejects_non_ascii_lines() {
+    use _rcsfs::csfs_descriptor::CSFDescriptorGenerator;
+
+    let subshells = vec!["5s".to_string()];
+    let generator = CSFDescriptorGenerator::new(subshells);
+
+    let result = generator.parse_csf("  测试 ( 2)", "          ", "      0  ");
+
+    assert!(
+        result.is_err(),
+        "Fixed-width descriptor parsing should reject non-ASCII input"
+    );
+}
+
+#[test]
 fn test_descriptor_generator_parse_csf_fractional_j() {
     use _rcsfs::csfs_descriptor::CSFDescriptorGenerator;
 

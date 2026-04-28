@@ -10,7 +10,8 @@
 2. **normalized 归一化移到 worker 侧。** `normalize=True` 时，per-CSF normalization 从 writer 线程移动到 worker 线程并行执行，writer 只负责按 batch 顺序写入 Arrow arrays。
 3. **输出格式保持不变。** descriptor Parquet 仍为 `col_0..col_N` 多列布局；raw 为 `Int32`，normalized 为 `Float32`。
 4. **正确性验证通过。** 385,600 个 CSFs 的真实数据上，`1.2.2-beta.1` normalized descriptor 与 `1.2.1-beta3` 正确基线完全一致：`exact equal: True`，`overall max abs diff: 0.0`，`changed columns: 0`。
-5. **性能验证通过。** 同一份真实数据 descriptor 生成耗时从约 `2.4s` 降至约 `0.8s`。
+5. **性能验证通过。** 385,600 个 CSFs 的真实数据 descriptor 生成耗时从约 `2.4s` 降至约 `0.8s`。
+6. **服务器压力测试通过。** 14,585,607 个 CSFs、168 列 normalized descriptor，耗时 `1m38.4s`；运行期间调用全部 CPU，btop 观察多数核心保持 `75%+` 使用率；输出与旧基线完全一致。
 
 未完成 / 暂缓：
 
@@ -22,7 +23,7 @@
 当前结论：
 
 - 对 `normalize=True` 的 descriptor 生成，已经找到主要瓶颈并完成有效优化。
-- 下一阶段不应默认继续推进 RecordBatch work item；应先在服务器上做大数据压力测试，确认列式 buffer 在更大数据规模下的内存峰值、吞吐和稳定性。
+- 列式 buffer 在千万级 CSFs 数据上已通过压力测试。下一阶段不应默认继续推进 RecordBatch work item，除非 profiling 明确显示 reader 端分配成为主要瓶颈。
 
 ## 1. 背景
 
@@ -298,7 +299,22 @@ strict 模式，即后续可选行为变更：
 - changed columns: `0`
 - descriptor 生成耗时：约 `0.8s`，基线约 `2.4s`。
 
-服务器压力测试建议继续记录：
+服务器压力测试结果：
+
+- 数据规模：14,585,607 个 CSFs。
+- descriptor 维度：168 列。
+- 生成模式：normalized descriptor。
+- 总耗时：`1m38.4s`。
+- CPU 使用：程序调用全部 CPU；btop 观察多数核心保持 `75%+` 使用率。
+- shape: `(14585607, 168)`
+- schema equal: `True`
+- columns equal: `True`
+- exact equal: `True`
+- overall max abs diff: `0.0`
+- changed columns: `0`
+- old/new 值域均为 `[0.0, 1.0]`，无 `>1` 或 `<0` 单元格。
+
+后续如继续扩大压力测试，建议记录：
 
 - 总耗时。
 - 峰值内存。
@@ -321,7 +337,7 @@ strict 模式，即后续可选行为变更：
 
 ## 9. 后续建议
 
-1. **先做服务器压力测试。** 使用当前 `1.2.2-beta.1` wheel 在目标服务器上验证大数据集下的耗时、内存峰值和输出一致性。
-2. **暂不继续推进 RecordBatch work item。** 除非服务器 profiling 明确显示 reader 端 `Arc<str>` 分配成为主要瓶颈。
+1. **保留当前列式 buffer 方案作为 `1.2.2-beta.1` 主优化。** 该方案已通过本地和服务器压力测试。
+2. **暂不继续推进 RecordBatch work item。** 除非后续服务器 profiling 明确显示 reader 端 `Arc<str>` 分配成为主要瓶颈。
 3. **暂不引入 strict mode。** strict mode 会改变公开行为，应作为单独功能变更设计，并补 reader/worker/writer cancellation。
 4. **如需继续优化 parser，再单独实现 `parse_csf_fast()`。** 该优化必须先证明与现有 `parse_csf()` 在真实样例上完全一致，再考虑替换 worker 调用。

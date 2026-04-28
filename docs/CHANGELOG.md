@@ -37,6 +37,13 @@
   - overall max abs diff: `0.0`
   - changed columns: `0`
 - ✅ 同一份真实数据 descriptor 生成耗时从约 `2.4s` 降至约 `0.8s`。
+- ✅ 服务器压力测试通过：14,585,607 个 CSFs、168 列 normalized descriptor，耗时 `1m38.4s`；运行期间调用全部 CPU，btop 观察多数核心保持 `75%+` 使用率；输出与旧基线完全一致：
+  - shape: `(14585607, 168)`
+  - schema equal: `True`
+  - columns equal: `True`
+  - exact equal: `True`
+  - overall max abs diff: `0.0`
+  - changed columns: `0`
 
 ### 🧪 测试工具
 

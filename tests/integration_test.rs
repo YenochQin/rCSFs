@@ -306,6 +306,29 @@ fn test_truncated_count_matches_sequential_and_parallel() {
 }
 
 #[test]
+fn test_conversion_chunk_size_smaller_than_csf_group_preserves_rows() {
+    use _rcsfs::csfs_conversion::{convert_csfs_to_parquet, convert_csfs_to_parquet_parallel};
+
+    let input_path = temp_dir().join("test_small_chunk.csf");
+    let seq_output = temp_dir().join("test_small_chunk_seq.parquet");
+    let par_output = temp_dir().join("test_small_chunk_par.parquet");
+
+    create_minimal_csf(&input_path);
+
+    let seq_result = convert_csfs_to_parquet(&input_path, &seq_output, 256, 1);
+    let par_result = convert_csfs_to_parquet_parallel(&input_path, &par_output, 256, 1, Some(2));
+
+    cleanup_test_file(&input_path);
+    cleanup_test_file(&seq_output);
+    cleanup_test_file(&par_output);
+
+    assert!(seq_result.is_ok(), "Sequential conversion should succeed");
+    assert!(par_result.is_ok(), "Parallel conversion should succeed");
+    assert_eq!(seq_result.unwrap().csf_count, 2);
+    assert_eq!(par_result.unwrap().csf_count, 2);
+}
+
+#[test]
 fn test_non_ascii_csf_data_rejected_and_output_cleaned() {
     use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
 

@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs::read_to_string;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Parquet reading/writing support
 pub mod parquet_batch {
@@ -641,7 +642,7 @@ pub mod parquet_batch {
                             None => return Err(anyhow::anyhow!("line3 column is not string type")),
                         };
 
-                        // Extract rows as Arc<str> for zero-copy sharing across threads
+                        // Copy row strings into Arc<str> so worker threads can own them safely.
                         let rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)> = (0..batch_size)
                             .map(|i| {
                                 (
@@ -712,28 +713,27 @@ pub mod parquet_batch {
                             .rows
                             .into_par_iter()
                             .map(|(idx, ref line1, ref line2, ref line3)| {
-                                let descriptor =
-                                    match generator_clone.parse_csf(line1, line2, line3) {
-                                        Ok(desc) => desc,
-                                        Err(e) => {
-                                            eprintln!(
-                                                "Warning: Failed to parse CSF at index {}: {}",
-                                                idx, e
-                                            );
-                                            vec![0i32; descriptor_size]
+                                match generator_clone.parse_csf(line1, line2, line3) {
+                                    Ok(descriptor) => {
+                                        let two_j_target = infer_two_j_target(&descriptor);
+                                        match normalize_descriptor_per_csf(
+                                            &descriptor,
+                                            &peel_subshells_for_normalization,
+                                            two_j_target,
+                                        ) {
+                                            Ok(normalized) => normalized,
+                                            Err(e) => {
+                                                eprintln!(
+                                                    "Warning: Failed to normalize CSF at index {}: {}",
+                                                    idx, e
+                                                );
+                                                vec![0.0f32; descriptor_size]
+                                            }
                                         }
-                                    };
-
-                                let two_j_target = infer_two_j_target(&descriptor);
-                                match normalize_descriptor_per_csf(
-                                    &descriptor,
-                                    &peel_subshells_for_normalization,
-                                    two_j_target,
-                                ) {
-                                    Ok(normalized) => normalized,
+                                    }
                                     Err(e) => {
                                         eprintln!(
-                                            "Warning: Failed to normalize CSF at index {}: {}",
+                                            "Warning: Failed to parse CSF at index {}: {}",
                                             idx, e
                                         );
                                         vec![0.0f32; descriptor_size]
@@ -901,27 +901,55 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 6: Wait for all threads and collect results
         ////////////////////////////////////////////////////////////////////////////////
-        let reader_result = reader_handle
-            .join()
-            .map_err(|e| anyhow::anyhow!("Reader thread panicked: {:?}", e))?
-            .with_context(|| "Reader thread failed")?;
+        let mut errors = Vec::new();
 
-        let (total_csfs, _) = reader_result;
+        let reader_result = match reader_handle.join() {
+            Ok(Ok(result)) => Some(result),
+            Ok(Err(e)) => {
+                errors.push(format!("Reader thread failed: {:#}", e));
+                None
+            }
+            Err(e) => {
+                errors.push(format!("Reader thread panicked: {:?}", e));
+                None
+            }
+        };
 
         // Wait for all worker threads
         for (i, handle) in worker_handles.into_iter().enumerate() {
-            handle
-                .join()
-                .map_err(|e| anyhow::anyhow!("Worker thread {} panicked: {:?}", i, e))?
-                .with_context(|| format!("Worker thread {} failed", i))?;
+            match handle.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    errors.push(format!("Worker thread {} failed: {:#}", i, e));
+                }
+                Err(e) => {
+                    errors.push(format!("Worker thread {} panicked: {:?}", i, e));
+                }
+            }
         }
 
-        let writer_result = writer_handle
-            .join()
-            .map_err(|e| anyhow::anyhow!("Writer thread panicked: {:?}", e))?
-            .with_context(|| "Writer thread failed")?;
+        let writer_result = match writer_handle.join() {
+            Ok(Ok(result)) => Some(result),
+            Ok(Err(e)) => {
+                errors.push(format!("Writer thread failed: {:#}", e));
+                None
+            }
+            Err(e) => {
+                errors.push(format!("Writer thread panicked: {:?}", e));
+                None
+            }
+        };
 
-        let (total_descriptors, _) = writer_result;
+        if !errors.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Parallel descriptor generation failed: {}",
+                errors.join("; ")
+            ));
+        }
+
+        let (total_csfs, _) = reader_result.expect("reader result exists when no errors occurred");
+        let (total_descriptors, _) =
+            writer_result.expect("writer result exists when no errors occurred");
 
         println!("====================================");
         println!("处理完成！");
@@ -1010,6 +1038,8 @@ pub struct CSFDescriptorGenerator {
     orbital_index_map: HashMap<String, usize>,
     /// Number of orbitals (cached for performance)
     orbital_count: usize,
+    /// Count missing-subshell warnings so malformed input cannot flood stderr.
+    missing_subshell_warning_count: AtomicUsize,
 }
 
 impl CSFDescriptorGenerator {
@@ -1032,6 +1062,7 @@ impl CSFDescriptorGenerator {
             peel_subshells,
             orbital_index_map,
             orbital_count,
+            missing_subshell_warning_count: AtomicUsize::new(0),
         }
     }
 
@@ -1166,8 +1197,14 @@ impl CSFDescriptorGenerator {
                     }
                 }
             } else {
-                // Warning: subshell not in list (skip as Python does)
-                eprintln!("Warning: {} not found in orbs list", subshell);
+                let warning_idx = self
+                    .missing_subshell_warning_count
+                    .fetch_add(1, Ordering::Relaxed);
+                if warning_idx < 5 {
+                    eprintln!("Warning: {} not found in orbs list", subshell);
+                } else if warning_idx == 5 {
+                    eprintln!("Warning: further subshell-not-found warnings suppressed");
+                }
             }
         }
 

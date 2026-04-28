@@ -1,4 +1,14 @@
-# Descriptor 流式 fast path 实现计划
+# Descriptor 流式 fast path 可行性与实现计划
+
+## 0. 可行性结论
+
+整体方向可行，但应分阶段推进：
+
+1. **低分配 parser fast path 可行且应优先做。** 当前 `parse_csf()` 的主要额外开销来自补齐字符串、`chunk_string()`、临时 `Vec<&str>` 和 subshell 临时字符串。改为 ASCII 字节切片、按原始 9 字节 block 解析，可以在保持核心语义的前提下降低分配。
+2. **用 fast parser 替换 worker 内部解析可作为第一阶段落地。** 这一阶段不改 reader/worker/writer 的 channel 结构，风险最低，便于用现有测试和 benchmark 对比。
+3. **RecordBatch 直接传 worker 技术上可行，但性能收益不确定。** 仓库已有性能日志记录过一次 “RecordBatch Instead of Arc<str>” 尝试并回滚，原因是 CPU 利用率下降。因此这一步必须作为独立实验，用 benchmark 证明收益后再合入。
+4. **严格错误策略会改变当前公开行为。** 当前实现对未知 subshell 和 per-block J 解析失败采取 warning/写零/跳过等容错行为。改成直接报错退出不是纯性能优化，应通过 strict mode 或单独 breaking change 处理。
+5. **若要在并行流水线中遇错即停，需要补充取消机制。** 不能只在 worker 中 `return Err(...)`，还要避免 reader 阻塞在 bounded channel，并确保 writer 能正确结束或清理输出文件。
 
 ## 1. 背景
 
@@ -27,13 +37,13 @@ o1j1qas5.c
 
 ## 2. 目标
 
-实现一个 descriptor 生成 fast path：
+实现一个 descriptor 生成 fast path，分为保守阶段和实验阶段：
 
 1. 仍然流式读取 `name.parquet`，不把完整 Parquet 一次性读入内存。
-2. 以 `RecordBatch` 为单位处理，减少逐行字符串复制和 `Arc<str>` 分配。
-3. 在 worker 中按原始 CSF 固定宽度 block 直接提取字段并生成 descriptor。
-4. 严格保持现有 `parse_csf()` 对 `line2`、`line3`、`;`、fallback 和 final J 的语义。
-5. 如果 `line1` 中出现不在 `peel_subshells` 中的 subshell，直接报错退出，不再 warning 后跳过。
+2. 第一阶段不改 pipeline 数据结构，只在 worker 中按原始 CSF 固定宽度 block 直接提取字段并生成 descriptor。
+3. 严格保持现有 `parse_csf()` 对 `line2`、`line3`、`;`、fallback 和 final J 的语义。
+4. 第一阶段默认保持现有容错行为；未知 subshell 直接报错应作为 strict mode 或后续行为变更处理。
+5. 第二阶段再实验以 `RecordBatch` 为单位处理，目标是减少逐行字符串复制和 `Arc<str>` 分配；必须用 benchmark 验证。
 6. 保持输出格式不变：descriptor Parquet 仍是多列 `col_0..col_N`，raw 为 `Int32`，normalized 为 `Float32`。
 
 非目标：
@@ -73,7 +83,9 @@ coupling_line = coupling_trimmed 左对齐补空格到 line_length
 - `line2` 和 `line3` 必须先补齐到 `line1.trim_end()` 的长度，再按同一个 `block_idx` 取 block。
 - `block_idx` 必须来自原始 `line1` 的 block 位置，不能来自裁切后的 block 序号。
 - “最后一个 subshell”必须按原始 `line1` 的最后一个 block 判断。
-- 如果 `subshell` 不在 `peel_subshells` 中，直接返回错误。
+- 如果 `subshell` 不在 `peel_subshells` 中：
+  - 兼容模式：保持当前行为，warning 后跳过该 subshell。
+  - strict 模式：返回错误并终止任务。
 
 ---
 
@@ -95,7 +107,7 @@ coupling_line = coupling_trimmed 左对齐补空格到 line_length
 7. 如果电子数为 0，则该 subshell 对应 descriptor 三元组写入 `[0, 0, 0]`。
 8. 否则写入 `[electron_count, middle_j, coupling_j]`。
 
-这些规则要与当前 `parse_csf()` 保持一致，除了未知 subshell 的处理从 warning 改为 error。
+这些规则要与当前 `parse_csf()` 保持一致。未知 subshell 从 warning 改为 error 应作为 strict 行为单独控制，不能混入默认 fast path，否则会改变现有 API 语义。
 
 ---
 
@@ -111,6 +123,7 @@ fn parse_csf_fast(
     line2: &str,
     line3: &str,
     generator: &CSFDescriptorGenerator,
+    strict: bool,
 ) -> Result<Vec<i32>>
 ```
 
@@ -122,7 +135,9 @@ fn parse_csf_fast(
 - 避免 `chunk_string()` 创建 `Vec<&str>`。
 - 按 `block_idx` 用字节范围切片。
 - 用原始 block 数判断 `is_last`。
-- 未知 subshell 直接 `Err`。
+- 默认兼容当前 parser：未知 subshell warning 后跳过，per-block J 解析失败写 0。
+- strict 模式下：未知 subshell、非 ASCII、固定宽度不完整、J 解析失败均返回 `Err`。
+- parser 核心应避免构造 subshell `String`；可用 `&str` 或 `[u8]` lookup，必要时给 `CSFDescriptorGenerator` 增加只读查询方法，避免暴露可变内部结构。
 
 ### 5.2 用 fast parser 替换 worker 内部解析
 
@@ -135,14 +150,38 @@ generator_clone.parse_csf(line1, line2, line3)
 可以先替换为：
 
 ```rust
-parse_csf_fast(line1, line2, line3, &generator_clone)
+parse_csf_fast(line1, line2, line3, &generator_clone, false)
 ```
 
-第一阶段不改 channel 结构，先降低 parser 内部分配并修正未知 subshell 策略。
+第一阶段不改 channel 结构，先降低 parser 内部分配并保留兼容错误策略。
 
-### 5.3 将 reader 到 worker 的数据从 rows 改为 RecordBatch
+注意：第一阶段不应默认修正未知 subshell 为硬错误；否则现有 Python 调用和测试期望会改变。建议先新增 strict 行为，但 Python API 默认保持兼容。
 
-第二阶段再改 pipeline：
+### 5.3 优先优化结果侧列式 buffer
+
+在 parser 行为稳定后，优先把 `Vec<(u64, Vec<i32>)>` 优化为 batch 级列式 buffer：
+
+```rust
+struct RawDescriptorBatch {
+    idx: Vec<u64>,
+    columns: Vec<Vec<i32>>,
+}
+```
+
+normalized 路径可输出：
+
+```rust
+struct NormalizedDescriptorBatch {
+    idx: Vec<u64>,
+    columns: Vec<Vec<f32>>,
+}
+```
+
+这样 writer 只需要把列 buffer 转成 Arrow arrays，避免 `Vec<i32>` per row 的分配。该优化不改变 reader 到 worker 的所有权模型，通常比直接传 `RecordBatch` 风险更低。
+
+### 5.4 实验：将 reader 到 worker 的数据从 rows 改为 RecordBatch
+
+后续可单独实验改 pipeline：
 
 ```rust
 struct WorkItem {
@@ -166,41 +205,40 @@ let rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)> = ...
 
 减少每批大量小分配。
 
-### 5.4 后续可选优化：直接写列 buffer
+风险：
 
-在行为稳定后，可把 `Vec<(u64, Vec<i32>)>` 进一步优化为 batch 级列式 buffer：
-
-```rust
-struct RawDescriptorBatch {
-    idx: Vec<u64>,
-    columns: Vec<Vec<i32>>,
-}
-```
-
-normalized 路径可输出：
-
-```rust
-struct NormalizedDescriptorBatch {
-    idx: Vec<u64>,
-    columns: Vec<Vec<f32>>,
-}
-```
-
-这样 writer 只需要把列 buffer 转成 Arrow arrays，避免 `Vec<i32>` per row 的分配。
+- 仓库历史性能日志中已有一次 RecordBatch 传 worker 的失败尝试，记录为 CPU 利用率下降。
+- 可能的原因包括 Arrow column value 访问成本、batch 生命周期导致的缓存局部性变化、线程竞争方式变化。
+- 因此该阶段必须保留在独立分支或 feature flag 下，用同一份中间 Parquet 与阶段一做基准对比。
 
 ---
 
 ## 6. 错误处理策略
 
-建议把 descriptor 生成的错误处理改成一致的策略：
+建议把 descriptor 生成的错误处理拆成兼容模式和 strict 模式：
+
+兼容模式，即默认行为：
+
+- 非 ASCII 输入：返回错误，但现有 batch 生成路径仍可按当前策略写零 descriptor。
+- 未知 subshell：warning 后跳过，保持当前 `parse_csf()` 行为。
+- 固定宽度 block 尾部不完整：尽量保持当前 `chunk_string()` 的容忍行为，除非确认数据格式必须严格。
+- `line2` / `line3` J 值解析失败：保持当前 per-block `unwrap_or(0)` 行为。
+- normalized 路径中的归一化失败：保持当前 warning 并写零 descriptor 行为。
+
+strict 模式，即后续可选行为变更：
 
 - 未知 subshell：返回错误并终止任务。
 - 非 ASCII 输入：返回错误并终止任务。
 - 固定宽度 block 不完整：返回错误并终止任务，除非确认历史数据允许尾部空白缺失。
-- `line2` / `line3` J 值解析失败：建议返回错误，而不是默默用 0；如果必须兼容旧行为，可先提供 strict flag。
-- normalized 路径中的归一化失败：与 raw 路径保持一致。若采用严格模式，则 raw 和 normalized 都失败退出；若采用容错模式，则两者都记录 warning 并写零 descriptor。
+- `line2` / `line3` J 值解析失败：返回错误，而不是默默用 0。
+- normalized 路径中的归一化失败：与 raw 路径保持一致，返回错误并终止任务。
 
-当前讨论中已经明确：`line1` 中出现不在 `peel_subshells` 中的 subshell 应直接报错退出。
+并行流水线 strict 模式还需要新增取消策略：
+
+- worker 遇到首个错误后，通过 error channel 或 shared cancellation flag 通知 reader/writer。
+- reader 检查 cancellation，停止继续读取和发送 work item，避免阻塞在 bounded channel。
+- writer 检查 cancellation，停止等待后续 batch，并通过 `ParquetFileGuard` 清理未完成输出。
+- 主线程优先汇总首个根因错误，而不是只报告 channel send/recv 失败。
 
 ---
 
@@ -213,11 +251,14 @@ struct NormalizedDescriptorBatch {
 3. `line3_block` 为空且 `line2_block` 非空时，coupling 使用 `line2` fallback。
 4. 原始最后一个 subshell 使用 `line3` 末尾 final J。
 5. 即使中间某些 subshell 不参与输出，也不能改变 last block 判断。
-6. 未知 subshell 返回错误。
+6. 未知 subshell 在兼容模式下 warning/跳过，在 strict 模式下返回错误。
 7. 非 ASCII 输入返回错误。
 8. `line2` / `line3` 比 `line1` 短时，先补齐后取同一 block index。
-9. 并行 pipeline 使用 `RecordBatch` work item 后，输出行数、顺序和 descriptor 内容保持一致。
-10. normalized 输出在 fast path 下 schema 和数值保持一致。
+9. per-block J 解析失败在兼容模式下写 0，在 strict 模式下返回错误。
+10. 第一阶段只替换 parser 后，输出行数、顺序和 descriptor 内容保持一致。
+11. normalized 输出在 fast path 下 schema 和数值保持一致。
+12. strict 模式下 worker 出错时，reader/writer 能正确停止，输出文件不会留下成功态坏文件。
+13. 如果实验 `RecordBatch` work item，输出行数、顺序和 descriptor 内容必须与阶段一一致。
 
 建议先构造小型内联 CSF 三行样例做 Rust 单元测试，再用 `tests/fixtures/sample.csf` 做端到端集成测试。
 
@@ -229,7 +270,8 @@ struct NormalizedDescriptorBatch {
 
 1. 当前实现：reader 转 `Arc<str>`，worker 调用 `parse_csf()`。
 2. 阶段一：reader 仍转 rows，但 worker 使用 `parse_csf_fast()`。
-3. 阶段二：reader 发送 `RecordBatch`，worker 直接从 Arrow arrays 读取并调用 fast parser。
+3. 阶段二：reader 仍转 rows，但 worker/writer 使用 batch 级列式 buffer，避免 `Vec<i32>` per row。
+4. 实验阶段：reader 发送 `RecordBatch`，worker 直接从 Arrow arrays 读取并调用 fast parser。
 
 记录指标：
 
@@ -238,6 +280,12 @@ struct NormalizedDescriptorBatch {
 - CPU 利用率。
 - 每秒处理 CSF 数。
 - 输出 Parquet 行数和校验 hash。
+
+合入门槛：
+
+- 阶段一必须在正常样例上与旧 parser 输出完全一致。
+- 阶段一若没有明显性能提升，也可以保留为 parser 简化，但不应继续推进更高风险 pipeline 改动。
+- RecordBatch 实验只有在同机、同数据、同 worker 数下稳定优于阶段一时才合入；否则保留现有 rows channel。
 
 对 `o1j1qas5.parquet` 这类 1.6G 中间文件，仍建议保持流式处理。操作系统文件缓存会让重复读取接近内存速度，默认全量加载的收益未必能抵消内存峰值和实现复杂度。
 

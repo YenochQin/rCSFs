@@ -4,6 +4,61 @@
 
 ---
 
+## [1.2.2-beta.1] - 2026-04-28
+
+### ⚡ 性能优化
+
+#### ✅ Descriptor 并行生成结果侧列式缓冲
+
+**问题描述**:
+- 旧的并行 descriptor pipeline 中，worker 返回 `Vec<(idx, Vec<i32>)>`。
+- writer 线程需要逐行执行归一化和列构建，`normalize=True` 时容易成为瓶颈。
+- descriptor 输出本身是多列 `col_0..col_N`，逐行结果在写入前还需要再转换成列式结构。
+
+**优化方案**:
+- 将并行 worker 的输出改为 batch 级列式 buffer。
+- raw 路径输出 `Vec<Vec<i32>>`，writer 直接转换为 `Int32Array`。
+- normalized 路径在 worker 侧并行完成 per-CSF 归一化，输出 `Vec<Vec<f32>>`，writer 直接转换为 `Float32Array`。
+- 保持 reader 到 worker 的输入结构不变，未启用 RecordBatch work item，避免引入历史上已观察到的性能回退风险。
+
+**影响文件**:
+- `src/csfs_descriptor.rs`
+- `tests/integration_test.rs`
+- `scripts/compare_descriptor_outputs.py`
+
+**验证结果**:
+- ✅ `cargo test` 全部通过。
+- ✅ `pytest tests/rcsfs_test.py` 全部通过。
+- ✅ 使用 385,600 个 CSFs 的真实数据验证，normalized descriptor 与 `1.2.1-beta3` 正确基线完全一致：
+  - shape: `(385600, 87)`
+  - schema equal: `True`
+  - columns equal: `True`
+  - exact equal: `True`
+  - overall max abs diff: `0.0`
+  - changed columns: `0`
+- ✅ 同一份真实数据 descriptor 生成耗时从约 `2.4s` 降至约 `0.8s`。
+- ✅ 服务器压力测试通过：14,585,607 个 CSFs、168 列 normalized descriptor，耗时 `1m38.4s`；运行期间调用全部 CPU，btop 观察多数核心保持 `75%+` 使用率；输出与旧基线完全一致：
+  - shape: `(14585607, 168)`
+  - schema equal: `True`
+  - columns equal: `True`
+  - exact equal: `True`
+  - overall max abs diff: `0.0`
+  - changed columns: `0`
+
+### 🧪 测试工具
+
+#### ✅ 新增 descriptor parquet 对比脚本
+
+新增 `scripts/compare_descriptor_outputs.py`，用于比较新旧 descriptor parquet：
+
+- 检查 shape、schema、列名是否一致。
+- 检查逐元素完全相等。
+- 输出最大绝对差异和容差内是否一致。
+- 当存在差异时，按 `col_N` 映射到 subshell 和字段名。
+- 可选输出对应 raw CSF parquet 行，便于定位解析差异。
+
+---
+
 ## [1.1dev2] - 进行中
 
 ### 🐛 Bug 修复

@@ -50,18 +50,13 @@ For detailed documentation, see function documentation:
 from pathlib import Path
 from typing import NotRequired, Optional, TypedDict, Union
 
-# Import from the Rust extension module
+from importlib.metadata import PackageNotFoundError, version
+
 try:
-    from importlib.metadata import PackageNotFoundError, version
+    __version__ = version("rcsfs")
+except PackageNotFoundError:
+    __version__ = "1.2.2-beta.1"
 
-    try:
-        __version__ = version("rcsfs")
-    except PackageNotFoundError:
-        __version__ = "0.1.0"
-except ImportError:
-    __version__ = "1.1.2-dev"
-
-# Import from the Rust extension module
 from ._rcsfs import (
     convert_csfs as _convert_csfs,
 )
@@ -173,7 +168,8 @@ def get_parquet_info(input_path: Union[str, Path]) -> dict:
         - file_size: File size in bytes
         - num_rows: Number of rows in the file
         - num_columns: Number of columns
-        - compression: Compression method used
+        - compression: Compression method used for the first column chunk
+        - created_by: Writer identifier stored in the parquet metadata
     """
     return _get_parquet_info(input_path=str(input_path))
 

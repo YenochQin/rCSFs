@@ -89,6 +89,51 @@ fn test_descriptor_generator_parse_csf_empty_orbital() {
 }
 
 #[test]
+fn test_descriptor_generator_rejects_non_ascii_lines() {
+    use _rcsfs::csfs_descriptor::CSFDescriptorGenerator;
+
+    let subshells = vec!["5s".to_string()];
+    let generator = CSFDescriptorGenerator::new(subshells);
+
+    let result = generator.parse_csf("  测试 ( 2)", "          ", "      0  ");
+
+    assert!(
+        result.is_err(),
+        "Fixed-width descriptor parsing should reject non-ASCII input"
+    );
+}
+
+#[test]
+fn test_parse_csf_final_j_matches_inferred_target_with_trailing_empty_orbital() {
+    use _rcsfs::csfs_descriptor::{CSFDescriptorGenerator, j_to_double_j};
+    use _rcsfs::descriptor_normalization::infer_two_j_target;
+
+    let subshells = vec![
+        "5s".to_string(),
+        "4d-".to_string(),
+        "4d".to_string(),
+        "5p-".to_string(),
+        "5p".to_string(),
+        "6s".to_string(),
+        "7s".to_string(),
+    ];
+    let generator = CSFDescriptorGenerator::new(subshells);
+
+    let line1 = "  5s ( 2)  4d-( 4)  4d ( 6)  5p-( 2)  5p ( 4)  6s ( 2)";
+    let line2 = "                   3/2               2        ";
+    let line3 = "                                           4-  ";
+
+    let descriptor = generator
+        .parse_csf(line1, line2, line3)
+        .expect("CSF should parse");
+
+    assert_eq!(
+        infer_two_j_target(&descriptor),
+        j_to_double_j("4-").unwrap()
+    );
+}
+
+#[test]
 fn test_descriptor_generator_parse_csf_fractional_j() {
     use _rcsfs::csfs_descriptor::CSFDescriptorGenerator;
 

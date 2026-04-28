@@ -437,10 +437,47 @@ pub mod parquet_batch {
         rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)>,
     }
 
+    /// Descriptor columns produced by workers.
+    enum DescriptorColumns {
+        Raw(Vec<Vec<i32>>),
+        Normalized(Vec<Vec<f32>>),
+    }
+
     /// Result item sent from workers to writer
     struct ResultItem {
         batch_idx: usize,
-        descriptors: Vec<(u64, Vec<i32>)>,
+        batch_size: usize,
+        columns: DescriptorColumns,
+    }
+
+    fn transpose_i32_rows(rows: Vec<Vec<i32>>, descriptor_size: usize) -> Vec<Vec<i32>> {
+        let batch_size = rows.len();
+        let mut columns: Vec<Vec<i32>> = (0..descriptor_size)
+            .map(|_| Vec::with_capacity(batch_size))
+            .collect();
+
+        for row in rows {
+            for col_idx in 0..descriptor_size {
+                columns[col_idx].push(row.get(col_idx).copied().unwrap_or(0));
+            }
+        }
+
+        columns
+    }
+
+    fn transpose_f32_rows(rows: Vec<Vec<f32>>, descriptor_size: usize) -> Vec<Vec<f32>> {
+        let batch_size = rows.len();
+        let mut columns: Vec<Vec<f32>> = (0..descriptor_size)
+            .map(|_| Vec::with_capacity(batch_size))
+            .collect();
+
+        for row in rows {
+            for col_idx in 0..descriptor_size {
+                columns[col_idx].push(row.get(col_idx).copied().unwrap_or(0.0));
+            }
+        }
+
+        columns
     }
 
     /// Generate descriptors from parquet with full pipeline parallelization
@@ -641,7 +678,7 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 4: Multiple Worker threads - compete to process items from channel
         ////////////////////////////////////////////////////////////////////////////////
-        let peel_subshells_for_writer = peel_subshells.clone();
+        let peel_subshells_for_normalization = Arc::new(peel_subshells.clone());
         let generator = Arc::new(super::CSFDescriptorGenerator::new(peel_subshells));
         let mut worker_handles = Vec::new();
 
@@ -650,8 +687,13 @@ pub mod parquet_batch {
             let generator_clone = generator.clone();
             let result_tx_clone = result_tx.clone();
             let work_rx_clone = work_rx.clone();
+            let peel_subshells_for_normalization = peel_subshells_for_normalization.clone();
+            let normalize_enabled = normalize;
 
             worker_handles.push(std::thread::spawn(move || {
+                use crate::descriptor_normalization::{
+                    infer_two_j_target, normalize_descriptor_per_csf,
+                };
                 use rayon::prelude::*;
 
                 let descriptor_size = 3 * generator_clone.orbital_count();
@@ -664,27 +706,71 @@ pub mod parquet_batch {
                     }
 
                     let batch_idx = work_item.batch_idx;
-                    let descriptors: Vec<(u64, Vec<i32>)> = work_item
-                        .rows
-                        .into_par_iter()
-                        .map(|(idx, ref line1, ref line2, ref line3)| {
-                            let descriptor = match generator_clone.parse_csf(line1, line2, line3) {
-                                Ok(desc) => desc,
-                                Err(e) => {
-                                    eprintln!(
-                                        "Warning: Failed to parse CSF at index {}: {}",
-                                        idx, e
-                                    );
-                                    vec![0i32; descriptor_size]
+                    let batch_size = work_item.rows.len();
+                    let columns = if normalize_enabled {
+                        let normalized_rows: Vec<Vec<f32>> = work_item
+                            .rows
+                            .into_par_iter()
+                            .map(|(idx, ref line1, ref line2, ref line3)| {
+                                let descriptor =
+                                    match generator_clone.parse_csf(line1, line2, line3) {
+                                        Ok(desc) => desc,
+                                        Err(e) => {
+                                            eprintln!(
+                                                "Warning: Failed to parse CSF at index {}: {}",
+                                                idx, e
+                                            );
+                                            vec![0i32; descriptor_size]
+                                        }
+                                    };
+
+                                let two_j_target = infer_two_j_target(&descriptor);
+                                match normalize_descriptor_per_csf(
+                                    &descriptor,
+                                    &peel_subshells_for_normalization,
+                                    two_j_target,
+                                ) {
+                                    Ok(normalized) => normalized,
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Warning: Failed to normalize CSF at index {}: {}",
+                                            idx, e
+                                        );
+                                        vec![0.0f32; descriptor_size]
+                                    }
                                 }
-                            };
-                            (idx, descriptor)
-                        })
-                        .collect();
+                            })
+                            .collect();
+
+                        DescriptorColumns::Normalized(transpose_f32_rows(
+                            normalized_rows,
+                            descriptor_size,
+                        ))
+                    } else {
+                        let descriptor_rows: Vec<Vec<i32>> = work_item
+                            .rows
+                            .into_par_iter()
+                            .map(|(idx, ref line1, ref line2, ref line3)| {
+                                match generator_clone.parse_csf(line1, line2, line3) {
+                                    Ok(desc) => desc,
+                                    Err(e) => {
+                                        eprintln!(
+                                            "Warning: Failed to parse CSF at index {}: {}",
+                                            idx, e
+                                        );
+                                        vec![0i32; descriptor_size]
+                                    }
+                                }
+                            })
+                            .collect();
+
+                        DescriptorColumns::Raw(transpose_i32_rows(descriptor_rows, descriptor_size))
+                    };
 
                     let result_item = ResultItem {
                         batch_idx,
-                        descriptors,
+                        batch_size,
+                        columns,
                     };
                     if result_tx_clone.send(result_item).is_err() {
                         return Err(anyhow::anyhow!("Failed to send result item"));
@@ -703,26 +789,22 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         let writer_handle: std::thread::JoinHandle<Result<(usize, usize)>> =
             std::thread::spawn(move || {
-                use crate::descriptor_normalization::{
-                    infer_two_j_target, normalize_descriptor_per_csf,
-                };
-                use arrow::array::{Float32Builder, Int32Builder};
+                use arrow::array::{Float32Array, Int32Array};
 
-                let mut pending: BTreeMap<usize, Vec<(u64, Vec<i32>)>> = BTreeMap::new();
+                let mut pending: BTreeMap<usize, ResultItem> = BTreeMap::new();
                 let mut next_write_idx = 0usize;
                 let mut total_descriptors = 0usize;
                 let mut total_batches_written = 0usize;
 
                 while let Ok(result_item) = result_rx.recv() {
                     let batch_idx = result_item.batch_idx;
-                    let descriptors = result_item.descriptors;
 
                     // Insert into pending map
-                    pending.insert(batch_idx, descriptors);
+                    pending.insert(batch_idx, result_item);
 
                     // Write all consecutive batches we have
-                    while let Some(descriptors) = pending.remove(&next_write_idx) {
-                        let batch_size = descriptors.len();
+                    while let Some(result_item) = pending.remove(&next_write_idx) {
+                        let batch_size = result_item.batch_size;
                         if batch_size == 0 {
                             next_write_idx += 1;
                             continue;
@@ -731,36 +813,20 @@ pub mod parquet_batch {
 
                         // Build and write batch based on normalization setting
                         if normalize {
-                            let mut builders: Vec<Float32Builder> = (0..descriptor_size)
-                                .map(|_| Float32Builder::with_capacity(batch_size))
-                                .collect();
-
-                            // Build per-CSF normalized columns
-                            for (idx, desc) in &descriptors {
-                                let two_j_target = infer_two_j_target(desc);
-                                let normalized = match normalize_descriptor_per_csf(
-                                    desc,
-                                    &peel_subshells_for_writer,
-                                    two_j_target,
-                                ) {
-                                    Ok(normalized) => normalized,
-                                    Err(e) => {
-                                        eprintln!(
-                                            "Warning: Failed to normalize CSF at index {}: {}",
-                                            idx, e
-                                        );
-                                        vec![0.0f32; descriptor_size]
-                                    }
-                                };
-                                for (col_idx, &val) in normalized.iter().enumerate() {
-                                    builders[col_idx].append_value(val);
+                            let columns = match result_item.columns {
+                                DescriptorColumns::Normalized(columns) => columns,
+                                DescriptorColumns::Raw(_) => {
+                                    return Err(anyhow::anyhow!(
+                                        "Expected normalized descriptor columns"
+                                    ));
                                 }
-                            }
+                            };
 
-                            // Convert builders to Arrow arrays
-                            let column_arrays: Vec<Arc<dyn Array>> = builders
+                            let column_arrays: Vec<Arc<dyn Array>> = columns
                                 .into_iter()
-                                .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
+                                .map(|column| {
+                                    Arc::new(Float32Array::from(column)) as Arc<dyn Array>
+                                })
                                 .collect();
 
                             let output_batch =
@@ -784,21 +850,16 @@ pub mod parquet_batch {
                                 return Err(anyhow::anyhow!("Failed to write batch"));
                             }
                         } else {
-                            let mut builders: Vec<Int32Builder> = (0..descriptor_size)
-                                .map(|_| Int32Builder::with_capacity(batch_size))
-                                .collect();
-
-                            // Build columns directly (no ListArray overhead)
-                            for (_, desc) in &descriptors {
-                                for (col_idx, &val) in desc.iter().enumerate() {
-                                    builders[col_idx].append_value(val);
+                            let columns = match result_item.columns {
+                                DescriptorColumns::Raw(columns) => columns,
+                                DescriptorColumns::Normalized(_) => {
+                                    return Err(anyhow::anyhow!("Expected raw descriptor columns"));
                                 }
-                            }
+                            };
 
-                            // Convert builders to Arrow arrays
-                            let column_arrays: Vec<Arc<dyn Array>> = builders
+                            let column_arrays: Vec<Arc<dyn Array>> = columns
                                 .into_iter()
-                                .map(|mut b| Arc::new(b.finish()) as Arc<dyn Array>)
+                                .map(|column| Arc::new(Int32Array::from(column)) as Arc<dyn Array>)
                                 .collect();
 
                             let output_batch =

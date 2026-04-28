@@ -2,14 +2,14 @@
 
 ## 0. 当前状态
 
-截至 `1.2.2-beta.1`，本计划中的**结果侧列式 buffer 优化已完成并验证**，但 parser fast path、strict mode 和 RecordBatch work item 尚未实现。
+截至 `1.2.2`，本计划中的**结果侧列式 buffer 优化已完成并验证**，但 parser fast path、strict mode 和 RecordBatch work item 尚未实现。
 
 已完成：
 
 1. **结果侧列式 buffer。** 并行 worker 不再返回 `Vec<(idx, Vec<i32>)>` 给 writer，而是输出列式 descriptor batch。raw 路径输出 `Vec<Vec<i32>>`，normalized 路径输出 `Vec<Vec<f32>>`。
 2. **normalized 归一化移到 worker 侧。** `normalize=True` 时，per-CSF normalization 从 writer 线程移动到 worker 线程并行执行，writer 只负责按 batch 顺序写入 Arrow arrays。
 3. **输出格式保持不变。** descriptor Parquet 仍为 `col_0..col_N` 多列布局；raw 为 `Int32`，normalized 为 `Float32`。
-4. **正确性验证通过。** 385,600 个 CSFs 的真实数据上，`1.2.2-beta.1` normalized descriptor 与 `1.2.1-beta3` 正确基线完全一致：`exact equal: True`，`overall max abs diff: 0.0`，`changed columns: 0`。
+4. **正确性验证通过。** 385,600 个 CSFs 的真实数据上，`1.2.2` normalized descriptor 与 `1.2.1-beta3` 正确基线完全一致：`exact equal: True`，`overall max abs diff: 0.0`，`changed columns: 0`。
 5. **性能验证通过。** 385,600 个 CSFs 的真实数据 descriptor 生成耗时从约 `2.4s` 降至约 `0.8s`。
 6. **服务器压力测试通过。** 14,585,607 个 CSFs、168 列 normalized descriptor，耗时 `1m38.4s`；运行期间调用全部 CPU，btop 观察多数核心保持 `75%+` 使用率；输出与旧基线完全一致。
 
@@ -285,7 +285,7 @@ strict 模式，即后续可选行为变更：
 
 本地已完成的验证：
 
-1. 当前 `1.2.2-beta.1`：reader 仍转 rows，worker/writer 使用 batch 级列式 buffer，normalized 在 worker 侧并行完成。
+1. 当前 `1.2.2`：reader 仍转 rows，worker/writer 使用 batch 级列式 buffer，normalized 在 worker 侧并行完成。
 2. 正确基线：`1.2.1-beta3` 生成的 normalized descriptor。
 3. 数据规模：385,600 个 CSFs，87 列 descriptor。
 
@@ -337,7 +337,7 @@ strict 模式，即后续可选行为变更：
 
 ## 9. 后续建议
 
-1. **保留当前列式 buffer 方案作为 `1.2.2-beta.1` 主优化。** 该方案已通过本地和服务器压力测试。
+1. **保留当前列式 buffer 方案作为 `1.2.2` 主优化。** 该方案已通过本地和服务器压力测试。
 2. **暂不继续推进 RecordBatch work item。** 除非后续服务器 profiling 明确显示 reader 端 `Arc<str>` 分配成为主要瓶颈。
 3. **暂不引入 strict mode。** strict mode 会改变公开行为，应作为单独功能变更设计，并补 reader/worker/writer cancellation。
 4. **如需继续优化 parser，再单独实现 `parse_csf_fast()`。** 该优化必须先证明与现有 `parse_csf()` 在真实样例上完全一致，再考虑替换 worker 调用。

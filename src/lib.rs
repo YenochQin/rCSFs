@@ -20,13 +20,14 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-/// Get Parquet file basic information and metadata
+/// Return basic metadata for a Parquet file.
 ///
 /// Args:
-/// - input_path: Path to Parquet file
+///     input_path: Path to the Parquet file.
 ///
 /// Returns:
-/// Dictionary containing file information and metadata
+///     A dictionary with file path, file size, row count, column count,
+///     compression, and writer metadata.
 #[pyfunction]
 fn get_parquet_info(py: Python, input_path: String) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     py.detach(|| {
@@ -35,32 +36,22 @@ fn get_parquet_info(py: Python, input_path: String) -> PyResult<pyo3::Py<pyo3::P
     })
 }
 
-/// Convert CSF text file to Parquet format (parallel processing)
+/// Convert a GRASP CSF text file to Parquet.
+///
+/// The converter streams input lines, groups each CSF's three data lines into
+/// one row, and writes an ordered Parquet table suitable for later descriptor
+/// generation.
 ///
 /// Args:
-/// - input_path: Path to input CSF file
-/// - output_path: Path to output Parquet file
-/// - max_line_len: Maximum line length (default: 256)
-/// - chunk_size: Batch processing size (default: 3000000, optimized for parallel efficiency)
-/// - num_workers: Number of worker threads (default: CPU core count)
+///     input_path: Path to the input CSF file.
+///     output_path: Path where the CSF Parquet file should be written.
+///     max_line_len: Maximum input line length. Longer lines are truncated.
+///     chunk_size: Number of input lines per streaming batch.
+///     num_workers: Worker thread count. Use None for Rayon defaults.
 ///
 /// Returns:
-/// Dictionary containing conversion statistics:
-/// - success: Whether conversion succeeded
-/// - csf_count: Number of CSFs
-/// - total_lines: Total line count
-/// - truncated_count: Number of truncated lines
-/// - input_file: Input file path
-/// - output_file: Output file path
-/// - header_file: TOML header file path
-/// - max_line_len: Maximum line length used
-/// - chunk_size: Batch processing size used
-/// - error: Error message (only present on failure)
-///
-/// Features:
-/// - Multi-threaded parallel processing using rayon (automatically uses all CPU cores)
-/// - Maintains original CSF order for consistent output file ordering
-/// - Memory efficient streaming to handle large files
+///     A dictionary containing success status, generated paths, line counts,
+///     CSF count, truncation count, and error text when conversion fails.
 #[pyfunction]
 #[pyo3(signature = (
     input_path,

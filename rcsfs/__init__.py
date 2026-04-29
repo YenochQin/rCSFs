@@ -1,50 +1,21 @@
-"""
-rCSFs - Rust-powered CSF (Configuration State Function) Processing Library
+"""Rust-powered CSF conversion and descriptor generation.
 
-This package provides high-performance Rust implementations for processing
-atomic physics CSF data.
+``rcsfs`` provides the performance-critical file conversion layer used by
+GraspKit-Tools. It converts GRASP CSF text files into Parquet tables and
+generates machine-learning descriptor Parquet files from those tables.
 
-Main Components:
-- CSF file format conversion to Parquet
-- CSF descriptor generation for ML applications
+Typical workflow:
+    1. Convert a GRASP ``.c``/CSF text file with :func:`convert_csfs`.
+    2. Read peel subshells from the generated header TOML with
+       :func:`read_peel_subshells`.
+    3. Generate descriptor columns with :func:`generate_descriptors_from_parquet`.
 
-## Quick Start
-
-### CSF File Conversion
-
-```python
-from rcsfs import convert_csfs
-
-# Basic conversion
-convert_csfs("input.csf", "output.parquet")
-
-# With custom chunk size (default: 3000000 lines = 1M CSFs)
-convert_csfs("input.csf", "output.parquet", chunk_size=6000000)
-
-# Limit to 8 workers for shared servers
-convert_csfs("input.csf", "output.parquet", num_workers=8)
-```
-
-### CSF Descriptor Generation
-
-```python
-from rcsfs import read_peel_subshells, generate_descriptors_from_parquet
-
-# Read peel subshells from header file
-peel_subshells = read_peel_subshells("data_header.toml")
-
-# Generate descriptors from parquet file
-stats = generate_descriptors_from_parquet(
-    "csfs_data.parquet",
-    "descriptors.parquet",
-    peel_subshells=peel_subshells
-)
-```
-
-For detailed documentation, see function documentation:
-- `convert_csfs()`: CSF file to Parquet conversion
-- `generate_descriptors_from_parquet()`: Batch descriptor generation
-- `read_peel_subshells()`: Extract peel subshells from header file
+Example:
+    >>> from rcsfs import convert_csfs, read_peel_subshells
+    >>> from rcsfs import generate_descriptors_from_parquet
+    >>> stats = convert_csfs("input.csf", "csfs.parquet", num_workers=8)
+    >>> peel = read_peel_subshells(stats["header_file"])
+    >>> generate_descriptors_from_parquet("csfs.parquet", "desc.parquet", peel)
 """
 
 from pathlib import Path
@@ -76,7 +47,20 @@ from ._rcsfs import (
 
 
 class ConversionStats(TypedDict):
-    """Statistics returned from CSF conversion operations."""
+    """Statistics returned by :func:`convert_csfs`.
+
+    Attributes:
+        success: Whether conversion completed successfully.
+        input_file: Input CSF file path.
+        output_file: Output Parquet file path.
+        header_file: Generated TOML header file path, when available.
+        max_line_len: Maximum line length used while reading CSF records.
+        chunk_size: Number of input lines processed per streaming batch.
+        error: Error message when ``success`` is false.
+        total_lines: Number of input lines processed.
+        csf_count: Number of CSF records written.
+        truncated_count: Number of lines truncated to ``max_line_len``.
+    """
 
     success: bool
     input_file: str
@@ -91,7 +75,18 @@ class ConversionStats(TypedDict):
 
 
 class DescriptorGenerationStats(TypedDict):
-    """Statistics returned from batch descriptor generation."""
+    """Statistics returned by :func:`generate_descriptors_from_parquet`.
+
+    Attributes:
+        success: Whether descriptor generation completed successfully.
+        input_file: Input CSF Parquet file path.
+        output_file: Output descriptor Parquet file path.
+        csf_count: Number of CSFs read from the input file.
+        descriptor_count: Number of descriptor rows written.
+        orbital_count: Number of peel subshells used.
+        descriptor_size: Descriptor width, equal to ``3 * orbital_count``.
+        error: Error message when ``success`` is false.
+    """
 
     success: bool
     input_file: str
@@ -115,36 +110,29 @@ def convert_csfs(
     chunk_size: Optional[int] = 3000000,
     num_workers: Optional[int] = None,
 ) -> ConversionStats:
-    """
-    Convert CSF text file to Parquet format using parallel processing.
+    """Convert a GRASP CSF text file to Parquet.
 
     This function is optimized for large-scale data processing. It uses a streaming
-    approach with rayon-based parallel processing:
-    - Stream: Read file in batches to avoid loading large files into memory
-    - Parallel: Process each batch with rayon's work-stealing (all cores used by default)
-    - Order: Maintain CSF order in output
+    approach with Rayon-based parallel processing while preserving CSF order in
+    the output file.
 
     Args:
-        input_path: Path to input CSF file
-        output_path: Path to output Parquet file
-        max_line_len: Maximum line length (default: 256)
-        chunk_size: Number of lines per read batch (default: 3000000)
-        num_workers: Optional number of worker threads (default: CPU core count)
+        input_path: Path to the input CSF file.
+        output_path: Path where the CSF Parquet file should be written.
+        max_line_len: Maximum input line length. Longer lines are truncated.
+        chunk_size: Number of input lines per streaming batch. The default
+            ``3_000_000`` corresponds to roughly one million three-line CSFs.
+        num_workers: Worker thread count. Use ``None`` to let Rayon use the
+            available CPU cores.
 
     Returns:
-        Dictionary containing conversion statistics and status
+        Conversion statistics and generated file paths.
 
     Examples:
-        >>> # Use all CPU cores (default)
         >>> stats = convert_csfs("input.csf", "output.parquet")
-        >>>
-        >>> # Limit to 8 workers for shared servers
-        >>> stats = convert_csfs("input.csf", "output.parquet", num_workers=8)
-
-    Performance Considerations:
-        - For single-task environments: omit num_workers (uses all cores)
-        - For multi-task servers: set num_workers to avoid CPU contention
-        - Typical values: num_workers=4-8 for shared servers, None for dedicated
+        >>> stats["success"]
+        True
+        >>> convert_csfs("input.csf", "output.parquet", num_workers=8)
     """
     return _convert_csfs(
         input_path=str(input_path),
@@ -156,20 +144,14 @@ def convert_csfs(
 
 
 def get_parquet_info(input_path: Union[str, Path]) -> dict:
-    """
-    Get basic information and metadata from a Parquet file.
+    """Return basic metadata for a Parquet file.
 
     Args:
-        input_path: Path to Parquet file
+        input_path: Path to the Parquet file.
 
     Returns:
-        Dictionary containing file information:
-        - file_path: File path
-        - file_size: File size in bytes
-        - num_rows: Number of rows in the file
-        - num_columns: Number of columns
-        - compression: Compression method used for the first column chunk
-        - created_by: Writer identifier stored in the parquet metadata
+        Dictionary with file path, file size, row count, column count,
+        compression, and writer metadata.
     """
     return _get_parquet_info(input_path=str(input_path))
 
@@ -180,19 +162,19 @@ def get_parquet_info(input_path: Union[str, Path]) -> dict:
 
 
 def read_peel_subshells(header_path: Union[str, Path]) -> list[str]:
-    """
-    Extract peel subshells from a header TOML file.
+    """Read peel subshell names from a generated header TOML file.
 
     Args:
-        header_path: Path to the header TOML file
+        header_path: Path to the ``*_header.toml`` file produced by
+            :func:`convert_csfs`.
 
     Returns:
-        List of subshell names (e.g., ['5s', '4d-', '4d', '5p-', '5p', '6s'])
+        Subshell names in the order used by descriptor generation.
 
     Examples:
         >>> peel_subshells = read_peel_subshells("data_header.toml")
-        >>> print(peel_subshells)
-        ['5s', '4d-', '4d', '5p-', '5p', '6s']
+        >>> isinstance(peel_subshells, list)
+        True
     """
     return _read_peel_subshells(str(header_path))
 
@@ -204,40 +186,32 @@ def generate_descriptors_from_parquet(
     num_workers: Optional[int] = None,
     normalize: bool = False,
 ) -> DescriptorGenerationStats:
-    """
-    Generate CSF descriptors from a parquet file using parallel processing.
+    """Generate descriptor Parquet columns from converted CSF Parquet data.
 
     This function is optimized for large-scale descriptor generation (tens of millions
     to billions of CSFs). It uses rayon's work-stealing for automatic load balancing
     with streaming batch processing for low memory usage.
 
-    Output Format:
-        - Non-normalized: Parquet with multiple Int32 columns `col_0, col_1, ..., col_N` and ZSTD compression (level 3)
-        - Normalized: Parquet with multiple Float32 columns `col_0, col_1, ..., col_N` and ZSTD compression (level 3)
-        Each column corresponds to one position in the descriptor array.
-        This multi-column format is much faster than List column format for large datasets.
-        Example: For 3 orbitals (descriptor_size=9), columns are: col_0, col_1, ..., col_8
+    Output format:
+        The output contains one column per descriptor position:
+        ``col_0``, ``col_1``, ..., ``col_N``. Non-normalized descriptors are
+        written as ``Int32`` columns; normalized descriptors are written as
+        ``Float32`` columns. Files use ZSTD compression.
 
     Args:
-        input_parquet: Path to input parquet file (must have line1, line2, line3, idx columns)
-        output_parquet: Path to output Parquet file for descriptors
-        peel_subshells: List of subshell names (e.g., ['5s', '4d-', '4d', '5p-', '5p', '6s'])
-        num_workers: Number of worker threads (default: CPU core count)
+        input_parquet: Converted CSF Parquet file with ``line1``, ``line2``,
+            ``line3``, and ``idx`` columns.
+        output_parquet: Destination descriptor Parquet file.
+        peel_subshells: Ordered subshell names, usually from
+            :func:`read_peel_subshells`.
+        num_workers: Worker thread count. Use ``None`` for Rayon defaults.
         normalize: Whether to normalize descriptors using per-CSF physics-correct
-            denominators (default: False). When True, each descriptor triplet
-            [n_i, 2Q_i, 2J_cum,i] is normalized by [g_i, n_i*(g_i-n_i),
-            min(prefix_i, 2J_target+suffix_i)] respectively, where 2J_target is
-            read from the final coupling value of each individual CSF.
+            denominators. When true, descriptor triplets
+            ``[n_i, 2Q_i, 2J_cum,i]`` are normalized by
+            ``[g_i, n_i * (g_i - n_i), min(prefix_i, 2J_target + suffix_i)]``.
 
     Returns:
-        Dictionary containing generation statistics:
-        - success: Whether generation succeeded
-        - input_file: Input parquet file path
-        - output_file: Output Parquet file path
-        - csf_count: Number of CSFs processed
-        - descriptor_count: Number of descriptors generated
-        - orbital_count: Number of orbitals
-        - descriptor_size: Size of each descriptor (3 * orbital_count)
+        Descriptor generation statistics and output file metadata.
 
     Examples:
         >>> # Basic usage with peel_subshells from header
@@ -250,12 +224,10 @@ def generate_descriptors_from_parquet(
         ...     peel_subshells=peel_subshells
         ... )
 
-        >>> # Read with polars
         >>> import polars as pl
         >>> df = pl.read_parquet("descriptors.parquet")
-        >>> # Get all descriptor columns (col_0, col_1, ..., col_N)
-        >>> descriptor_cols = [col for col in df.columns if col.startswith("col_")]
-        >>> descriptors = df[descriptor_cols].to_numpy()  # Shape: (n_csfs, descriptor_size)
+        >>> descriptor_cols = [c for c in df.columns if c.startswith("col_")]
+        >>> descriptors = df[descriptor_cols].to_numpy()
 
         >>> # With normalization
         >>> stats = generate_descriptors_from_parquet(
@@ -273,22 +245,10 @@ def generate_descriptors_from_parquet(
         ...     num_workers=8
         ... )
 
-    Performance Considerations:
-        - For medium files (1-10M CSFs): num_workers=4-8
-        - For large files (>10M CSFs): num_workers=8+
-        - More workers = higher CPU usage, faster processing
-        - Rayon automatically handles work stealing for optimal load balancing
-        - Uses 65536 rows/batch for better I/CPU balance on multi-core systems
-
     Note:
-        This implementation uses streaming batch processing to minimize memory usage:
-        1. Read parquet in batches (65536 rows per batch)
-        2. Parse CSFs to descriptors in parallel (Rayon work-stealing)
-        3. Build column arrays directly (Int32 or Float32 builders per column, no ListArray overhead)
-        4. Write batch to Parquet file (ZSTD level 3 compression)
-        5. Repeat until all data processed
-
-        Multi-column format is significantly faster than List column format for billion-scale data.
+        The multi-column format is intentionally used instead of a List column
+        because it is faster for large descriptor matrices and easier to scan
+        lazily from Polars.
     """
     return _generate_descriptors_from_parquet(
         input_parquet=str(input_parquet),

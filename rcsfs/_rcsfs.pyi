@@ -1,8 +1,4 @@
-"""
-Type stubs for the _rcsfs Rust extension module.
-
-This file provides type hints for the compiled Rust extension module.
-"""
+"""Type stubs for the compiled ``rcsfs._rcsfs`` PyO3 extension."""
 
 from typing import Optional
 
@@ -15,7 +11,7 @@ __version__: str
 # ///////////////////////////////////////////////////////////////////////////////
 
 class ConversionStats(TypedDict):
-    """Statistics returned from CSF conversion operations."""
+    """Statistics returned by ``convert_csfs``."""
 
     success: bool
     input_file: str
@@ -38,9 +34,13 @@ def convert_csfs(
     max_line_len: Optional[int] = 256,
     chunk_size: Optional[int] = 3000000,
     num_workers: Optional[int] = None,
-) -> ConversionStats: ...
+) -> ConversionStats:
+    """Convert a GRASP CSF text file to Parquet."""
+    ...
 
-def get_parquet_info(input_path: str) -> dict: ...
+def get_parquet_info(input_path: str) -> dict:
+    """Return basic metadata for a Parquet file."""
+    ...
 
 # ///////////////////////////////////////////////////////////////////////////////
 # CSF Descriptor Generation
@@ -51,7 +51,7 @@ def get_parquet_info(input_path: str) -> dict: ...
 # ///////////////////////////////////////////////////////////////////////////////
 
 class DescriptorGenerationStats(TypedDict):
-    """Statistics returned from batch descriptor generation."""
+    """Statistics returned by descriptor generation."""
 
     success: bool
     input_file: str
@@ -68,6 +68,10 @@ def py_generate_descriptors_from_parquet(
     peel_subshells: list[str],
     num_workers: Optional[int] = None,
     normalize: bool = False,
-) -> DescriptorGenerationStats: ...
+) -> DescriptorGenerationStats:
+    """Generate descriptor columns from a converted CSF Parquet file."""
+    ...
 
-def py_read_peel_subshells(header_path: str) -> list[str]: ...
+def py_read_peel_subshells(header_path: str) -> list[str]:
+    """Read peel subshell names from a generated header TOML file."""
+    ...

@@ -1221,15 +1221,25 @@ impl CSFDescriptorGenerator {
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
-/// Python-exposed function to generate descriptors from parquet file (parallel version)
+/// Generate descriptor Parquet columns from converted CSF Parquet data.
 ///
-/// Output format: Parquet file with multiple `col_0, col_1, ..., col_N` Int32 columns and ZSTD compression (level 3)
-/// - Each column corresponds to one position in the descriptor array
-/// - Much faster than List column format for large datasets
-/// - Read with: `df = pl.read_parquet(); descriptors = df[["col_0", "col_1", ...]].to_numpy()`
+/// Output format:
+///     Each descriptor position is stored as a separate column named
+///     `col_0`, `col_1`, ..., `col_N`. Non-normalized output uses Int32
+///     columns; normalized output uses Float32 columns. The file is compressed
+///     with ZSTD.
 ///
-/// This version uses streaming batch processing with 65536 rows/batch for low memory usage
-/// and better I/CPU balance on multi-core systems. Multi-column format avoids ListArray overhead.
+/// Args:
+///     input_parquet: Converted CSF Parquet file with line1, line2, line3,
+///         and idx columns.
+///     output_file: Destination descriptor Parquet file.
+///     peel_subshells: Ordered subshell names used to define descriptor layout.
+///     num_workers: Worker thread count. Use None for Rayon defaults.
+///     normalize: Whether to write physics-normalized Float32 descriptors.
+///
+/// Returns:
+///     A dictionary containing success status, input/output paths, CSF count,
+///     descriptor row count, orbital count, and descriptor size.
 #[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (
@@ -1283,7 +1293,13 @@ fn py_generate_descriptors_from_parquet(
     Ok(dict.into())
 }
 
-/// Python-exposed function to read peel subshells from header file
+/// Read peel subshell names from a generated header TOML file.
+///
+/// Args:
+///     header_path: Path to the `*_header.toml` file produced by conversion.
+///
+/// Returns:
+///     Ordered peel subshell names.
 #[cfg(feature = "python")]
 #[pyfunction]
 fn py_read_peel_subshells(header_path: String) -> PyResult<Vec<String>> {

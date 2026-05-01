@@ -2,61 +2,78 @@
 
 [中文说明](README.zh-CN.md)
 
-High-performance Rust-powered tools for working with atomic-physics CSF (Configuration State Function) data in Python.
+`rcsfs` is the Rust/PyO3 acceleration layer used by the GraspKit workflow to
+process GRASP-style CSF (Configuration State Function) data from Python.
 
-rCSFs focuses on two jobs:
+It converts large CSF text files into Parquet tables and generates fixed-width,
+machine-learning-ready descriptor matrices from those tables. The public Python
+surface is intentionally small and function-based, while the heavy parsing,
+streaming, and parallel descriptor work runs in Rust.
 
-1. Convert large CSF text files into Parquet for downstream analysis.
-2. Generate fixed-width descriptor tables for machine learning workflows.
+## Highlights
 
-The current Python API is function-based and centered around streaming, parallel processing, and Parquet-first data pipelines.
+- Converts GRASP CSF text files to Parquet while preserving CSF order.
+- Writes a companion `*_header.toml` file with the original header and
+  conversion statistics.
+- Extracts peel subshell definitions from the generated header TOML.
+- Generates descriptor Parquet files with stable `col_0..col_N` columns.
+- Supports optional descriptor normalization for ML pipelines.
+- Uses Rust, Arrow/Parquet, and Rayon for high-throughput batch processing.
 
-## What It Does
+## Repository Layout
 
-rCSFs is a Rust + PyO3 library for CSF datasets used in atomic-structure and spectroscopy workflows.
+```text
+rCSFs/
+├── src/                  # Rust core and PyO3 bindings
+├── rcsfs/                # Python package wrapper, type hints, py.typed marker
+├── tests/                # Rust integration tests and Python API tests
+├── docs/                 # Design notes, changelog, review notes
+├── scripts/              # Validation and comparison utilities
+├── Cargo.toml            # Rust crate metadata
+└── pyproject.toml        # Python/maturin build metadata
+```
 
-It helps you:
+## Requirements
 
-- Convert CSF text files into columnar Parquet files.
-- Preserve the original CSF ordering during conversion.
-- Extract peel subshell definitions from the generated header TOML.
-- Generate descriptor Parquet files from converted CSFs.
-- Optionally normalize descriptors for ML-oriented downstream use.
+- Python `3.14+`
+- Rust toolchain with Cargo
+- `uv` for Python environment management
+- `maturin` for building the Python extension
 
-## Why rCSFs
-
-- Rust core for throughput and predictable memory behavior.
-- Streaming batch processing for large files.
-- Parallel execution via `rayon`.
-- Python-friendly API with `Path` support.
-- Parquet output that works well with tools like Polars and PyArrow.
+`rcsfs` is currently distributed as a source/build project in this repository.
+The compiled Python module is named `rcsfs._rcsfs`; most users should import the
+wrapper functions from `rcsfs`.
 
 ## Installation
 
-`rcsfs` currently targets Python `3.14+`.
-
-Build from source:
-
-```bash
-git clone https://github.com/YenochQin/rCSFs.git
-cd rCSFs
-uv sync
-maturin develop --release
-```
-
-You can also use the repository's documented development flow:
+For local development:
 
 ```bash
 uv sync --group dev --group lint
-maturin develop
+uv run maturin develop
 ```
+
+For an optimized local build:
+
+```bash
+uv sync --group dev --group lint
+uv run maturin develop --release
+```
+
+To build distributable wheels:
+
+```bash
+uv run maturin build --release
+```
+
+The generated wheels are written under `target/wheels/` unless Maturin is given
+another output directory.
 
 ## Quick Start
 
 ```python
 from pathlib import Path
 
-import polars as pl
 from rcsfs import (
     convert_csfs,
     generate_descriptors_from_parquet,
@@ -66,55 +83,56 @@ from rcsfs import (
 
 input_csf = Path("tests/fixtures/sample.csf")
 csf_parquet = Path("sample.parquet")
-desc_parquet = Path("sample_descriptors.parquet")
+descriptor_parquet = Path("sample_descriptors.parquet")
 
-# 1. Convert CSF text to parquet
-stats = convert_csfs(input_csf, csf_parquet)
-print(stats)
-
-# 2. Inspect parquet metadata
-info = get_parquet_info(csf_parquet)
-print(info)
-
-# 3. Read peel subshells from the generated header TOML
-peel_subshells = read_peel_subshells(stats["header_file"])
-print(peel_subshells[:6])
-
-# 4. Generate descriptor parquet
-desc_stats = generate_descriptors_from_parquet(
+# 1. Convert CSF text to Parquet.
+conversion = convert_csfs(
+    input_csf,
     csf_parquet,
-    desc_parquet,
+    chunk_size=3_000_000,
+    num_workers=None,
+)
+print(conversion)
+
+# 2. Inspect the converted Parquet file.
+print(get_parquet_info(csf_parquet))
+
+# 3. Read peel subshells from the generated header TOML.
+peel_subshells = read_peel_subshells(conversion["header_file"])
+
+# 4. Generate descriptor columns.
+descriptors = generate_descriptors_from_parquet(
+    csf_parquet,
+    descriptor_parquet,
     peel_subshells=peel_subshells,
     normalize=True,
 )
-print(desc_stats)
+print(descriptors)
+```
 
-# 5. Load the descriptor table
-df = pl.read_parquet(desc_parquet)
+To inspect the output table from Python, install a Parquet reader such as Polars
+or PyArrow in your environment:
+
+```python
+import polars as pl
+
+df = pl.read_parquet("sample_descriptors.parquet")
 print(df.head())
 ```
 
 ## Workflow
 
-### 1. Convert CSF text to Parquet
+### 1. Convert CSF Text to Parquet
 
-`convert_csfs(...)` reads a CSF file, skips the 5-line header, and writes the remaining data as ordered triples:
+`convert_csfs(...)` reads a CSF text file, skips the first five header lines,
+then stores the remaining records as ordered three-line CSF groups:
 
-- `idx`
-- `line1`
-- `line2`
-- `line3`
-
-It also writes a companion TOML file named:
-
-```text
-<input_stem>_header.toml
-```
-
-That file contains:
-
-- the original 5 header lines
-- conversion statistics
+| Column | Meaning |
+| --- | --- |
+| `idx` | Zero-based CSF row index |
+| `line1` | Subshell occupation line |
+| `line2` | Intermediate coupling line |
+| `line3` | Final coupling and total `J` line |
 
 Example:
 
@@ -123,14 +141,20 @@ from rcsfs import convert_csfs
 
 stats = convert_csfs(
     "input.csf",
-    "output.parquet",
+    "csfs.parquet",
     max_line_len=256,
     chunk_size=3_000_000,
-    num_workers=None,
+    num_workers=8,
 )
 ```
 
-Returned stats include:
+The conversion also writes a header file next to the output Parquet file:
+
+```text
+input_header.toml
+```
+
+Returned conversion statistics include:
 
 - `success`
 - `input_file`
@@ -138,45 +162,43 @@ Returned stats include:
 - `header_file`
 - `max_line_len`
 - `chunk_size`
-- `csf_count`
 - `total_lines`
+- `csf_count`
 - `truncated_count`
+- `error` when conversion fails
 
-### 2. Read peel subshells
+### 2. Read Peel Subshells
 
-`read_peel_subshells(...)` extracts the peel subshell sequence from the generated header TOML.
+`read_peel_subshells(...)` reads the ordered peel subshell sequence from the
+header TOML produced by `convert_csfs(...)`.
 
 ```python
 from rcsfs import read_peel_subshells
 
-peel_subshells = read_peel_subshells("output_header.toml")
+peel_subshells = read_peel_subshells("input_header.toml")
 ```
 
-Typical output:
+Example output:
 
 ```python
 ["5s", "4d-", "4d", "5p-", "5p", "6s"]
 ```
 
-### 3. Generate descriptor Parquet
+### 3. Generate Descriptor Parquet
 
-`generate_descriptors_from_parquet(...)` reads the converted CSF Parquet file and writes a descriptor table with columns:
+`generate_descriptors_from_parquet(...)` reads a converted CSF Parquet file and
+writes a descriptor matrix. The output uses one Parquet column per descriptor
+position:
 
 ```text
 col_0, col_1, ..., col_N
 ```
 
-Descriptor layout is flattened by orbital:
+For each peel subshell, descriptors are flattened as:
 
 ```text
-[n_i, 2Q_i, 2J_cum,i] for each peel subshell
+[n_i, 2Q_i, 2J_cum,i]
 ```
-
-Notes:
-
-- Raw descriptors are written as `Int32` columns.
-- Normalized descriptors are written as `Float32` columns.
-- Output Parquet uses ZSTD compression.
 
 Example:
 
@@ -184,7 +206,7 @@ Example:
 from rcsfs import generate_descriptors_from_parquet
 
 stats = generate_descriptors_from_parquet(
-    "output.parquet",
+    "csfs.parquet",
     "descriptors.parquet",
     peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
     num_workers=8,
@@ -192,12 +214,19 @@ stats = generate_descriptors_from_parquet(
 )
 ```
 
-### 4. Inspect Parquet metadata
+Descriptor output details:
+
+- Raw descriptors are written as `Int32` columns.
+- Normalized descriptors are written as `Float32` columns.
+- Descriptor Parquet files use ZSTD compression.
+- Descriptor width is `3 * len(peel_subshells)`.
+
+### 4. Inspect Parquet Metadata
 
 ```python
 from rcsfs import get_parquet_info
 
-info = get_parquet_info("output.parquet")
+info = get_parquet_info("descriptors.parquet")
 ```
 
 Returned metadata includes:
@@ -207,57 +236,78 @@ Returned metadata includes:
 - `num_rows`
 - `num_columns`
 - `compression`
+- writer metadata such as `created_by`, when available
 
 ## Public Python API
 
 | Function | Description |
 | --- | --- |
-| `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | Convert CSF text to Parquet |
-| `get_parquet_info(input_path)` | Inspect Parquet metadata |
-| `read_peel_subshells(header_path)` | Read peel subshells from header TOML |
-| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False)` | Generate descriptor Parquet from converted CSFs |
+| `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | Convert a GRASP CSF text file to Parquet. |
+| `read_peel_subshells(header_path)` | Extract peel subshell names from a generated `*_header.toml` file. |
+| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False)` | Generate descriptor columns from converted CSF Parquet data. |
+| `get_parquet_info(input_path)` | Return basic Parquet file metadata. |
 
-## Input Format
+The exported package surface is defined in [`rcsfs/__init__.py`](rcsfs/__init__.py).
+Lower-level Rust functions are implementation details and may change without
+notice.
 
-rCSFs expects CSF text files in this layout:
+## Expected Input Format
 
-- first 5 lines: header / metadata
-- remaining lines: CSFs in groups of 3
-- line 1: subshell occupations
-- line 2: intermediate coupling values
-- line 3: final coupling and total `J`
+`rcsfs` expects CSF files with this structure:
 
-## Typical Use Cases
+- first 5 lines: header and metadata
+- remaining content: CSF records in groups of 3 lines
+- line 1 of each group: subshell occupations
+- line 2 of each group: intermediate coupling values
+- line 3 of each group: final coupling values and total `J`
 
-- Preparing CSF datasets for analytics pipelines.
-- Moving large text-based CSF collections into Parquet.
-- Building ML-ready descriptor matrices from CSF data.
-- Creating normalized descriptor datasets for model training.
+Files that do not follow this layout may fail conversion or produce invalid
+descriptors.
 
-## Performance Tips
+## Performance Notes
 
-- For dedicated machines, leave `num_workers=None` to use the default rayon worker configuration.
-- For shared servers, set `num_workers` explicitly to avoid CPU contention.
-- Keep the default `chunk_size=3_000_000` unless you have a measured reason to tune it.
-- Increase `max_line_len` if your input has unusually long CSF lines and you want to avoid truncation.
-
-## Notes on Older Docs
-
-Some older repository docs refer to APIs such as `convert_csfs_parallel`, `CSFProcessor`, `CSFDescriptorGenerator`, `csfs_header`, or `j_to_double_j`.
-
-Those are not part of the current public Python wrapper exported by [rcsfs/__init__.py](rcsfs/__init__.py), so this README documents the current supported surface instead.
+- Leave `num_workers=None` on dedicated machines to use Rayon's default worker
+  configuration.
+- Set `num_workers` explicitly on shared servers to avoid excessive CPU use.
+- Keep `chunk_size=3_000_000` unless profiling shows a better value for your
+  workload. This default corresponds to roughly one million three-line CSFs per
+  streaming batch.
+- Increase `max_line_len` if valid CSF lines are longer than the default 256
+  characters. Lines beyond this limit are counted in `truncated_count`.
+- Descriptor generation is usually the most CPU-intensive step; normalized
+  descriptors also perform per-CSF normalization in parallel.
 
 ## Development
 
-Useful local commands:
+Useful commands:
 
 ```bash
 cargo test
-pytest tests/rcsfs_test.py
-ruff check .
-mypy rcsfs
+uv run pytest tests/rcsfs_test.py
+uv run ruff check .
+uv run mypy rcsfs
 ```
+
+Compare descriptor outputs after performance or normalization changes:
+
+```bash
+uv run python scripts/compare_descriptor_outputs.py --help
+```
+
+## Documentation
+
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md): release-facing changes
+- [`docs/CSF_DESCRIPTOR_GUIDE.md`](docs/CSF_DESCRIPTOR_GUIDE.md): descriptor notes
+- [`docs/normalization_analysis.md`](docs/normalization_analysis.md): normalization details
+- [`docs/performance_optimization_log.md`](docs/performance_optimization_log.md): performance notes
+
+## Compatibility Notes
+
+Some older repository documents mention APIs such as `convert_csfs_parallel`,
+`CSFProcessor`, `CSFDescriptorGenerator`, `csfs_header`, or `j_to_double_j`.
+Those names are not part of the current public Python wrapper. Prefer the four
+functions listed in the public API table above.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [`LICENSE`](LICENSE).

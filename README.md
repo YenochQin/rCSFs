@@ -98,7 +98,8 @@ print(df.head())
 
 ### 1. Convert CSF text to Parquet
 
-`convert_csfs(...)` reads a CSF file, skips the 5-line header, and writes the remaining data as ordered triples:
+`convert_csfs(...)` reads a CSF file, skips the 5-line header, skips GRASP block
+separator lines containing only `*`, and writes the CSF data as ordered triples:
 
 - `idx`
 - `line1`
@@ -114,6 +115,7 @@ It also writes a companion TOML file named:
 That file contains:
 
 - the original 5 header lines
+- block metadata, including `block_info.block_lengths`
 - conversion statistics
 
 Example:

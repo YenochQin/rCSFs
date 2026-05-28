@@ -98,7 +98,8 @@ print(df.head())
 
 ### 1. CSF 文本转 Parquet
 
-`convert_csfs(...)` 会读取 CSF 文件，跳过前 5 行头信息，并将后续内容按三行一组写成以下列：
+`convert_csfs(...)` 会读取 CSF 文件，跳过前 5 行头信息，跳过只包含 `*` 的 GRASP
+block 分隔行，并将 CSF 数据按三行一组写成以下列：
 
 - `idx`
 - `line1`
@@ -114,6 +115,7 @@ print(df.head())
 这个文件包含：
 
 - 原始 5 行头信息
+- block 元数据，包括 `block_info.block_lengths`
 - 转换统计信息
 
 示例：

@@ -213,6 +213,94 @@ fn test_parquet_io_creates_header_file() {
     cleanup_test_file(&header_path);
 }
 
+fn assert_multiblock_conversion_records_block_lengths<F>(case_name: &str, convert: F)
+where
+    F: FnOnce(
+        &Path,
+        &Path,
+    ) -> Result<
+        _rcsfs::csfs_conversion::ConversionStats,
+        Box<dyn std::error::Error + Send + Sync>,
+    >,
+{
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+
+    let input_path = temp_dir().join(format!("test_multiblock_{case_name}.csf"));
+    let output_path = temp_dir().join(format!("test_multiblock_{case_name}.parquet"));
+    let header_path = temp_dir().join(format!("test_multiblock_{case_name}_header.toml"));
+
+    let content = "  Header line 1\n\
+                   Header line 2\n\
+                   Header line 3\n\
+                   Header line 4\n\
+                   Header line 5\n\
+                   5s ( 2)  4d-( 4)  4d ( 6)  5p-( 2)  5p ( 4)  6s ( 2)\n\
+                                   3/2               2\n\
+                                                           4-\n\
+                    *\n\
+                   5s ( 2)  4d-( 4)  4d ( 6)  5p-( 2)  5p ( 4)  6s ( 2)\n\
+                                   3/2               2\n\
+                                                           4-\n\
+                   5s ( 2)  4d-( 4)  4d ( 6)  5p-( 2)  5p ( 4)  6s ( 2)\n\
+                                   3/2               2\n\
+                                                           4-\n";
+    fs::write(&input_path, content).expect("Failed to create multiblock CSF file");
+
+    let result = convert(&input_path, &output_path);
+
+    assert!(result.is_ok(), "Multiblock conversion should succeed");
+    let stats = result.unwrap();
+    assert_eq!(stats.csf_count, 3, "Should skip block separators");
+    assert_eq!(
+        stats.total_lines, 10,
+        "Total data lines should include the block separator"
+    );
+
+    let header_content = fs::read_to_string(&header_path).unwrap();
+    let header_value: toml::Value = toml::from_str(&header_content).unwrap();
+    let block_lengths: Vec<i64> = header_value
+        .get("block_info")
+        .and_then(|value| value.get("block_lengths"))
+        .and_then(|value| value.as_array())
+        .unwrap()
+        .iter()
+        .map(|value| value.as_integer().unwrap())
+        .collect();
+    assert_eq!(
+        block_lengths,
+        vec![1, 2],
+        "Header file should record CSF counts per block"
+    );
+
+    let parquet_file = File::open(&output_path).expect("Parquet output should exist");
+    let parquet_reader =
+        SerializedFileReader::new(parquet_file).expect("Parquet metadata should load");
+    let row_count = parquet_reader.metadata().file_metadata().num_rows();
+    assert_eq!(row_count, 3, "Parquet should contain only real CSF rows");
+
+    cleanup_test_file(&input_path);
+    cleanup_test_file(&output_path);
+    cleanup_test_file(&header_path);
+}
+
+#[test]
+fn test_parquet_io_multiblock_records_block_lengths_in_header() {
+    use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
+
+    assert_multiblock_conversion_records_block_lengths("seq", |input_path, output_path| {
+        convert_csfs_to_parquet(input_path, output_path, 256, 1)
+    });
+}
+
+#[test]
+fn test_parallel_parquet_io_multiblock_records_block_lengths_in_header() {
+    use _rcsfs::csfs_conversion::convert_csfs_to_parquet_parallel;
+
+    assert_multiblock_conversion_records_block_lengths("par", |input_path, output_path| {
+        convert_csfs_to_parquet_parallel(input_path, output_path, 256, 1, Some(2))
+    });
+}
+
 #[test]
 fn test_parquet_io_invalid_input_path() {
     use _rcsfs::csfs_conversion::convert_csfs_to_parquet;

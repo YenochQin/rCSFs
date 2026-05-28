@@ -155,9 +155,69 @@ pub struct ConversionStats {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+struct BlockInfo {
+    block_lengths: Vec<usize>,
+    block_count: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct HeaderData {
     header_info: HeaderInfo,
+    block_info: BlockInfo,
     conversion_stats: ConversionStats,
+}
+
+#[derive(Debug)]
+struct BlockTracker {
+    current_block_line_count: usize,
+    block_lengths: Vec<usize>,
+    saw_separator: bool,
+}
+
+impl BlockTracker {
+    fn new() -> Self {
+        Self {
+            current_block_line_count: 0,
+            block_lengths: Vec::new(),
+            saw_separator: false,
+        }
+    }
+
+    fn record_csf_line(&mut self) {
+        self.current_block_line_count += 1;
+    }
+
+    fn finish_block(&mut self, data_line_number: usize) -> Result<(), IoError> {
+        if self.current_block_line_count % 3 != 0 {
+            return Err(IoError::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "CSF block ending at data line {} has {} data lines, not a multiple of 3",
+                    data_line_number, self.current_block_line_count
+                ),
+            ));
+        }
+
+        self.block_lengths.push(self.current_block_line_count / 3);
+        self.current_block_line_count = 0;
+        self.saw_separator = true;
+        Ok(())
+    }
+
+    fn into_block_info(mut self) -> BlockInfo {
+        if self.saw_separator || self.current_block_line_count > 0 {
+            self.block_lengths.push(self.current_block_line_count / 3);
+        }
+
+        BlockInfo {
+            block_count: self.block_lengths.len(),
+            block_lengths: self.block_lengths,
+        }
+    }
+}
+
+fn is_block_separator(line: &str) -> bool {
+    line.trim() == "*"
 }
 
 /// Convert CSF text file to Parquet format using parallel processing.
@@ -266,6 +326,7 @@ pub fn convert_csfs_to_parquet_parallel(
     let mut csf_count = 0;
     let mut total_lines = 0;
     let mut truncated_count = 0;
+    let mut block_tracker = BlockTracker::new();
 
     println!("开始并行处理 CSF 数据...");
 
@@ -280,7 +341,12 @@ pub fn convert_csfs_to_parquet_parallel(
                 Some(Ok(line)) => {
                     total_lines += 1;
                     lines_read += 1;
-                    batch_lines.push(line);
+                    if is_block_separator(&line) {
+                        block_tracker.finish_block(total_lines)?;
+                    } else {
+                        block_tracker.record_csf_line();
+                        batch_lines.push(line);
+                    }
                 }
                 Some(Err(e)) => return Err(e.into()),
                 None => {
@@ -291,7 +357,10 @@ pub fn convert_csfs_to_parquet_parallel(
         }
 
         if batch_lines.is_empty() {
-            break;
+            if hit_eof {
+                break;
+            }
+            continue;
         }
 
         // Ensure we have complete CSFs (3 lines each)
@@ -395,6 +464,7 @@ pub fn convert_csfs_to_parquet_parallel(
         total_lines,
         truncated_count,
     };
+    let block_info = block_tracker.into_block_info();
 
     println!("\n并行转换完成！");
     println!("CSF 数据行数: {}", total_lines);
@@ -412,6 +482,7 @@ pub fn convert_csfs_to_parquet_parallel(
         header_info: HeaderInfo {
             header_lines: headers,
         },
+        block_info,
         conversion_stats: final_stats.clone(),
     };
 
@@ -511,6 +582,7 @@ pub fn convert_csfs_to_parquet(
     let mut csf_count = 0;
     let mut total_lines = 0;
     let mut truncated_count = 0;
+    let mut block_tracker = BlockTracker::new();
 
     println!("开始处理 CSF 数据...");
 
@@ -525,6 +597,12 @@ pub fn convert_csfs_to_parquet(
                     total_lines += 1;
                     lines_read_this_iteration += 1;
 
+                    if is_block_separator(&line) {
+                        block_tracker.finish_block(total_lines)?;
+                        continue;
+                    }
+
+                    block_tracker.record_csf_line();
                     let (processed_line, truncated) =
                         process_csf_data_line(&line, max_line_len, total_lines)?;
                     if truncated {
@@ -551,7 +629,10 @@ pub fn convert_csfs_to_parquet(
         }
 
         if batch_lines.is_empty() {
-            break;
+            if hit_eof {
+                break;
+            }
+            continue;
         }
 
         // 确保是 3 的倍数
@@ -618,6 +699,7 @@ pub fn convert_csfs_to_parquet(
         header_info: HeaderInfo {
             header_lines: headers.clone(),
         },
+        block_info: block_tracker.into_block_info(),
         conversion_stats: ConversionStats {
             csf_count,
             total_lines,

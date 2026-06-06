@@ -10,7 +10,6 @@
 - `cargo test` runs Rust unit and integration tests in `tests/*.rs`.
 - `pytest tests/rcsfs_test.py` runs Python API checks against the built extension.
 - `ruff check .` and `mypy rcsfs` enforce Python linting and type checks.
-- `pixi shell` is an acceptable alternative environment bootstrap when working from the documented Pixi setup.
 
 ## Coding Style & Naming Conventions
 Follow Rust 2024 idioms: 4-space indentation, `snake_case` for modules/functions, `CamelCase` for types, and small focused modules. Keep PyO3 bindings in `src/lib.rs` thin; push heavy logic into Rust modules. In Python, use PEP 8 naming, type hints for public APIs, and keep package exports aligned with `rcsfs/_rcsfs.pyi`. Prefer clear file names such as `*_test.rs` and avoid committing exploratory notebooks or ad hoc scripts to the root.

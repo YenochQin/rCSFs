@@ -14,14 +14,13 @@ rCSFs is a high-performance Rust/Python hybrid library for processing CSF (Confi
 - Python support: 3.14 only (`requires-python = ">=3.14"` in pyproject.toml)
 - Extension module name: `_rcsfs` (compiled Rust library, defined as `module-name = "rcsfs._rcsfs"`)
 - Public package name: `rcsfs` (Python wrapper in `rcsfs/` at project root)
-- Uses pixi for environment management (platforms: win-64, linux-64)
+- Uses uv for Python environment management
 
 ## Build Commands
 
 ```bash
-# Set up environment
-pixi install
-pixi shell          # activates the pixi environment
+# Set up Python environment
+uv sync --group dev --group lint
 
 # Build Rust extension in development mode (run after any Rust changes)
 maturin develop
@@ -48,7 +47,7 @@ cargo test test_descriptor_generator_parse_csf_basic
 # Run tests with speed benchmarking
 pytest --speed
 
-# Lint and type-check Python (requires pixi lint environment)
+# Lint and type-check Python
 ruff check .
 ruff format .
 mypy rcsfs/

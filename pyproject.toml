@@ -57,17 +57,3 @@ url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
 [[tool.uv.index]]
 name = "aliyun"
 url = "https://mirrors.aliyun.com/pypi/simple/"
-
-[tool.pixi.workspace]
-channels = ["https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge"]
-platforms = ["win-64", "linux-64"]
-
-[tool.pixi.pypi-dependencies]
-rcsfs = { path = ".", editable = true }
-
-[tool.pixi.environments]
-default = { solve-group = "default" }
-dev = { features = ["dev"], solve-group = "default" }
-lint = { features = ["lint"], solve-group = "default" }
-
-[tool.pixi.tasks]

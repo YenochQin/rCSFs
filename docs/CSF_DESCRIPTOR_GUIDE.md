@@ -201,10 +201,10 @@ descriptor_matrix = np.array(descriptors_df["descriptor"].to_list(), dtype=np.fl
 print(f"Shape: {descriptor_matrix.shape}")  # (n_csfs, 3 * n_orbitals)
 ```
 
-### Pattern 4: Integration with GraspKit
+### Pattern 4: Integration with graspkit
 
 ```python
-from Graspkit.CSFs_processor.CSFs_compress_extract import get_CSFs_peel_subshells
+from graspkit.CSFs_processor.CSFs_compress_extract import get_CSFs_peel_subshells
 from _rcsfs import CSFDescriptorGenerator
 import polars as pl
 

@@ -6,6 +6,10 @@ pixi.lock
 Cargo.lock
 # 编译产物
 /target/
+/dist/
+*.whl
+*.tar.gz
+*.zip
 **/*.so
 **/*.dll
 **/*.dylib

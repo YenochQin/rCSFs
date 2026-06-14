@@ -10,7 +10,7 @@ rCSFs is a high-performance Rust/Python hybrid library for processing CSF (Confi
 3. **Descriptor normalization**: Normalize descriptors using relativistic subshell physics properties
 
 **Key Implementation Details:**
-- Rust edition: 2024 (requires Rust >=1.92.0,<1.93)
+- Rust edition: 2024
 - Python support: 3.14 only (`requires-python = ">=3.14"` in pyproject.toml)
 - Extension module name: `_rcsfs` (compiled Rust library, defined as `module-name = "rcsfs._rcsfs"`)
 - Public package name: `rcsfs` (Python wrapper in `rcsfs/` at project root)
@@ -67,7 +67,6 @@ mypy rcsfs/
 
 **Python Frontend (`rcsfs/`):**
 - `__init__.py` — Public API; wraps Rust functions with `pathlib.Path` support
-- `_rcsfs.pyi` — Type stubs for the compiled extension
 - `py.typed` — PEP 561 marker
 
 **Tests (`tests/`):**

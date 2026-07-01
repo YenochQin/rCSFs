@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Reduce descriptor-generation runtime by removing per-CSF descriptor allocation, avoid batch-wide row-to-column transposition, and keep output identical for raw and normalized descriptor Parquet files.
+**Goal:** Reduce descriptor-generation runtime by removing per-CSF descriptor allocation, reduce row-first batch staging, and keep output identical for raw and normalized descriptor Parquet files.
 
-**Architecture:** Add an allocation-light parser path to `CSFDescriptorGenerator` that writes into caller-owned descriptor buffers. Replace the current parallel batch compute path in `generate_descriptors_from_parquet_parallel()` with per-thread column chunks that are merged into Arrow columns without allocating one `Vec<i32>` per CSF row. Keep the existing `parse_csf()` API as a compatibility wrapper so existing tests and callers continue to work.
+**Architecture:** Add an allocation-light parser path to `CSFDescriptorGenerator` that writes into caller-owned descriptor buffers while preserving every existing `parse_csf()` behavior, including zero-electron triplets. Replace the current parallel batch compute path in `generate_descriptors_from_parquet_parallel()` with ordered per-thread column chunks that avoid allocating one `Vec<i32>` per CSF row. This first pass still copies chunk columns once when merging them into batch columns; a later builder-oriented pass can eliminate that remaining copy if benchmarks justify it. Keep the existing `parse_csf()` API as a compatibility wrapper so existing tests and callers continue to work.
 
 **Tech Stack:** Rust 2024, Rayon, Arrow/Parquet 58, existing PyO3 wrapper, pytest for Python API regression tests.
 
@@ -31,19 +31,27 @@ The hot path in `src/csfs_descriptor.rs` currently does expensive allocation and
 
 For a 41M-row, 168-value descriptor workload, this means tens of millions of small vectors and many batch-sized copies. More threads mostly increase allocator and memory-bandwidth pressure.
 
+Important implementation constraints:
+
+- Preserve the current parser rule that a subshell with `0` electrons writes `[0, 0, 0]`, even when line 2 or line 3 contains coupling text for that fixed-width slot.
+- Preserve short-line and fixed-width boundary behavior from the current parser. In particular, coupling-line slicing must match the old `.get(4..len.saturating_sub(5)).unwrap_or(raw)` behavior.
+- Do not use one chunk per worker. CSF cost varies with the number and shape of subshells, so chunked Rayon work needs slack for load balancing.
+- Rayon `par_chunks()` is an indexed parallel iterator, so `par_chunks(...).enumerate().map(...).collect::<Vec<_>>()` preserves logical chunk order. Do not add a `sort_by_key()` unless the implementation changes to an unordered iterator.
+- The chunk-column merge still copies `batch_size * descriptor_size` values once. This plan intentionally removes per-row descriptor allocation first; direct Arrow-builder append can be a second optimization after this behavior-preserving pass is benchmarked.
+- Normalized output still calls `normalize_descriptor_per_csf()`, which allocates internal vectors per CSF. That is acceptable for this first pass only because raw output is the primary hot path. If normalized benchmarks remain allocation-bound, add a follow-up `normalize_descriptor_into()` with precomputed subshell constants.
+
 ## File Structure
 
 - Modify `src/csfs_descriptor.rs`: add allocation-light parsing helpers, replace row-first batch construction in the parallel path, fix timing labels, and add focused Rust tests.
-- Modify `tests/csfs_descriptor_test.rs`: add public behavior tests for the new parser wrapper if the helper is public or crate-visible.
+- Modify `tests/csfs_descriptor_test.rs` only if the new parser wrapper is intentionally exposed beyond the internal Rust module tests. Otherwise keep the new helper and buffer-path tests in `src/csfs_descriptor.rs`.
 - Keep `rcsfs/__init__.py`, `src/lib.rs`, and CLI files unchanged unless existing signatures need documentation updates. The Python API should remain unchanged.
 
 ## Task 1: Add Parser Buffer Tests
 
 **Files:**
 - Modify: `src/csfs_descriptor.rs`
-- Modify: `tests/csfs_descriptor_test.rs`
 
-- [ ] **Step 1: Write a unit test for parsing into a reused raw buffer**
+- [x] **Step 1: Write a unit test for parsing into a reused raw buffer**
 
 Add this test to the existing `#[cfg(test)] mod tests` in `src/csfs_descriptor.rs`:
 
@@ -74,7 +82,7 @@ fn parse_csf_into_reuses_caller_buffer_and_matches_parse_csf() {
 }
 ```
 
-- [ ] **Step 2: Write a unit test for output buffer size validation**
+- [x] **Step 2: Write a unit test for output buffer size validation**
 
 Add this test to the same module:
 
@@ -94,7 +102,32 @@ fn parse_csf_into_rejects_wrong_buffer_size() {
 }
 ```
 
-- [ ] **Step 3: Run tests and verify they fail**
+- [x] **Step 3: Write a regression test for zero-electron triplet preservation**
+
+Add this test to the same module so the new buffer path cannot accidentally preserve coupling values for an unoccupied subshell:
+
+```rust
+#[test]
+fn parse_csf_into_zero_electron_subshell_keeps_triplet_zero() {
+    let generator = CSFDescriptorGenerator::new(vec![
+        "5s".to_string(),
+        "4d-".to_string(),
+        "4d".to_string(),
+    ]);
+    let line1 = "  5s ( 0)  4d-( 4)  4d ( 6)";
+    let line2 = "                   5/2      ";
+    let line3 = "                        4-  ";
+    let mut descriptor = vec![99i32; generator.orbital_count() * 3];
+
+    generator
+        .parse_csf_into(line1, line2, line3, &mut descriptor)
+        .unwrap();
+
+    assert_eq!(&descriptor[0..3], &[0, 0, 0]);
+}
+```
+
+- [ ] **Step 4: Run tests and verify they fail**
 
 Run:
 
@@ -109,7 +142,7 @@ Expected: compile failure because `parse_csf_into()` does not exist.
 **Files:**
 - Modify: `src/csfs_descriptor.rs`
 
-- [ ] **Step 1: Add fixed-width helper functions**
+- [x] **Step 1: Add fixed-width helper functions**
 
 Add helper functions near `chunk_string()`:
 
@@ -125,7 +158,7 @@ fn fixed_width_trimmed_field(line: &str, start: usize, width: usize) -> &str {
 
 These helpers avoid building padded strings. Missing chunks are treated as empty fields.
 
-- [ ] **Step 2: Add `parse_csf_into()`**
+- [x] **Step 2: Add `parse_csf_into()`**
 
 Add this method to `impl CSFDescriptorGenerator`:
 
@@ -155,7 +188,7 @@ pub fn parse_csf_into(
     let coupling_line_raw = line3.trim_end();
     let coupling_start = 4usize;
     let coupling_end = coupling_line_raw.len().saturating_sub(5);
-    let coupling_line = if coupling_start < coupling_end {
+    let coupling_line = if coupling_start <= coupling_end {
         &coupling_line_raw[coupling_start..coupling_end]
     } else {
         coupling_line_raw
@@ -208,9 +241,15 @@ pub fn parse_csf_into(
 
         if let Some(&orbital_idx) = self.orbital_index_map.get(subshell) {
             let base_idx = orbital_idx * 3;
-            descriptor[base_idx] = subshell_electron_num;
-            descriptor[base_idx + 1] = temp_middle_item;
-            descriptor[base_idx + 2] = temp_coupling_item;
+            if subshell_electron_num == 0 {
+                descriptor[base_idx] = 0;
+                descriptor[base_idx + 1] = 0;
+                descriptor[base_idx + 2] = 0;
+            } else {
+                descriptor[base_idx] = subshell_electron_num;
+                descriptor[base_idx + 1] = temp_middle_item;
+                descriptor[base_idx + 2] = temp_coupling_item;
+            }
         } else {
             let warning_index = self
                 .missing_subshell_warning_count
@@ -230,7 +269,7 @@ pub fn parse_csf_into(
 }
 ```
 
-- [ ] **Step 3: Make `parse_csf()` delegate to `parse_csf_into()`**
+- [x] **Step 3: Make `parse_csf()` delegate to `parse_csf_into()`**
 
 Replace the body of `parse_csf()` with:
 
@@ -242,7 +281,7 @@ pub fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> Result<Vec<i32
 }
 ```
 
-- [ ] **Step 4: Run parser tests**
+- [x] **Step 4: Run parser tests**
 
 Run:
 
@@ -258,9 +297,9 @@ Expected: all parser tests pass.
 **Files:**
 - Modify: `src/csfs_descriptor.rs`
 
-- [ ] **Step 1: Add raw batch helper test**
+- [x] **Step 1: Add raw batch helper test**
 
-Add a test in `src/csfs_descriptor.rs` for a new helper named `build_raw_descriptor_columns_parallel()`:
+Add this test inside a `#[cfg(test)] mod tests` nested in the existing `parquet_batch` module for a new helper named `build_raw_descriptor_columns_parallel()`. Include `use super::*;` and `use crate::csfs_descriptor::CSFDescriptorGenerator;` in that nested test module. Keep the helper private unless a crate-visible helper is needed elsewhere:
 
 ```rust
 #[test]
@@ -297,6 +336,17 @@ fn build_raw_descriptor_columns_parallel_matches_parse_csf_rows() {
 }
 ```
 
+Also add a small unit test for the chunk-size policy:
+
+```rust
+#[test]
+fn descriptor_chunk_size_keeps_slack_for_high_worker_counts() {
+    assert_eq!(descriptor_chunk_size(65_536, 8), 2048);
+    assert!(descriptor_chunk_size(65_536, 46) <= 512);
+    assert!(descriptor_chunk_size(65_536, 46) >= 256);
+}
+```
+
 - [ ] **Step 2: Run helper test and verify it fails**
 
 Run:
@@ -307,11 +357,16 @@ uv run cargo test build_raw_descriptor_columns_parallel_matches_parse_csf_rows
 
 Expected: compile failure because helper does not exist.
 
-- [ ] **Step 3: Implement `build_raw_descriptor_columns_parallel()`**
+- [x] **Step 3: Implement chunk sizing and `build_raw_descriptor_columns_parallel()`**
 
-Add this helper inside `parquet_batch`:
+Add these helpers inside `parquet_batch`. The chunk sizing deliberately creates more chunks than worker threads so Rayon has slack for uneven CSF complexity:
 
 ```rust
+fn descriptor_chunk_size(batch_size: usize, thread_count: usize) -> usize {
+    let target_chunks = thread_count.saturating_mul(4).max(1);
+    batch_size.div_ceil(target_chunks).clamp(256, 8192)
+}
+
 fn build_raw_descriptor_columns_parallel(
     pool: &rayon::ThreadPool,
     generator: Arc<super::CSFDescriptorGenerator>,
@@ -321,7 +376,7 @@ fn build_raw_descriptor_columns_parallel(
 
     let descriptor_size = 3 * generator.orbital_count();
     let batch_size = rows.len();
-    let chunk_size = (batch_size / pool.current_num_threads()).clamp(1024, 8192);
+    let chunk_size = descriptor_chunk_size(batch_size, pool.current_num_threads());
 
     let chunk_columns: Vec<(usize, Vec<Vec<i32>>)> = pool.install(|| {
         rows.par_chunks(chunk_size)
@@ -347,13 +402,10 @@ fn build_raw_descriptor_columns_parallel(
             .collect()
     });
 
-    let mut sorted_chunk_columns = chunk_columns;
-    sorted_chunk_columns.sort_by_key(|(chunk_idx, _)| *chunk_idx);
-
     let mut columns: Vec<Vec<i32>> = (0..descriptor_size)
         .map(|_| Vec::with_capacity(batch_size))
         .collect();
-    for (_, chunk) in sorted_chunk_columns {
+    for (_, chunk) in chunk_columns {
         for col_idx in 0..descriptor_size {
             columns[col_idx].extend(chunk[col_idx].iter().copied());
         }
@@ -362,7 +414,7 @@ fn build_raw_descriptor_columns_parallel(
 }
 ```
 
-- [ ] **Step 4: Replace the raw branch in `generate_descriptors_from_parquet_parallel()`**
+- [x] **Step 4: Replace the raw branch in `generate_descriptors_from_parquet_parallel()`**
 
 In the raw branch inside the compute thread, replace:
 
@@ -381,7 +433,7 @@ DescriptorColumns::Raw(build_raw_descriptor_columns_parallel(
 ))
 ```
 
-- [ ] **Step 5: Run raw consistency tests**
+- [x] **Step 5: Run raw consistency tests**
 
 Run:
 
@@ -397,9 +449,9 @@ Expected: all tests pass.
 **Files:**
 - Modify: `src/csfs_descriptor.rs`
 
-- [ ] **Step 1: Add normalized helper test**
+- [x] **Step 1: Add normalized helper test**
 
-Add a test in `src/csfs_descriptor.rs`:
+Add this test inside the same `parquet_batch` test module as the raw helper test:
 
 ```rust
 #[test]
@@ -458,7 +510,7 @@ uv run cargo test build_normalized_descriptor_columns_parallel_matches_row_path
 
 Expected: compile failure because helper does not exist.
 
-- [ ] **Step 3: Implement `build_normalized_descriptor_columns_parallel()`**
+- [x] **Step 3: Implement `build_normalized_descriptor_columns_parallel()`**
 
 Add this helper inside `parquet_batch`:
 
@@ -474,7 +526,7 @@ fn build_normalized_descriptor_columns_parallel(
 
     let descriptor_size = 3 * generator.orbital_count();
     let batch_size = rows.len();
-    let chunk_size = (batch_size / pool.current_num_threads()).clamp(1024, 8192);
+    let chunk_size = descriptor_chunk_size(batch_size, pool.current_num_threads());
 
     let chunk_columns: Vec<(usize, Vec<Vec<f32>>)> = pool.install(|| {
         rows.par_chunks(chunk_size)
@@ -520,13 +572,10 @@ fn build_normalized_descriptor_columns_parallel(
             .collect()
     });
 
-    let mut sorted_chunk_columns = chunk_columns;
-    sorted_chunk_columns.sort_by_key(|(chunk_idx, _)| *chunk_idx);
-
     let mut columns: Vec<Vec<f32>> = (0..descriptor_size)
         .map(|_| Vec::with_capacity(batch_size))
         .collect();
-    for (_, chunk) in sorted_chunk_columns {
+    for (_, chunk) in chunk_columns {
         for col_idx in 0..descriptor_size {
             columns[col_idx].extend(chunk[col_idx].iter().copied());
         }
@@ -535,7 +584,7 @@ fn build_normalized_descriptor_columns_parallel(
 }
 ```
 
-- [ ] **Step 4: Replace normalized branch in `generate_descriptors_from_parquet_parallel()`**
+- [x] **Step 4: Replace normalized branch in `generate_descriptors_from_parquet_parallel()`**
 
 Replace the normalized row-first branch with:
 
@@ -548,7 +597,7 @@ DescriptorColumns::Normalized(build_normalized_descriptor_columns_parallel(
 ))
 ```
 
-- [ ] **Step 5: Run normalized consistency tests**
+- [x] **Step 5: Run normalized consistency tests**
 
 Run:
 
@@ -564,7 +613,7 @@ Expected: all tests pass.
 **Files:**
 - Modify: `src/csfs_descriptor.rs`
 
-- [ ] **Step 1: Replace misleading lifetime labels**
+- [x] **Step 1: Replace misleading lifetime labels**
 
 Change the final timing print from:
 
@@ -588,7 +637,7 @@ println!(
 );
 ```
 
-- [ ] **Step 2: Add pure reader conversion timing**
+- [x] **Step 2: Add pure reader conversion timing**
 
 Inside the reader thread, measure only batch-to-row copy time:
 
@@ -613,7 +662,7 @@ println!(
 );
 ```
 
-- [ ] **Step 3: Aggregate compute stats**
+- [x] **Step 3: Aggregate compute stats**
 
 Replace per-worker-only printing with accumulated totals:
 
@@ -645,18 +694,30 @@ Expected: all tests pass.
 **Files:**
 - Existing Rust and Python package
 
-- [ ] **Step 1: Run Rust descriptor tests**
+- [x] **Step 1: Run formatting and Rust descriptor tests**
 
 Run:
 
 ```bash
+cargo fmt --check
 uv run cargo test test_descriptor_generator_parse_csf_basic
+uv run cargo test parse_csf_into
 uv run cargo test test_descriptor_parallel_matches_sequential_outputs
 ```
 
-Expected: all selected Rust tests pass.
+Expected: formatting is clean and all selected Rust tests pass.
 
-- [ ] **Step 2: Run Python API and CLI tests**
+- [x] **Step 2: Build local extension before Python tests**
+
+Run:
+
+```bash
+uv run maturin develop
+```
+
+Expected: local wheel builds and installs successfully. Run this before Python tests so pytest exercises the changed Rust extension, not a stale installed module.
+
+- [x] **Step 3: Run Python API and CLI tests**
 
 Run:
 
@@ -666,26 +727,15 @@ uv run pytest tests/cli_test.py tests/rcsfs_test.py -q
 
 Expected: all tests pass.
 
-- [ ] **Step 3: Run formatting**
+- [x] **Step 4: Run Python lint checks**
 
 Run:
 
 ```bash
-cargo fmt --check
 uv run --group lint ruff check rcsfs/cli.py tests/cli_test.py
 ```
 
-Expected: no formatting or lint errors.
-
-- [ ] **Step 4: Build local extension**
-
-Run:
-
-```bash
-uv run maturin develop
-```
-
-Expected: local wheel builds and installs successfully.
+Expected: no lint errors.
 
 - [ ] **Step 5: Benchmark the known large dataset**
 
@@ -705,6 +755,6 @@ Expected: the new diagnostic output shows lower compute time than the current ba
 
 ## Self-Review
 
-- Spec coverage: The plan addresses the observed compute bottleneck, preserves public Python API behavior, keeps CLI unchanged, and adds diagnostics to avoid misleading read/write interpretation.
+- Spec coverage: The plan addresses the observed compute bottleneck by removing per-row descriptor allocation and row-first batch staging, preserves public Python API behavior, keeps CLI unchanged, and adds diagnostics to avoid misleading read/write interpretation. It explicitly leaves direct Arrow-builder chunk append and allocation-free normalization as benchmark-driven follow-ups.
 - Placeholder scan: No `TBD`, `TODO`, or vague "add tests" instructions remain. Each task includes concrete test commands and implementation snippets.
 - Type consistency: New APIs are `parse_csf_into()`, `build_raw_descriptor_columns_parallel()`, and `build_normalized_descriptor_columns_parallel()`. Later tasks use those exact names.

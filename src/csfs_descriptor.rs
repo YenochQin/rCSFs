@@ -451,6 +451,14 @@ pub mod parquet_batch {
         columns: DescriptorColumns,
     }
 
+    #[derive(Debug)]
+    struct ComputeStats {
+        batches_processed: usize,
+        rows_processed: usize,
+        compute_elapsed: std::time::Duration,
+        send_elapsed: std::time::Duration,
+    }
+
     fn transpose_i32_rows(rows: Vec<Vec<i32>>, descriptor_size: usize) -> Vec<Vec<i32>> {
         let batch_size = rows.len();
         let mut columns: Vec<Vec<i32>> = (0..descriptor_size)
@@ -479,6 +487,10 @@ pub mod parquet_batch {
         }
 
         columns
+    }
+
+    pub(crate) fn descriptor_pipeline_channel_capacity(num_workers: usize) -> usize {
+        num_workers.clamp(1, 8)
     }
 
     /// Generate descriptors from parquet with full pipeline parallelization
@@ -512,6 +524,9 @@ pub mod parquet_batch {
         use parquet::file::properties::WriterProperties;
         use std::collections::BTreeMap;
         use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let total_start = Instant::now();
 
         // Determine worker count
         let num_workers = num_workers.unwrap_or_else(|| {
@@ -538,7 +553,7 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 1: Setup channels with bounded capacity
         ////////////////////////////////////////////////////////////////////////////////
-        let channel_capacity = num_workers * 2;
+        let channel_capacity = descriptor_pipeline_channel_capacity(num_workers);
         let (work_tx, work_rx): (Sender<WorkItem>, Receiver<WorkItem>) = bounded(channel_capacity);
         let (result_tx, result_rx): (Sender<ResultItem>, Receiver<ResultItem>) =
             bounded(channel_capacity);
@@ -577,6 +592,7 @@ pub mod parquet_batch {
         let input_path = input_parquet.to_path_buf();
         let reader_handle = std::thread::spawn(move || {
             use std::fs::File;
+            let reader_start = Instant::now();
             let file = match File::open(&input_path) {
                 Ok(f) => f,
                 Err(e) => {
@@ -673,18 +689,22 @@ pub mod parquet_batch {
             }
 
             println!("[读取完成] {} 个 CSF", total_csfs);
-            Ok((total_csfs, batch_idx))
+            Ok((total_csfs, batch_idx, reader_start.elapsed()))
         });
 
         ////////////////////////////////////////////////////////////////////////////////
-        // Phase 4: Multiple Worker threads - compete to process items from channel
+        // Phase 4: Compute thread - process each batch with a bounded Rayon pool
         ////////////////////////////////////////////////////////////////////////////////
         let peel_subshells_for_normalization = Arc::new(peel_subshells.clone());
         let generator = Arc::new(super::CSFDescriptorGenerator::new(peel_subshells));
         let mut worker_handles = Vec::new();
 
-        // Spawn multiple worker threads, all competing on the same channel
-        for _worker_id in 0..num_workers {
+        let rayon_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_workers)
+            .build()
+            .with_context(|| "Failed to create descriptor worker thread pool")?;
+
+        {
             let generator_clone = generator.clone();
             let result_tx_clone = result_tx.clone();
             let work_rx_clone = work_rx.clone();
@@ -698,8 +718,11 @@ pub mod parquet_batch {
                 use rayon::prelude::*;
 
                 let descriptor_size = 3 * generator_clone.orbital_count();
+                let mut batches_processed = 0usize;
+                let mut rows_processed = 0usize;
+                let mut compute_elapsed = Duration::ZERO;
+                let mut send_elapsed = Duration::ZERO;
 
-                // Each worker competes to receive work items
                 while let Ok(work_item) = work_rx_clone.recv() {
                     // Check for error sentinel
                     if work_item.batch_idx == usize::MAX {
@@ -708,76 +731,92 @@ pub mod parquet_batch {
 
                     let batch_idx = work_item.batch_idx;
                     let batch_size = work_item.rows.len();
-                    let columns = if normalize_enabled {
-                        let normalized_rows: Vec<Vec<f32>> = work_item
-                            .rows
-                            .into_par_iter()
-                            .map(|(idx, ref line1, ref line2, ref line3)| {
-                                match generator_clone.parse_csf(line1, line2, line3) {
-                                    Ok(descriptor) => {
-                                        let two_j_target = infer_two_j_target(&descriptor);
-                                        match normalize_descriptor_per_csf(
-                                            &descriptor,
-                                            &peel_subshells_for_normalization,
-                                            two_j_target,
-                                        ) {
-                                            Ok(normalized) => normalized,
-                                            Err(e) => {
-                                                eprintln!(
-                                                    "Warning: Failed to normalize CSF at index {}: {}",
-                                                    idx, e
-                                                );
-                                                vec![0.0f32; descriptor_size]
+                    let compute_start = Instant::now();
+                    let columns = rayon_pool.install(|| {
+                        if normalize_enabled {
+                            let normalized_rows: Vec<Vec<f32>> = work_item
+                                .rows
+                                .into_par_iter()
+                                .map(|(idx, ref line1, ref line2, ref line3)| {
+                                    match generator_clone.parse_csf(line1, line2, line3) {
+                                        Ok(descriptor) => {
+                                            let two_j_target = infer_two_j_target(&descriptor);
+                                            match normalize_descriptor_per_csf(
+                                                &descriptor,
+                                                &peel_subshells_for_normalization,
+                                                two_j_target,
+                                            ) {
+                                                Ok(normalized) => normalized,
+                                                Err(e) => {
+                                                    eprintln!(
+                                                        "Warning: Failed to normalize CSF at index {}: {}",
+                                                        idx, e
+                                                    );
+                                                    vec![0.0f32; descriptor_size]
+                                                }
                                             }
                                         }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "Warning: Failed to parse CSF at index {}: {}",
+                                                idx, e
+                                            );
+                                            vec![0.0f32; descriptor_size]
+                                        }
                                     }
-                                    Err(e) => {
-                                        eprintln!(
-                                            "Warning: Failed to parse CSF at index {}: {}",
-                                            idx, e
-                                        );
-                                        vec![0.0f32; descriptor_size]
-                                    }
-                                }
-                            })
-                            .collect();
+                                })
+                                .collect();
 
-                        DescriptorColumns::Normalized(transpose_f32_rows(
-                            normalized_rows,
-                            descriptor_size,
-                        ))
-                    } else {
-                        let descriptor_rows: Vec<Vec<i32>> = work_item
-                            .rows
-                            .into_par_iter()
-                            .map(|(idx, ref line1, ref line2, ref line3)| {
-                                match generator_clone.parse_csf(line1, line2, line3) {
-                                    Ok(desc) => desc,
-                                    Err(e) => {
-                                        eprintln!(
-                                            "Warning: Failed to parse CSF at index {}: {}",
-                                            idx, e
-                                        );
-                                        vec![0i32; descriptor_size]
+                            DescriptorColumns::Normalized(transpose_f32_rows(
+                                normalized_rows,
+                                descriptor_size,
+                            ))
+                        } else {
+                            let descriptor_rows: Vec<Vec<i32>> = work_item
+                                .rows
+                                .into_par_iter()
+                                .map(|(idx, ref line1, ref line2, ref line3)| {
+                                    match generator_clone.parse_csf(line1, line2, line3) {
+                                        Ok(desc) => desc,
+                                        Err(e) => {
+                                            eprintln!(
+                                                "Warning: Failed to parse CSF at index {}: {}",
+                                                idx, e
+                                            );
+                                            vec![0i32; descriptor_size]
+                                        }
                                     }
-                                }
-                            })
-                            .collect();
+                                })
+                                .collect();
 
-                        DescriptorColumns::Raw(transpose_i32_rows(descriptor_rows, descriptor_size))
-                    };
+                            DescriptorColumns::Raw(transpose_i32_rows(
+                                descriptor_rows,
+                                descriptor_size,
+                            ))
+                        }
+                    });
+                    compute_elapsed += compute_start.elapsed();
 
                     let result_item = ResultItem {
                         batch_idx,
                         batch_size,
                         columns,
                     };
+                    let send_start = Instant::now();
                     if result_tx_clone.send(result_item).is_err() {
                         return Err(anyhow::anyhow!("Failed to send result item"));
                     }
+                    send_elapsed += send_start.elapsed();
+                    batches_processed += 1;
+                    rows_processed += batch_size;
                 }
 
-                Ok(())
+                Ok(ComputeStats {
+                    batches_processed,
+                    rows_processed,
+                    compute_elapsed,
+                    send_elapsed,
+                })
             }));
         }
 
@@ -787,10 +826,11 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 5: Writer thread - maintain order and write to parquet (multi-column format)
         ////////////////////////////////////////////////////////////////////////////////
-        let writer_handle: std::thread::JoinHandle<Result<(usize, usize)>> =
+        let writer_handle: std::thread::JoinHandle<Result<(usize, usize, Duration)>> =
             std::thread::spawn(move || {
                 use arrow::array::{Float32Array, Int32Array};
 
+                let writer_start = Instant::now();
                 let mut pending: BTreeMap<usize, ResultItem> = BTreeMap::new();
                 let mut next_write_idx = 0usize;
                 let mut total_descriptors = 0usize;
@@ -895,7 +935,11 @@ pub mod parquet_batch {
 
                 writer_guard.finish()?;
                 println!("[写入完成] {} 个描述符", total_descriptors);
-                Ok((total_descriptors, total_batches_written))
+                Ok((
+                    total_descriptors,
+                    total_batches_written,
+                    writer_start.elapsed(),
+                ))
             });
 
         ////////////////////////////////////////////////////////////////////////////////
@@ -918,7 +962,15 @@ pub mod parquet_batch {
         // Wait for all worker threads
         for (i, handle) in worker_handles.into_iter().enumerate() {
             match handle.join() {
-                Ok(Ok(())) => {}
+                Ok(Ok(stats)) => {
+                    println!(
+                        "[计算完成] batches: {} | rows: {} | compute: {:.2?} | wait_writer: {:.2?}",
+                        stats.batches_processed,
+                        stats.rows_processed,
+                        stats.compute_elapsed,
+                        stats.send_elapsed
+                    );
+                }
                 Ok(Err(e)) => {
                     errors.push(format!("Worker thread {} failed: {:#}", i, e));
                 }
@@ -947,8 +999,9 @@ pub mod parquet_batch {
             ));
         }
 
-        let (total_csfs, _) = reader_result.expect("reader result exists when no errors occurred");
-        let (total_descriptors, _) =
+        let (total_csfs, _, reader_elapsed) =
+            reader_result.expect("reader result exists when no errors occurred");
+        let (total_descriptors, _, writer_elapsed) =
             writer_result.expect("writer result exists when no errors occurred");
 
         println!("====================================");
@@ -960,6 +1013,12 @@ pub mod parquet_batch {
         println!(
             "轨道数: {} | 描述符大小: {}",
             orbital_count, descriptor_size
+        );
+        println!(
+            "耗时: total {:.2?} | read {:.2?} | write+close {:.2?}",
+            total_start.elapsed(),
+            reader_elapsed,
+            writer_elapsed
         );
         println!("====================================");
 
@@ -1351,5 +1410,13 @@ mod tests {
 
         assert_eq!(generator.orbital_count(), 3);
         assert_eq!(generator.peel_subshells(), &subshells);
+    }
+
+    #[test]
+    fn descriptor_pipeline_channel_capacity_limits_high_worker_memory_pressure() {
+        assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(1), 1);
+        assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(2), 2);
+        assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(8), 8);
+        assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(48), 8);
     }
 }

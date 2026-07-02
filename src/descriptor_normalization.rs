@@ -222,10 +222,9 @@ pub fn normalize_electron_count(num_electrons: i32, subshell: &str) -> Result<f3
 /// * `descriptor`    - Raw descriptor array of length `3 * peel_subshells.len()`
 /// * `peel_subshells` - Ordered list of subshell names (full or angular notation)
 /// * `two_j_target`  - Doubled total angular momentum `2J` of the target state;
-///                     for a single-Jpi block this is the block's fixed J value;
-///                     call with `descriptor[descriptor.len() - 1]` when reading
-///                     directly from a parsed CSF (the value is always stored there
-///                     by `parse_csf`).
+///   for a single-Jpi block this is the block's fixed J value; call with
+///   `descriptor[descriptor.len() - 1]` when reading directly from a parsed CSF
+///   (the value is always stored there by `parse_csf`).
 ///
 /// # Returns
 /// * `Ok(Vec<f32>)` - Normalized descriptor (same length as `descriptor`, values in `[0, 1]`)
@@ -391,9 +390,9 @@ pub fn get_all_subshell_limits() -> HashMap<String, f32> {
     ])
 }
 
-//////////////////////////////////////////////////////////////////////////////
-/// Rust Tests
-//////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+// Rust Tests
+////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
@@ -632,9 +631,9 @@ mod tests {
         // Full notation "2s" should be auto-converted and produce identical results
         let descriptor = vec![1, 1, 1];
         let result_angular =
-            normalize_descriptor_per_csf(&descriptor, &vec!["s ".to_string()], 1).unwrap();
+            normalize_descriptor_per_csf(&descriptor, &["s ".to_string()], 1).unwrap();
         let result_full =
-            normalize_descriptor_per_csf(&descriptor, &vec!["2s".to_string()], 1).unwrap();
+            normalize_descriptor_per_csf(&descriptor, &["2s".to_string()], 1).unwrap();
         for (a, b) in result_angular.iter().zip(result_full.iter()) {
             assert!((a - b).abs() < 1e-6);
         }

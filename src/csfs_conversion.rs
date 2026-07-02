@@ -69,6 +69,7 @@ const CSF_HEADER_LINE_COUNT: usize = 5;
 /// 1. OS/system limits typically bound single line length
 /// 2. The max_line_len parameter limits what we actually store
 /// 3. Temporary allocations are freed immediately
+///
 /// Lines exceeding this threshold will trigger a warning but still be processed.
 const MAX_LINE_WARNING_THRESHOLD: usize = 1024 * 1024; // 1 MB
 
@@ -188,7 +189,7 @@ impl BlockTracker {
     }
 
     fn finish_block(&mut self, data_line_number: usize) -> Result<(), IoError> {
-        if self.current_block_line_count % 3 != 0 {
+        if !self.current_block_line_count.is_multiple_of(3) {
             return Err(IoError::new(
                 ErrorKind::InvalidData,
                 format!(
@@ -301,13 +302,13 @@ pub fn convert_csfs_to_parquet_parallel(
         Field::new("line3", DataType::Utf8, false),
     ]));
 
-    let output_file = File::create(&output_path)?;
+    let output_file = File::create(output_path)?;
     let props = WriterProperties::builder()
         .set_compression(parquet::basic::Compression::UNCOMPRESSED)
         .set_write_batch_size(chunk_size)
         .build();
     let writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
-    let mut writer_guard = ParquetFileGuard::new(writer, &output_path);
+    let mut writer_guard = ParquetFileGuard::new(writer, output_path);
     println!("Parquet 写入器已创建，使用无压缩");
 
     // --- 3. 流式读取 + 批量并行处理 ---
@@ -574,7 +575,7 @@ pub fn convert_csfs_to_parquet(
         .build();
 
     let writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
-    let mut writer_guard = ParquetFileGuard::new(writer, &output_path);
+    let mut writer_guard = ParquetFileGuard::new(writer, output_path);
     println!("Parquet 写入器已创建，使用无压缩");
 
     // --- 4. 批量处理 ---

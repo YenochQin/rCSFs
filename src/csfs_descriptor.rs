@@ -329,8 +329,8 @@ pub mod parquet_batch {
                                         "Warning: Failed to parse CSF at index {}: {}",
                                         idx, e
                                     );
-                                    for col_idx in 0..descriptor_size {
-                                        builders[col_idx].append_value(0.0f32);
+                                    for builder in &mut builders {
+                                        builder.append_value(0.0f32);
                                     }
                                 }
                             }
@@ -378,8 +378,8 @@ pub mod parquet_batch {
                                         "Warning: Failed to parse CSF at index {}: {}",
                                         idx, e
                                     );
-                                    for col_idx in 0..descriptor_size {
-                                        builders[col_idx].append_value(0i32);
+                                    for builder in &mut builders {
+                                        builder.append_value(0i32);
                                     }
                                 }
                             }
@@ -432,10 +432,12 @@ pub mod parquet_batch {
     // Pipeline Parallel Descriptor Generation
     ////////////////////////////////////////////////////////////////////////////////
 
+    type DescriptorRow = (u64, Arc<str>, Arc<str>, Arc<str>);
+
     /// Work item sent from reader to workers
     struct WorkItem {
         batch_idx: usize,
-        rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)>,
+        rows: Vec<DescriptorRow>,
     }
 
     /// Descriptor columns produced by workers.
@@ -467,8 +469,8 @@ pub mod parquet_batch {
             .collect();
 
         for row in rows {
-            for col_idx in 0..descriptor_size {
-                columns[col_idx].push(row.get(col_idx).copied().unwrap_or(0));
+            for (col_idx, column) in columns.iter_mut().enumerate() {
+                column.push(row.get(col_idx).copied().unwrap_or(0));
             }
         }
 
@@ -483,23 +485,23 @@ pub mod parquet_batch {
             .collect();
 
         for row in rows {
-            for col_idx in 0..descriptor_size {
-                columns[col_idx].push(row.get(col_idx).copied().unwrap_or(0.0));
+            for (col_idx, column) in columns.iter_mut().enumerate() {
+                column.push(row.get(col_idx).copied().unwrap_or(0.0));
             }
         }
 
         columns
     }
 
-    fn descriptor_chunk_size(batch_size: usize, thread_count: usize) -> usize {
-        let target_chunks = thread_count.saturating_mul(4).max(1);
+    fn descriptor_chunk_size(batch_size: usize, rayon_thread_count: usize) -> usize {
+        let target_chunks = rayon_thread_count.saturating_mul(4).max(1);
         batch_size.div_ceil(target_chunks).clamp(256, 8192)
     }
 
     fn build_raw_descriptor_columns_parallel(
         pool: &rayon::ThreadPool,
         generator: Arc<super::CSFDescriptorGenerator>,
-        rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)>,
+        rows: Vec<DescriptorRow>,
     ) -> Vec<Vec<i32>> {
         use rayon::prelude::*;
 
@@ -523,8 +525,8 @@ pub mod parquet_batch {
                             eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
                             descriptor.fill(0);
                         }
-                        for col_idx in 0..descriptor_size {
-                            columns[col_idx].push(descriptor[col_idx]);
+                        for (col_idx, column) in columns.iter_mut().enumerate() {
+                            column.push(descriptor[col_idx]);
                         }
                     }
 
@@ -537,8 +539,8 @@ pub mod parquet_batch {
             .map(|_| Vec::with_capacity(batch_size))
             .collect();
         for (_, chunk) in chunk_columns {
-            for col_idx in 0..descriptor_size {
-                columns[col_idx].extend(chunk[col_idx].iter().copied());
+            for (col_idx, column) in columns.iter_mut().enumerate() {
+                column.extend(chunk[col_idx].iter().copied());
             }
         }
         columns
@@ -548,7 +550,7 @@ pub mod parquet_batch {
         pool: &rayon::ThreadPool,
         generator: Arc<super::CSFDescriptorGenerator>,
         peel_subshells: Arc<Vec<String>>,
-        rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)>,
+        rows: Vec<DescriptorRow>,
     ) -> Vec<Vec<f32>> {
         use crate::descriptor_normalization::{infer_two_j_target, normalize_descriptor_per_csf};
         use rayon::prelude::*;
@@ -603,8 +605,8 @@ pub mod parquet_batch {
                             }
                         }
 
-                        for col_idx in 0..descriptor_size {
-                            columns[col_idx].push(normalized[col_idx]);
+                        for (col_idx, column) in columns.iter_mut().enumerate() {
+                            column.push(normalized[col_idx]);
                         }
                     }
 
@@ -617,109 +619,11 @@ pub mod parquet_batch {
             .map(|_| Vec::with_capacity(batch_size))
             .collect();
         for (_, chunk) in chunk_columns {
-            for col_idx in 0..descriptor_size {
-                columns[col_idx].extend(chunk[col_idx].iter().copied());
+            for (col_idx, column) in columns.iter_mut().enumerate() {
+                column.extend(chunk[col_idx].iter().copied());
             }
         }
         columns
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use crate::csfs_descriptor::CSFDescriptorGenerator;
-
-        #[test]
-        fn build_raw_descriptor_columns_parallel_matches_parse_csf_rows() {
-            let generator = Arc::new(CSFDescriptorGenerator::new(vec![
-                "5s".to_string(),
-                "4d-".to_string(),
-                "4d".to_string(),
-            ]));
-            let rows = vec![
-                (
-                    0u64,
-                    Arc::<str>::from("  5s ( 2)  4d-( 4)  4d ( 6)"),
-                    Arc::<str>::from("                   3/2      "),
-                    Arc::<str>::from("                        4-  "),
-                ),
-                (
-                    1u64,
-                    Arc::<str>::from("  5s ( 0)  4d-( 4)  4d ( 6)"),
-                    Arc::<str>::from("                   5/2      "),
-                    Arc::<str>::from("                        4-  "),
-                ),
-            ];
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(2)
-                .build()
-                .unwrap();
-
-            let columns =
-                build_raw_descriptor_columns_parallel(&pool, generator.clone(), rows.clone());
-
-            let expected_rows: Vec<Vec<i32>> = rows
-                .iter()
-                .map(|(_, line1, line2, line3)| generator.parse_csf(line1, line2, line3).unwrap())
-                .collect();
-            let expected_columns = transpose_i32_rows(expected_rows, generator.orbital_count() * 3);
-            assert_eq!(columns, expected_columns);
-        }
-
-        #[test]
-        fn build_normalized_descriptor_columns_parallel_matches_row_path() {
-            use crate::descriptor_normalization::{
-                infer_two_j_target, normalize_descriptor_per_csf,
-            };
-
-            let peel_subshells =
-                Arc::new(vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()]);
-            let generator = Arc::new(CSFDescriptorGenerator::new((*peel_subshells).clone()));
-            let rows = vec![
-                (
-                    0u64,
-                    Arc::<str>::from("  5s ( 2)  4d-( 4)  4d ( 6)"),
-                    Arc::<str>::from("                   3/2      "),
-                    Arc::<str>::from("                        4-  "),
-                ),
-                (
-                    1u64,
-                    Arc::<str>::from("  5s ( 0)  4d-( 4)  4d ( 6)"),
-                    Arc::<str>::from("                   5/2      "),
-                    Arc::<str>::from("                        4-  "),
-                ),
-            ];
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(2)
-                .build()
-                .unwrap();
-
-            let columns = build_normalized_descriptor_columns_parallel(
-                &pool,
-                generator.clone(),
-                peel_subshells.clone(),
-                rows.clone(),
-            );
-
-            let expected_rows: Vec<Vec<f32>> = rows
-                .iter()
-                .map(|(_, line1, line2, line3)| {
-                    let descriptor = generator.parse_csf(line1, line2, line3).unwrap();
-                    let two_j_target = infer_two_j_target(&descriptor);
-                    normalize_descriptor_per_csf(&descriptor, &peel_subshells, two_j_target)
-                        .unwrap()
-                })
-                .collect();
-            let expected_columns = transpose_f32_rows(expected_rows, generator.orbital_count() * 3);
-            assert_eq!(columns, expected_columns);
-        }
-
-        #[test]
-        fn descriptor_chunk_size_keeps_slack_for_high_worker_counts() {
-            assert_eq!(descriptor_chunk_size(65_536, 8), 2048);
-            assert!(descriptor_chunk_size(65_536, 46) <= 512);
-            assert!(descriptor_chunk_size(65_536, 46) >= 256);
-        }
     }
 
     pub(crate) fn descriptor_pipeline_channel_capacity(num_workers: usize) -> usize {
@@ -762,10 +666,7 @@ pub mod parquet_batch {
         let total_start = Instant::now();
 
         // Determine worker count
-        let num_workers = num_workers.unwrap_or_else(|| {
-            let default = num_cpus::get();
-            default
-        });
+        let num_workers = num_workers.unwrap_or_else(num_cpus::get);
         if num_workers == 0 {
             return Err(anyhow::anyhow!("num_workers must be greater than 0"));
         }
@@ -894,7 +795,7 @@ pub mod parquet_batch {
 
                         // Copy row strings into Arc<str> so worker threads can own them safely.
                         let copy_start = Instant::now();
-                        let rows: Vec<(u64, Arc<str>, Arc<str>, Arc<str>)> = (0..batch_size)
+                        let rows: Vec<DescriptorRow> = (0..batch_size)
                             .map(|i| {
                                 (
                                     idx_col.value(i),
@@ -913,7 +814,7 @@ pub mod parquet_batch {
                         }
                         batch_idx += 1;
 
-                        if total_csfs % 10_000_000 == 0 {
+                        if total_csfs.is_multiple_of(10_000_000) {
                             println!("[读取进度] {} 个 CSF", total_csfs);
                         }
                     }
@@ -1113,7 +1014,7 @@ pub mod parquet_batch {
                         total_batches_written += 1;
                         next_write_idx += 1;
 
-                        if total_batches_written % 100 == 0 {
+                        if total_batches_written.is_multiple_of(100) {
                             println!("[写入进度] {} 个描述符", total_descriptors);
                         }
                     }
@@ -1224,6 +1125,104 @@ pub mod parquet_batch {
             orbital_count,
             descriptor_size,
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::csfs_descriptor::CSFDescriptorGenerator;
+
+        #[test]
+        fn build_raw_descriptor_columns_parallel_matches_parse_csf_rows() {
+            let generator = Arc::new(CSFDescriptorGenerator::new(vec![
+                "5s".to_string(),
+                "4d-".to_string(),
+                "4d".to_string(),
+            ]));
+            let rows = vec![
+                (
+                    0u64,
+                    Arc::<str>::from("  5s ( 2)  4d-( 4)  4d ( 6)"),
+                    Arc::<str>::from("                   3/2      "),
+                    Arc::<str>::from("                        4-  "),
+                ),
+                (
+                    1u64,
+                    Arc::<str>::from("  5s ( 0)  4d-( 4)  4d ( 6)"),
+                    Arc::<str>::from("                   5/2      "),
+                    Arc::<str>::from("                        4-  "),
+                ),
+            ];
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .build()
+                .unwrap();
+
+            let columns =
+                build_raw_descriptor_columns_parallel(&pool, generator.clone(), rows.clone());
+
+            let expected_rows: Vec<Vec<i32>> = rows
+                .iter()
+                .map(|(_, line1, line2, line3)| generator.parse_csf(line1, line2, line3).unwrap())
+                .collect();
+            let expected_columns = transpose_i32_rows(expected_rows, generator.orbital_count() * 3);
+            assert_eq!(columns, expected_columns);
+        }
+
+        #[test]
+        fn build_normalized_descriptor_columns_parallel_matches_row_path() {
+            use crate::descriptor_normalization::{
+                infer_two_j_target, normalize_descriptor_per_csf,
+            };
+
+            let peel_subshells =
+                Arc::new(vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()]);
+            let generator = Arc::new(CSFDescriptorGenerator::new((*peel_subshells).clone()));
+            let rows = vec![
+                (
+                    0u64,
+                    Arc::<str>::from("  5s ( 2)  4d-( 4)  4d ( 6)"),
+                    Arc::<str>::from("                   3/2      "),
+                    Arc::<str>::from("                        4-  "),
+                ),
+                (
+                    1u64,
+                    Arc::<str>::from("  5s ( 0)  4d-( 4)  4d ( 6)"),
+                    Arc::<str>::from("                   5/2      "),
+                    Arc::<str>::from("                        4-  "),
+                ),
+            ];
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .build()
+                .unwrap();
+
+            let columns = build_normalized_descriptor_columns_parallel(
+                &pool,
+                generator.clone(),
+                peel_subshells.clone(),
+                rows.clone(),
+            );
+
+            let expected_rows: Vec<Vec<f32>> = rows
+                .iter()
+                .map(|(_, line1, line2, line3)| {
+                    let descriptor = generator.parse_csf(line1, line2, line3).unwrap();
+                    let two_j_target = infer_two_j_target(&descriptor);
+                    normalize_descriptor_per_csf(&descriptor, &peel_subshells, two_j_target)
+                        .unwrap()
+                })
+                .collect();
+            let expected_columns = transpose_f32_rows(expected_rows, generator.orbital_count() * 3);
+            assert_eq!(columns, expected_columns);
+        }
+
+        #[test]
+        fn descriptor_chunk_size_keeps_slack_for_high_worker_counts() {
+            assert_eq!(descriptor_chunk_size(65_536, 8), 2048);
+            assert!(descriptor_chunk_size(65_536, 46) <= 512);
+            assert!(descriptor_chunk_size(65_536, 46) >= 256);
+        }
     }
 }
 
@@ -1420,9 +1419,13 @@ impl CSFDescriptorGenerator {
             }
 
             // Extract electron number (characters 6-8, i.e., indices 6 and 7)
-            let subshell_electron_num: i32 = fixed_width_trimmed_field(subshell_charges, 6, 2)
-                .parse()
-                .unwrap_or(0);
+            let subshell_electron_num: i32 = if subshell_charges.len() >= 8 {
+                fixed_width_trimmed_field(subshell_charges, 6, 2)
+                    .parse()
+                    .unwrap_or(0)
+            } else {
+                0
+            };
 
             // Check if this is the last subshell
             let is_last = i + 1 == block_count;
@@ -1487,9 +1490,9 @@ impl CSFDescriptorGenerator {
     }
 }
 
-//////////////////////////////////////////////////////////////////////////////
-/// Python Bindings (PyO3)
-//////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+// Python Bindings (PyO3)
+////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
@@ -1577,9 +1580,9 @@ pub fn register_descriptor_module(module: &Bound<'_, PyModule>) -> PyResult<()> 
     Ok(())
 }
 
-//////////////////////////////////////////////////////////////////////////////
-/// Rust Tests
-//////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+// Rust Tests
+////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
@@ -1711,7 +1714,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_csf_into_accepts_partial_truncated_electron_field() {
+    fn parse_csf_into_treats_truncated_electron_field_as_empty() {
         let generator = CSFDescriptorGenerator::new(vec!["5s".to_string()]);
         let mut descriptor = vec![0i32; generator.orbital_count() * 3];
 
@@ -1719,7 +1722,7 @@ mod tests {
             .parse_csf_into("  5s (2", "", "    0-", &mut descriptor)
             .unwrap();
 
-        assert_eq!(descriptor[0], 2);
+        assert_eq!(descriptor[0], 0);
     }
 
     #[test]

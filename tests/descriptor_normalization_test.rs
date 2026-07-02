@@ -297,10 +297,8 @@ fn test_normalize_descriptor_per_csf_full_notation_subshells() {
 
     // Full notation "2s" and angular notation "s " must produce identical results
     let descriptor = vec![1, 1, 1];
-    let result_angular =
-        normalize_descriptor_per_csf(&descriptor, &vec!["s ".to_string()], 1).unwrap();
-    let result_full =
-        normalize_descriptor_per_csf(&descriptor, &vec!["2s".to_string()], 1).unwrap();
+    let result_angular = normalize_descriptor_per_csf(&descriptor, &["s ".to_string()], 1).unwrap();
+    let result_full = normalize_descriptor_per_csf(&descriptor, &["2s".to_string()], 1).unwrap();
 
     for (a, b) in result_angular.iter().zip(result_full.iter()) {
         assert!((a - b).abs() < 1e-6);

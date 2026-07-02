@@ -23,26 +23,26 @@ Rust backend code lives in `src/`:
 The Python frontend lives in `rcsfs/`. `rcsfs/__init__.py` is the public API wrapper and supports `pathlib.Path`; `rcsfs/py.typed` marks the package as typed. Tests live in `tests/`, including Rust integration tests, Python API checks, speed tests, and fixtures such as `tests/fixtures/sample.csf`. Treat `dist/` and `target/` as build output unless a release task explicitly requires them.
 
 ## Build, Test, and Development Commands
-Set up the Python environment and build the Rust extension before Python API tests:
+Set up the Python environment and build the Rust extension before Python API tests. This project uses `uv` to manage the Python environment, so run Python-environment tools through `uv run ...` unless you have already activated `.venv`.
 
 ```bash
 uv sync --group dev --group lint
-maturin develop
+uv run maturin develop
 ```
 
-- `maturin develop`: build the Rust extension and install it into the active environment for local testing; run this after Rust changes.
-- `maturin build --release`: build optimized production/distribution wheels.
+- `uv run maturin develop`: build the Rust extension and install it into the uv-managed environment for local testing; run this after Rust changes.
+- `uv run maturin build --release`: build optimized production/distribution wheels.
 - `cargo build --release`: produce optimized Rust artifacts.
 - `cargo test`: run Rust unit and integration tests.
 - `cargo test test_descriptor_generator_parse_csf_basic`: run a single Rust test by name.
-- `pytest`: run all Python tests.
-- `pytest tests/rcsfs_test.py`: run the canonical Python API tests.
-- `pytest --speed`: run tests with speed benchmarking.
-- `ruff check .`: lint Python code.
-- `ruff format .`: format Python code.
-- `mypy rcsfs/`: type-check the Python wrapper.
+- `uv run pytest`: run all Python tests.
+- `uv run pytest tests/rcsfs_test.py`: run the canonical Python API tests.
+- `uv run pytest --speed`: run tests with speed benchmarking.
+- `uv run ruff check .`: lint Python code.
+- `uv run ruff format .`: format Python code.
+- `uv run mypy rcsfs/`: type-check the Python wrapper.
 
-Always use `maturin build --release` for production. The development build from `maturin develop` skips LTO.
+Always use `uv run maturin build --release` for production. The development build from `uv run maturin develop` skips LTO.
 
 ## Public Python API
 `tests/rcsfs_test.py` exercises the canonical API exported from `rcsfs/__init__.py`.
@@ -98,13 +98,13 @@ Run both Rust and Python checks before opening a PR:
 
 ```bash
 cargo test
-pytest
-ruff check .
-mypy rcsfs/
+uv run pytest
+uv run ruff check .
+uv run mypy rcsfs/
 ```
 
 ## Commit & Pull Request Guidelines
 Recent history favors short, imperative commit subjects such as `update linux build` or `create win artifact`. Keep subjects brief and descriptive, and expand in the body when needed. PRs should explain the user-visible change, list validation commands run, and link related issues or docs. Include sample output or screenshots only when CLI/API behavior, generated files, or documentation rendering changes.
 
 ## Security & Configuration Tips
-Do not commit generated build outputs, local data, credentials, virtual environments, or machine-specific paths. Treat CSF inputs as external data and validate file paths at the Python boundary. Build wheels intentionally with `maturin build --release`; do not rely on development artifacts for release validation.
+Do not commit generated build outputs, local data, credentials, virtual environments, or machine-specific paths. Treat CSF inputs as external data and validate file paths at the Python boundary. Build wheels intentionally with `uv run maturin build --release`; do not rely on development artifacts for release validation.

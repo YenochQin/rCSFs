@@ -23,20 +23,22 @@ rCSFs is a high-performance Rust/Python hybrid library for processing CSF (Confi
 uv sync --group dev --group lint
 
 # Build Rust extension in development mode (run after any Rust changes)
-maturin develop
+uv run maturin develop
 
 # Build optimized release (for production/distribution)
-maturin build --release
+uv run maturin build --release
 ```
+
+`maturin` is installed in the uv-managed Python environment. Use `uv run maturin ...`, or activate `.venv` first before using bare `maturin`.
 
 ## Testing
 
 ```bash
 # Run all Python tests
-pytest
+uv run pytest
 
 # Run a single Python test file
-pytest tests/rcsfs_test.py
+uv run pytest tests/rcsfs_test.py
 
 # Run all Rust tests (unit + integration)
 cargo test
@@ -45,12 +47,12 @@ cargo test
 cargo test test_descriptor_generator_parse_csf_basic
 
 # Run tests with speed benchmarking
-pytest --speed
+uv run pytest --speed
 
 # Lint and type-check Python
-ruff check .
-ruff format .
-mypy rcsfs/
+uv run ruff check .
+uv run ruff format .
+uv run mypy rcsfs/
 ```
 
 **Note:** `tests/rcsfs_test.py` exercises the canonical API from `rcsfs/__init__.py`.
@@ -135,4 +137,4 @@ lto = true
 codegen-units = 1
 ```
 
-Always use `maturin build --release` for production — the development build (`maturin develop`) skips LTO.
+Always use `uv run maturin build --release` for production — the development build (`uv run maturin develop`) skips LTO.

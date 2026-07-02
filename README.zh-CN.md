@@ -41,15 +41,17 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 git clone https://github.com/YenochQin/rCSFs.git
 cd rCSFs
 uv sync
-maturin develop --release
+uv run maturin develop --release
 ```
 
 如果按仓库的开发流程使用，也可以执行：
 
 ```bash
 uv sync --group dev --group lint
-maturin develop
+uv run maturin develop
 ```
+
+`maturin` 安装在 uv 管理的 Python 环境中。请使用 `uv run maturin ...`，或者先激活 `.venv` 后再运行裸 `maturin`。
 
 ## 快速开始
 
@@ -255,9 +257,9 @@ rCSFs 期望的 CSF 文本结构如下：
 
 ```bash
 cargo test
-pytest tests/rcsfs_test.py
-ruff check .
-mypy rcsfs
+uv run pytest tests/rcsfs_test.py
+uv run ruff check .
+uv run mypy rcsfs
 ```
 
 ## 许可证

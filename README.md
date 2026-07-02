@@ -41,15 +41,17 @@ Build from source:
 git clone https://github.com/YenochQin/rCSFs.git
 cd rCSFs
 uv sync
-maturin develop --release
+uv run maturin develop --release
 ```
 
 You can also use the repository's documented development flow:
 
 ```bash
 uv sync --group dev --group lint
-maturin develop
+uv run maturin develop
 ```
+
+`maturin` is installed in the uv-managed environment. Use `uv run maturin ...`, or activate `.venv` before running bare `maturin`.
 
 ## Quick Start
 
@@ -255,9 +257,9 @@ Useful local commands:
 
 ```bash
 cargo test
-pytest tests/rcsfs_test.py
-ruff check .
-mypy rcsfs
+uv run pytest tests/rcsfs_test.py
+uv run ruff check .
+uv run mypy rcsfs
 ```
 
 ## License

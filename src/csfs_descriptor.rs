@@ -1688,6 +1688,41 @@ mod tests {
     }
 
     #[test]
+    fn parse_csf_into_treats_short_coupling_lines_as_right_padded() {
+        let generator = CSFDescriptorGenerator::new(vec![
+            "5s".to_string(),
+            "4d-".to_string(),
+            "4d".to_string(),
+        ]);
+        let line1 = "  5s ( 2)  4d-( 4)  4d ( 6)";
+        let short_line2 = "                   3/2";
+        let short_line3 = "                        4-  ";
+        let padded_line2 = format!("{:<width$}", short_line2, width = line1.len());
+        let padded_line3 = format!("{:<width$}", short_line3, width = line1.len() + 9);
+
+        let short_result = generator
+            .parse_csf(line1, short_line2, short_line3)
+            .unwrap();
+        let padded_result = generator
+            .parse_csf(line1, padded_line2.as_str(), padded_line3.as_str())
+            .unwrap();
+
+        assert_eq!(short_result, padded_result);
+    }
+
+    #[test]
+    fn parse_csf_into_accepts_partial_truncated_electron_field() {
+        let generator = CSFDescriptorGenerator::new(vec!["5s".to_string()]);
+        let mut descriptor = vec![0i32; generator.orbital_count() * 3];
+
+        generator
+            .parse_csf_into("  5s (2", "", "    0-", &mut descriptor)
+            .unwrap();
+
+        assert_eq!(descriptor[0], 2);
+    }
+
+    #[test]
     fn descriptor_pipeline_channel_capacity_limits_high_worker_memory_pressure() {
         assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(1), 1);
         assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(2), 2);

@@ -44,6 +44,7 @@ dev = [
     "notebook>=7.0.0",
 ]
 lint = [
+    "basedpyright>=1.39.9",
     "mypy>=1.13.0",
     "ruff>=0.8.2",
 ]

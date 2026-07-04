@@ -36,3 +36,4 @@ uv.lock
 *.ipynb
 
 .DS_Store
+.omo

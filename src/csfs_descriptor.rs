@@ -55,6 +55,56 @@ pub mod parquet_batch {
         }
     }
 
+    /// Parse a user-provided compression specifier into a parquet `Compression`.
+    ///
+    /// Accepted values (case-insensitive):
+    /// - `None`                       → default `ZSTD(3)` (backward compatible)
+    /// - `"none"` / `"uncompressed"`  → `UNCOMPRESSED`
+    /// - `"snappy"`                   → `SNAPPY`
+    /// - `"zstd"`                     → `ZSTD(3)` (default level)
+    /// - `"zstd-N"` (N in 1..=22)     → `ZSTD(N)`
+    ///
+    /// Any other value returns an error.
+    pub(crate) fn parse_compression(
+        compression: Option<&str>,
+    ) -> Result<parquet::basic::Compression> {
+        use parquet::basic::Compression;
+
+        let Some(spec) = compression else {
+            return Ok(Compression::ZSTD(
+                parquet::basic::ZstdLevel::try_new(3)
+                    .expect("zstd level 3 is always valid"),
+            ));
+        };
+
+        let lower = spec.trim().to_ascii_lowercase();
+        match lower.as_str() {
+            "none" | "uncompressed" => Ok(Compression::UNCOMPRESSED),
+            "snappy" => Ok(Compression::SNAPPY),
+            "zstd" => Ok(Compression::ZSTD(
+                parquet::basic::ZstdLevel::try_new(3)
+                    .expect("zstd level 3 is always valid"),
+            )),
+            other if other.starts_with("zstd-") => {
+                let level_str = &other["zstd-".len()..];
+                let level: i32 = level_str.parse().map_err(|_| {
+                    anyhow::anyhow!(
+                        "invalid zstd level '{}': expected integer 1..=22",
+                        level_str
+                    )
+                })?;
+                let zstd_level = parquet::basic::ZstdLevel::try_new(level).map_err(|_| {
+                    anyhow::anyhow!("zstd level {} out of range (expected 1..=22)", level)
+                })?;
+                Ok(Compression::ZSTD(zstd_level))
+            }
+            other => Err(anyhow::anyhow!(
+                "unknown compression '{}': expected one of none/uncompressed/snappy/zstd/zstd-N",
+                other
+            )),
+        }
+    }
+
     /// Read peel subshells from a header TOML file
     ///
     /// # Arguments
@@ -163,13 +213,15 @@ pub mod parquet_batch {
     /// * `peel_subshells` - Optional list of subshell names (auto-detected if None)
     /// * `header_path` - Optional path to header TOML file
     /// * `normalize` - Whether to normalize descriptors (default: false)
+    /// * `compression` - Optional parquet compression specifier (default: `zstd-3`).
+    ///   See [`parse_compression`] for accepted values.
     ///
     /// # Returns
     /// * `Ok(BatchDescriptorStats)` - Statistics about the batch operation
     /// * `Err(String)` - Error message if operation fails
     ///
     /// # Output Format
-    /// Parquet with ZSTD compression (level 3) - columnar format, Polars compatible
+    /// Parquet with configurable compression (default ZSTD level 3) - columnar format, Polars compatible
     /// Read with: `polars.read_parquet()` or `pyarrow.parquet.read_table()`
     pub fn generate_descriptors_from_parquet(
         input_parquet: &Path,
@@ -177,6 +229,7 @@ pub mod parquet_batch {
         peel_subshells: Option<Vec<String>>,
         header_path: Option<PathBuf>,
         normalize: bool,
+        compression: Option<&str>,
     ) -> Result<BatchDescriptorStats> {
         // Step 1: Determine peel_subshells
         let peel_subshells = match peel_subshells {
@@ -239,9 +292,7 @@ pub mod parquet_batch {
 
         // Use ZSTD compression for better I/O performance and smaller file size
         let props = WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::ZSTD(
-                parquet::basic::ZstdLevel::try_new(3).unwrap(),
-            ))
+            .set_compression(parse_compression(compression)?)
             .build();
 
         let writer = ArrowWriter::try_new(output_file_handle, output_schema.clone(), Some(props))
@@ -647,12 +698,15 @@ pub mod parquet_batch {
     /// * `peel_subshells` - List of subshell names
     /// * `num_workers` - Number of worker threads (default: CPU core count)
     /// * `normalize` - Whether to normalize descriptors (default: false)
+    /// * `compression` - Optional parquet compression specifier (default: `zstd-3`).
+    ///   See [`parse_compression`] for accepted values.
     pub fn generate_descriptors_from_parquet_parallel(
         input_parquet: &Path,
         output_file: &Path,
         peel_subshells: Vec<String>,
         num_workers: Option<usize>,
         normalize: bool,
+        compression: Option<&str>,
     ) -> Result<BatchDescriptorStats> {
         use arrow::array::{Array, StringArray, UInt64Array};
         use arrow::datatypes::{DataType, Field, Schema};
@@ -711,9 +765,7 @@ pub mod parquet_batch {
             .with_context(|| format!("Failed to create output file: {}", output_file.display()))?;
 
         let props = WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::ZSTD(
-                parquet::basic::ZstdLevel::try_new(3).unwrap(),
-            ))
+            .set_compression(parse_compression(compression)?)
             .build();
 
         let writer = ArrowWriter::try_new(output_file_handle, schema.clone(), Some(props))
@@ -1223,6 +1275,67 @@ pub mod parquet_batch {
             assert!(descriptor_chunk_size(65_536, 46) <= 512);
             assert!(descriptor_chunk_size(65_536, 46) >= 256);
         }
+
+        #[test]
+        fn parse_compression_defaults_to_zstd3() {
+            use parquet::basic::Compression;
+            match parse_compression(None).unwrap() {
+                Compression::ZSTD(level) => assert_eq!(level.compression_level(), 3),
+                other => panic!("expected ZSTD(3), got {:?}", other),
+            }
+        }
+
+        #[test]
+        fn parse_compression_handles_named_codecs() {
+            use parquet::basic::Compression;
+            assert!(matches!(parse_compression(Some("none")).unwrap(), Compression::UNCOMPRESSED));
+            assert!(matches!(
+                parse_compression(Some("uncompressed")).unwrap(),
+                Compression::UNCOMPRESSED
+            ));
+            assert!(matches!(parse_compression(Some("snappy")).unwrap(), Compression::SNAPPY));
+        }
+
+        #[test]
+        fn parse_compression_handles_zstd_levels() {
+            use parquet::basic::Compression;
+            for level in [1, 3, 9, 19, 22] {
+                let spec = format!("zstd-{}", level);
+                match parse_compression(Some(&spec)).unwrap() {
+                    Compression::ZSTD(parsed) => assert_eq!(parsed.compression_level(), level),
+                    other => panic!("expected ZSTD({}), got {:?}", level, other),
+                }
+            }
+            // Bare "zstd" is level 3
+            match parse_compression(Some("zstd")).unwrap() {
+                Compression::ZSTD(parsed) => assert_eq!(parsed.compression_level(), 3),
+                other => panic!("expected ZSTD(3), got {:?}", other),
+            }
+        }
+
+        #[test]
+        fn parse_compression_is_case_insensitive_and_trims_whitespace() {
+            use parquet::basic::Compression;
+            assert!(matches!(parse_compression(Some("NONE")).unwrap(), Compression::UNCOMPRESSED));
+            assert!(matches!(
+                parse_compression(Some("  Snappy ")).unwrap(),
+                Compression::SNAPPY
+            ));
+            match parse_compression(Some("ZSTD-19")).unwrap() {
+                Compression::ZSTD(parsed) => assert_eq!(parsed.compression_level(), 19),
+                other => panic!("expected ZSTD(19), got {:?}", other),
+            }
+        }
+
+        #[test]
+        fn parse_compression_rejects_unknown_and_out_of_range() {
+            assert!(parse_compression(Some("lzma")).is_err());
+            assert!(parse_compression(Some("gzip")).is_err());
+            assert!(parse_compression(Some("zstd-0")).is_err());
+            assert!(parse_compression(Some("zstd-23")).is_err());
+            assert!(parse_compression(Some("zstd--1")).is_err());
+            assert!(parse_compression(Some("zstd-abc")).is_err());
+        }
     }
 }
 
@@ -1499,7 +1612,8 @@ use pyo3::prelude::*;
 
 /// Python-exposed function to generate descriptors from parquet file (parallel version)
 ///
-/// Output format: Parquet file with multiple `col_0, col_1, ..., col_N` Int32 columns and ZSTD compression (level 3)
+/// Output format: Parquet file with multiple `col_0, col_1, ..., col_N` Int32 columns
+/// and configurable compression (default ZSTD level 3)
 /// - Each column corresponds to one position in the descriptor array
 /// - Much faster than List column format for large datasets
 /// - Read with: `df = pl.read_parquet(); descriptors = df[["col_0", "col_1", ...]].to_numpy()`
@@ -1513,7 +1627,8 @@ use pyo3::prelude::*;
     output_file,
     peel_subshells,
     num_workers=None,
-    normalize=false
+    normalize=false,
+    compression=None
 ))]
 fn py_generate_descriptors_from_parquet(
     py: Python,
@@ -1522,6 +1637,7 @@ fn py_generate_descriptors_from_parquet(
     peel_subshells: Vec<String>,
     num_workers: Option<usize>,
     normalize: bool,
+    compression: Option<String>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     use pyo3::types::PyDict;
     use std::path::Path;
@@ -1544,6 +1660,7 @@ fn py_generate_descriptors_from_parquet(
                 peel_subshells,
                 num_workers,
                 normalize,
+                compression.as_deref(),
             )
         })
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;

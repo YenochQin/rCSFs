@@ -536,6 +536,7 @@ fn test_descriptor_parallel_rejects_zero_workers() {
         vec!["5s".to_string()],
         Some(0),
         false,
+        None,
     );
 
     cleanup_test_file(&input_path);
@@ -582,6 +583,7 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
         Some(peel_subshells.clone()),
         None,
         false,
+        None,
     )
     .expect("Sequential raw descriptor generation should succeed");
     generate_descriptors_from_parquet_parallel(
@@ -590,6 +592,7 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
         peel_subshells.clone(),
         Some(2),
         false,
+        None,
     )
     .expect("Parallel raw descriptor generation should succeed");
 
@@ -599,6 +602,7 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
         Some(peel_subshells.clone()),
         None,
         true,
+        None,
     )
     .expect("Sequential normalized descriptor generation should succeed");
     generate_descriptors_from_parquet_parallel(
@@ -607,6 +611,7 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
         peel_subshells,
         Some(2),
         true,
+        None,
     )
     .expect("Parallel normalized descriptor generation should succeed");
 

@@ -21,12 +21,14 @@ def test_gen_descriptors_reads_header_and_prints_summary(
         peel_subshells: list[str],
         num_workers: int | None = None,
         normalize: bool = False,
+        compression: str | None = None,
     ) -> dict[str, object]:
         calls["input_parquet"] = input_parquet
         calls["output_parquet"] = output_parquet
         calls["peel_subshells"] = peel_subshells
         calls["num_workers"] = num_workers
         calls["normalize"] = normalize
+        calls["compression"] = compression
         return {
             "success": True,
             "input_file": str(input_parquet),
@@ -62,6 +64,7 @@ def test_gen_descriptors_reads_header_and_prints_summary(
         "peel_subshells": ["5s", "4d-", "4d"],
         "num_workers": 2,
         "normalize": True,
+        "compression": None,
     }
 
     captured = capsys.readouterr()

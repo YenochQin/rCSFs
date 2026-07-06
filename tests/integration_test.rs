@@ -803,3 +803,96 @@ fn test_large_file_integrity() {
         "Truncated count should match"
     );
 }
+
+#[test]
+fn test_encoding_policy_normalized_plain_raw_dictionary() {
+    use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
+    use _rcsfs::csfs_descriptor::parquet_batch::generate_descriptors_from_parquet_parallel;
+    use parquet::basic::Encoding;
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+
+    let input_path = temp_dir().join("test_encoding_policy.csf");
+    let parquet_path = temp_dir().join("test_encoding_policy.parquet");
+    let raw_desc_path = temp_dir().join("test_encoding_policy_raw.parquet");
+    let norm_desc_path = temp_dir().join("test_encoding_policy_norm.parquet");
+
+    create_minimal_csf(&input_path);
+    let _conversion = convert_csfs_to_parquet(&input_path, &parquet_path, 256, 1000)
+        .expect("Conversion should succeed");
+
+    // Raw Int32: dictionary encoding should be enabled (parquet default)
+    let _raw = generate_descriptors_from_parquet_parallel(
+        &parquet_path,
+        &raw_desc_path,
+        vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()],
+        Some(1),
+        false, // normalize=false
+        None,  // compression default
+    )
+    .expect("Raw descriptor generation should succeed");
+
+    let raw_encodings = {
+        let file = File::open(&raw_desc_path).expect("Raw descriptor file should exist");
+        let reader = SerializedFileReader::new(file).expect("Should read raw descriptor metadata");
+        reader
+            .metadata()
+            .row_groups()
+            .first()
+            .unwrap()
+            .columns()
+            .first()
+            .unwrap()
+            .encodings()
+            .collect::<Vec<Encoding>>()
+    };
+
+    // Normalized Float32: dictionary encoding should be disabled
+    let _norm = generate_descriptors_from_parquet_parallel(
+        &parquet_path,
+        &norm_desc_path,
+        vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()],
+        Some(1),
+        true, // normalize=true
+        None, // compression default
+    )
+    .expect("Normalized descriptor generation should succeed");
+
+    let norm_encodings = {
+        let file = File::open(&norm_desc_path).expect("Normalized descriptor file should exist");
+        let reader =
+            SerializedFileReader::new(file).expect("Should read normalized descriptor metadata");
+        reader
+            .metadata()
+            .row_groups()
+            .first()
+            .unwrap()
+            .columns()
+            .first()
+            .unwrap()
+            .encodings()
+            .collect::<Vec<Encoding>>()
+    };
+
+    cleanup_test_file(&input_path);
+    cleanup_test_file(&parquet_path);
+    cleanup_test_file(&raw_desc_path);
+    cleanup_test_file(&norm_desc_path);
+
+    // Raw Int32 output should have dictionary encoding present
+    assert!(
+        raw_encodings
+            .iter()
+            .any(|e| matches!(e, Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY)),
+        "Raw Int32 descriptor output should use dictionary encoding, \
+         but encodings are {raw_encodings:?}"
+    );
+
+    // Normalized Float32 output should NOT have dictionary encoding
+    assert!(
+        !norm_encodings
+            .iter()
+            .any(|e| matches!(e, Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY)),
+        "Normalized Float32 descriptor output should use PLAIN encoding (no dictionary), \
+         but encodings are {norm_encodings:?}"
+    );
+}

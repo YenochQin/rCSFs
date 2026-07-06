@@ -41,10 +41,10 @@ uv run pytest
 uv run pytest tests/rcsfs_test.py
 
 # Run all Rust tests (unit + integration)
-cargo test
+uv run cargo test
 
 # Run a single Rust test by name
-cargo test test_descriptor_generator_parse_csf_basic
+uv run cargo test test_descriptor_generator_parse_csf_basic
 
 # Run tests with speed benchmarking
 uv run pytest --speed
@@ -56,6 +56,8 @@ uv run mypy rcsfs/
 ```
 
 **Note:** `tests/rcsfs_test.py` exercises the canonical API from `rcsfs/__init__.py`.
+
+**Rust test note:** Run Cargo tests through `uv run` so PyO3 links against the uv-managed Python 3.14 runtime. Bare `cargo test` may pick up a system Python, for example Xcode's Python 3.9 on macOS, and fail during linking with `library 'python3.9' not found`.
 
 ## Code Architecture
 

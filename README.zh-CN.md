@@ -256,11 +256,13 @@ rCSFs 期望的 CSF 文本结构如下：
 本地常用命令：
 
 ```bash
-cargo test
+uv run cargo test
 uv run pytest tests/rcsfs_test.py
 uv run ruff check .
 uv run mypy rcsfs
 ```
+
+Cargo 测试也应通过 `uv run` 运行，这样 PyO3 会链接到项目 uv 环境中的 Python 3.14。裸 `cargo test` 可能会发现系统 Python，例如 macOS 上 Xcode 的 Python 3.9，并在链接阶段报 `library 'python3.9' not found`。
 
 ## 许可证
 

@@ -11,7 +11,7 @@ Throughput plateaus around 17–18 s once `--num-workers` reaches ~24 on this ho
 
 1. **Parquet dictionary encoding** in `ArrowWriter::write()` consumed ~11.5 s per run. Disabling it (`set_dictionary_enabled(false)`, commit `034f760`) dropped `writer.write` from 17.71 s to 6.20 s.
 2. **Sequential chunk-column merge** in compute cost ~1.6 s. Parallelizing it across descriptor columns via Rayon (commit `f0c9dd8`) dropped `merge` from 1.64 s to 229 ms.
-3. **ZSTD level 3 is the optimal compression**: `none` is slower (13.86 s write, I/O-bound) and `snappy` is marginally worse (7.29 s write). ZSTD-3's compression CPU (~0.4 s) is more than offset by the reduced I/O volume.
+3. **ZSTD level 3 is the optimal compression**: `none` is slower (13.86 s write, I/O-bound) and `snappy` is marginally worse (7.29 s write). ZSTD-3's net write-time overhead versus uncompressed (~0.4 s) is more than offset by the reduced I/O volume.
 
 Combined effect: total dropped from ~18 s to ~14.5 s (-19 %). The pipeline is now balanced at ~6.5 s active work per stage (reader, compute, writer). Further gains require parallelizing the writer or restoring batch-level pipeline parallelism.
 
@@ -21,7 +21,7 @@ The descriptor pipeline in `src/csfs_descriptor.rs` is a three-stage streaming d
 
 1. **Reader thread** — reads Parquet in 65,536-row batches, copies each row into a `DescriptorRow = (u64, Arc<str>, Arc<str>, Arc<str>)` tuple, sends via bounded channel.
 2. **Compute dispatch thread (single)** — receives one batch at a time and runs Rayon `par_chunks()` across a fixed worker pool. After the parallel compute returns, it sequentially merges chunk columns into final columns, then sends the result to the writer.
-3. **Writer thread (single)** — receives result columns, maintains order via `BTreeMap<batch_idx>`, builds Arrow `RecordBatch` from `Vec<Vec<f32>>` / `Vec<Vec<i32>>`, writes to `ArrowWriter` with ZSTD level 3.
+3. **Writer thread (single)** — receives result columns, maintains order via `BTreeMap<batch_idx>`, builds Arrow `RecordBatch` from `Vec<Vec<f32>>` / `Vec<Vec<i32>>`, writes to `ArrowWriter` with configurable compression (default ZSTD level 3) and conditional dictionary encoding (disabled for normalized Float32 output, enabled for raw Int32 output).
 
 Observation on a 48-core host: one CPU at ~100%, the rest at ~30%. Total time plateaus around 17–18 s beyond roughly 24 workers. At 16/24 workers, `wait_writer` is near zero, so the writer is not visibly applying backpressure. At 48 workers, compute gets faster but starts waiting on the result channel, which means writer-side work becomes a contributor at high worker counts.
 
@@ -162,7 +162,7 @@ Tested all three compression modes with dictionary OFF + 48 workers + parallel m
 | snappy | 7.29 s | 39.51 ms | 15.10 s | ~5 GB |
 | none | 13.86 s | 466 ms | 15.65 s | ~9.8 GB |
 
-`writer.write` includes both CPU encoding and disk I/O. ZSTD-3 wins because its ~0.4 s compression CPU reduces I/O volume by ~4×, and the I/O savings far exceed the CPU cost. `none` is worst because the disk must absorb the full ~9.8 GB of raw Float32 data (~1 GB/s effective write speed → ~14 s I/O-dominated). `snappy` sits between: faster compression CPU but ~2× the I/O volume of ZSTD-3.
+`writer.write` includes both CPU encoding and disk I/O. ZSTD-3 wins because its net write-time overhead versus uncompressed (~0.4 s) reduces I/O volume by ~4×, and the I/O savings far exceed the overhead. `none` is worst because the disk must absorb the full ~9.8 GB of raw Float32 data (~1 GB/s effective write speed → ~14 s I/O-dominated). `snappy` sits between: faster compression but ~2× the I/O volume of ZSTD-3.
 
 **Conclusion: ZSTD level 3 is the optimal compression for this workload and should not be changed.**
 
@@ -258,11 +258,11 @@ This may cap scaling at high worker counts, especially if one batch has enough m
 
 Implemented in commits `b79aff1` and `f71b03b`. All three stages now report active-work and channel-wait timings. Results are recorded in the [Instrumentation results](#instrumentation-results) section above.
 
-### Option 3B: disable dictionary encoding — DONE (hardcoded)
+### Option 3B: disable dictionary encoding — DONE (conditional)
 
-Implemented in commit `034f760` as `set_dictionary_enabled(false)` in both `WriterProperties` builders. Confirmed as the primary writer bottleneck: `writer.write` dropped from 17.71 s to 6.20 s (-65 %), total dropped from 18.03 s to 14.12 s (-22 %).
+Implemented in commit `034f760` and refined to be conditional on output type. For normalized Float32 descriptors (near-unique values), dictionary encoding is disabled (`set_dictionary_enabled(false)` when `normalize=true`), confirmed as the primary writer bottleneck: `writer.write` dropped from 17.71 s to 6.20 s (-65 %). For raw Int32 descriptors, dictionary encoding remains enabled (parquet default) — this path has not been A/B benchmarked yet, and Int32 values may have enough repetition for dictionary to help.
 
-**Follow-up:** parameterize as `--encoding {dictionary,plain}` CLI option so users can choose. Default should be `plain` for descriptor output (numeric columns with near-unique values). For raw Int32 descriptors with significant value repetition, dictionary encoding may still be worth offering.
+**Follow-up:** if raw Int32 output is also found to be dictionary-bottlenecked, parameterize as `--encoding {plain,dictionary}` CLI option.
 
 ### Option 3A: parallelize Arrow array construction — CLOSED
 
@@ -276,7 +276,7 @@ Result: `merge` dropped from 1.64 s to 229 ms (-86 %) at 48 workers. Total did n
 
 ### Compression: ZSTD-3 confirmed optimal — RESOLVED
 
-Tested `none`, `snappy`, and `zstd-3` with dictionary OFF + parallel merge. ZSTD-3 produces the lowest `writer.write` time (6.55 s) because its ~0.4 s compression CPU reduces I/O volume by ~4×. Both `none` (13.86 s) and `snappy` (7.29 s) are slower — the extra I/O volume outweighs any CPU savings. No compression change is warranted.
+Tested `none`, `snappy`, and `zstd-3` with dictionary OFF + parallel merge. ZSTD-3 produces the lowest `writer.write` time (6.55 s) because its net write-time cost versus uncompressed (~0.4 s) reduces I/O volume by ~4×. Both `none` (13.86 s) and `snappy` (7.29 s) are slower — the extra I/O volume outweighs any CPU savings. No compression change is warranted.
 
 ### Option 1: reduce reader `row_copy` — DEFERRED
 

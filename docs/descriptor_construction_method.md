@@ -174,7 +174,7 @@ d_norm[3i+2] = 2J_cum,i / U_i_occ
 
 ## 7. Output Format
 
-Descriptors are written to columnar Parquet files with ZSTD compression (level 3):
+Descriptors are written to columnar Parquet files with configurable compression (default ZSTD level 3) and PLAIN encoding (dictionary disabled for throughput):
 
 - **Column names**: `col_0, col_1, ..., col_{3N-1}`
 - **Data type**: `Int32` (raw) or `Float32` (normalized)

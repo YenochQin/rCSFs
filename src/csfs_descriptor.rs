@@ -269,7 +269,7 @@ pub mod parquet_batch {
             .build()
             .with_context(|| "Failed to build parquet reader")?;
 
-        // Step 4: Create output Parquet writer (ZSTD compression)
+        // Step 4: Create output Parquet writer
         use arrow::datatypes::{DataType, Field, Schema};
         use parquet::file::properties::WriterProperties;
         use std::sync::Arc;
@@ -290,7 +290,7 @@ pub mod parquet_batch {
         let output_file_handle = std::fs::File::create(output_file)
             .with_context(|| format!("Failed to create output file: {}", output_file.display()))?;
 
-        // Use ZSTD compression for better I/O performance and smaller file size
+        // Descriptor columns use PLAIN encoding (dictionary disabled) for write throughput
         let props = WriterProperties::builder()
             .set_compression(parse_compression(compression)?)
             .set_dictionary_enabled(false)
@@ -724,7 +724,8 @@ pub mod parquet_batch {
     ///
     /// All three stages run concurrently, maximizing CPU utilization and I/O overlap.
     ///
-    /// Output format: Parquet with ZSTD compression (level 3)
+    /// Output format: Parquet with configurable compression (default ZSTD level 3),
+    /// PLAIN encoding (dictionary disabled for throughput)
     ///
     /// # Arguments
     /// * `input_parquet` - Path to input parquet file

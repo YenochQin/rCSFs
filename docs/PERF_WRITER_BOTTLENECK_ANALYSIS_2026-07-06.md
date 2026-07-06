@@ -60,9 +60,9 @@ uv run rcsfs gen-descriptors \
 5. **`writer_thread_lifetime` equals `total`** in every run, but this does **not** prove the writer is busy for the entire duration. The timer starts when the writer thread is spawned and includes time blocked on `result_rx.recv()`.
 6. **`row_copy` is consistently 4–5 s** regardless of workers or compression. This is reader-side allocation/copy work, but because the pipeline overlaps stages, it cannot be subtracted directly from `total` without measuring reader/compute wait time.
 
-### Conclusion
+### Conclusion (pre-instrumentation)
 
-The compression-specific hypothesis is rejected: ZSTD level 3 is not the main reason throughput plateaus. The data is still insufficient to name one primary bottleneck. The next step should be finer-grained timing of active writer work, compute-stage merge work, and reader/compute waiting.
+The compression-specific hypothesis is rejected: ZSTD level 3 is not the main reason throughput plateaus. At this point the data was insufficient to name one primary bottleneck. The next step was finer-grained timing of active writer work, compute-stage merge work, and reader/compute waiting. This was subsequently carried out — see [Instrumentation results](#instrumentation-results) below for the resolved findings.
 
 ## Instrumentation results
 
@@ -107,7 +107,7 @@ Ran with `--compression none` at 48 workers (dictionary encoding still ON) to is
 |--------|----------------|---------------|-------|
 | writer.write | 17.71 s | 17.30 s | **-0.41 s** |
 
-**ZSTD compression accounts for only ~0.4 s of the 17.7 s write time.** The remaining ~17.3 s is Parquet encoding overhead (dictionary building, RLE, page formatting).
+Removing ZSTD compression improved `writer.write` by only ~0.4 s in this run (17.71 s → 17.30 s). Note that this is a net difference, not a strict attribution: disabling compression also changes page sizes and I/O patterns, so the true compression CPU cost may differ slightly. Either way, compression is clearly not the dominant cost — the remaining ~17.3 s is Parquet encoding overhead (dictionary building, RLE, page formatting).
 
 ### Breakthrough: disable dictionary encoding (test_e)
 
@@ -171,7 +171,7 @@ The writer thread does this per batch (`src/csfs_descriptor.rs` Phase 5, around 
 
 With `compression="none"`, steps 1–2 and the encoding/write work in step 3 still run single-threaded. Uncompressed pages can also increase output size and I/O pressure, which explains why `none` can be slightly slower than `zstd-3` even when compression CPU work is removed.
 
-At 48 workers, `wait_writer` rises to 2.57–3.05 s, so writer-side work is contributing to the plateau once compute is fast enough. However, current diagnostics do not separate:
+At 48 workers, `wait_writer` rises to 2.57–3.05 s, so writer-side work is contributing to the plateau once compute is fast enough. However, at the time of writing the diagnostics did not separate:
 
 - time waiting in `result_rx.recv()`
 - Arrow array construction time
@@ -179,7 +179,7 @@ At 48 workers, `wait_writer` rises to 2.57–3.05 s, so writer-side work is cont
 - `writer.write()` time
 - `writer.close()` / footer flush time
 
-Without those numbers, the writer should be treated as a candidate bottleneck, not a proven hard floor.
+**Update:** the active-stage instrumentation subsequently resolved this. The dominant cost inside the writer is Parquet dictionary encoding inside `writer.write()` (~11.5 s), not Arrow array construction or RecordBatch creation. See [Instrumentation results](#instrumentation-results).
 
 ### Candidate 3: reader-side `row_copy` allocation pressure
 

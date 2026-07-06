@@ -735,8 +735,10 @@ pub mod parquet_batch {
     ///
     /// All three stages run concurrently, maximizing CPU utilization and I/O overlap.
     ///
-    /// Output format: Parquet with configurable compression (default ZSTD level 3),
-    /// PLAIN encoding (dictionary disabled for throughput)
+    /// Output format: Parquet with configurable compression (default ZSTD level 3).
+    /// Normalized Float32 output uses PLAIN encoding (dictionary disabled, confirmed
+    /// optimal for near-unique values). Raw Int32 output keeps dictionary encoding
+    /// enabled (parquet default, pending A/B benchmark).
     ///
     /// # Arguments
     /// * `input_parquet` - Path to input parquet file

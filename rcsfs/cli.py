@@ -42,6 +42,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Normalize descriptor values.",
     )
     gen_descriptors.add_argument(
+        "--compression",
+        default=None,
+        help=(
+            "Parquet compression codec. Accepted: none (uncompressed), snappy, "
+            'zstd, zstd-N (N in 1..=22). Default: zstd-3. Pass "none" to remove '
+            "the writer-side compression bottleneck on many-core machines."
+        ),
+        choices=["none", "uncompressed", "snappy", "zstd"]
+        + [f"zstd-{i}" for i in range(1, 23)],
+        metavar="{none,snappy,zstd,zstd-N}",
+    )
+    gen_descriptors.add_argument(
         "--json",
         action="store_true",
         help="Print descriptor generation statistics as JSON.",
@@ -72,6 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             peel_subshells=peel_subshells,
             num_workers=args.num_workers,
             normalize=args.normalize,
+            compression=args.compression,
         )
         if args.json:
             json.dump(stats, sys.stdout, indent=2, sort_keys=True)

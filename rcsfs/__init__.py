@@ -203,6 +203,7 @@ def generate_descriptors_from_parquet(
     peel_subshells: list[str],
     num_workers: Optional[int] = None,
     normalize: bool = False,
+    compression: Optional[str] = None,
 ) -> DescriptorGenerationStats:
     """
     Generate CSF descriptors from a parquet file using parallel processing.
@@ -212,8 +213,10 @@ def generate_descriptors_from_parquet(
     with streaming batch processing for low memory usage.
 
     Output Format:
-        - Non-normalized: Parquet with multiple Int32 columns `col_0, col_1, ..., col_N` and ZSTD compression (level 3)
-        - Normalized: Parquet with multiple Float32 columns `col_0, col_1, ..., col_N` and ZSTD compression (level 3)
+        - Non-normalized: Parquet with multiple Int32 columns `col_0, col_1, ..., col_N`
+        - Normalized: Parquet with multiple Float32 columns `col_0, col_1, ..., col_N`
+        - Compression defaults to ZSTD level 3; pass ``compression="none"`` to disable
+          (much faster write at the cost of ~3-5x larger files).
         Each column corresponds to one position in the descriptor array.
         This multi-column format is much faster than List column format for large datasets.
         Example: For 3 orbitals (descriptor_size=9), columns are: col_0, col_1, ..., col_8
@@ -228,6 +231,10 @@ def generate_descriptors_from_parquet(
             [n_i, 2Q_i, 2J_cum,i] is normalized by [g_i, n_i*(g_i-n_i),
             min(prefix_i, 2J_target+suffix_i)] respectively, where 2J_target is
             read from the final coupling value of each individual CSF.
+        compression: Parquet compression codec (default: ``zstd-3``). Accepted values:
+            ``"none"``/``"uncompressed"``, ``"snappy"``, ``"zstd"``, ``"zstd-N"``
+            (N in 1..=22). Pass ``"none"`` to maximize writer throughput when disk
+            space is not a concern.
 
     Returns:
         Dictionary containing generation statistics:
@@ -273,19 +280,29 @@ def generate_descriptors_from_parquet(
         ...     num_workers=8
         ... )
 
+        >>> # Disable compression for maximum writer throughput
+        >>> stats = generate_descriptors_from_parquet(
+        ...     "csfs_data.parquet",
+        ...     "descriptors.parquet",
+        ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s'],
+        ...     compression="none",
+        ... )
+
     Performance Considerations:
         - For medium files (1-10M CSFs): num_workers=4-8
         - For large files (>10M CSFs): num_workers=8+
         - More workers = higher CPU usage, faster processing
         - Rayon automatically handles work stealing for optimal load balancing
         - Uses 65536 rows/batch for better I/CPU balance on multi-core systems
+        - ``compression="none"`` removes the writer-side ZSTD bottleneck on
+          many-core machines; pair with fast local storage (NVMe) for best results.
 
     Note:
         This implementation uses streaming batch processing to minimize memory usage:
         1. Read parquet in batches (65536 rows per batch)
         2. Parse CSFs to descriptors in parallel (Rayon work-stealing)
         3. Build column arrays directly (Int32 or Float32 builders per column, no ListArray overhead)
-        4. Write batch to Parquet file (ZSTD level 3 compression)
+        4. Write batch to Parquet file (compression configurable, default ZSTD level 3)
         5. Repeat until all data processed
 
         Multi-column format is significantly faster than List column format for billion-scale data.
@@ -296,6 +313,7 @@ def generate_descriptors_from_parquet(
         peel_subshells=peel_subshells,
         num_workers=num_workers,
         normalize=normalize,
+        compression=compression,
     )
 
 

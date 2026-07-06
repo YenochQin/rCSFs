@@ -256,11 +256,13 @@ Those are not part of the current public Python wrapper exported by [rcsfs/__ini
 Useful local commands:
 
 ```bash
-cargo test
+uv run cargo test
 uv run pytest tests/rcsfs_test.py
 uv run ruff check .
 uv run mypy rcsfs
 ```
+
+Run Cargo tests through `uv run` so PyO3 links against the project Python 3.14 environment. Bare `cargo test` can pick up a system Python and fail at link time, for example with `library 'python3.9' not found` on macOS.
 
 ## License
 

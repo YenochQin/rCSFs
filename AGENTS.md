@@ -33,8 +33,8 @@ uv run maturin develop
 - `uv run maturin develop`: build the Rust extension and install it into the uv-managed environment for local testing; run this after Rust changes.
 - `uv run maturin build --release`: build optimized production/distribution wheels.
 - `cargo build --release`: produce optimized Rust artifacts.
-- `cargo test`: run Rust unit and integration tests.
-- `cargo test test_descriptor_generator_parse_csf_basic`: run a single Rust test by name.
+- `uv run cargo test`: run Rust unit and integration tests. Use `uv run` for Cargo tests because PyO3 links against the uv-managed Python 3.14 runtime; bare `cargo test` may discover a system Python such as Xcode's Python 3.9 and fail at link time with `library 'python3.9' not found`.
+- `uv run cargo test test_descriptor_generator_parse_csf_basic`: run a single Rust test by name.
 - `uv run pytest`: run all Python tests.
 - `uv run pytest tests/rcsfs_test.py`: run the canonical Python API tests.
 - `uv run pytest --speed`: run tests with speed benchmarking.
@@ -97,7 +97,7 @@ Add Rust coverage for core parsing, conversion, descriptor behavior, and normali
 Run both Rust and Python checks before opening a PR:
 
 ```bash
-cargo test
+uv run cargo test
 uv run pytest
 uv run ruff check .
 uv run mypy rcsfs/

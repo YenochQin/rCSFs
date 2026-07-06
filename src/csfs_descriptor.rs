@@ -611,14 +611,18 @@ pub mod parquet_batch {
         timings.parallel = parallel_start.elapsed();
 
         let merge_start = Instant::now();
-        let mut columns: Vec<Vec<i32>> = (0..descriptor_size)
-            .map(|_| Vec::with_capacity(batch_size))
-            .collect();
-        for (_, chunk) in chunk_columns {
-            for (col_idx, column) in columns.iter_mut().enumerate() {
-                column.extend(chunk[col_idx].iter().copied());
-            }
-        }
+        let columns: Vec<Vec<i32>> = pool.install(|| {
+            (0..descriptor_size)
+                .into_par_iter()
+                .map(|col_idx| {
+                    let mut col = Vec::with_capacity(batch_size);
+                    for (_, chunk) in &chunk_columns {
+                        col.extend(chunk[col_idx].iter().copied());
+                    }
+                    col
+                })
+                .collect()
+        });
         timings.merge = merge_start.elapsed();
 
         (columns, timings)
@@ -698,14 +702,18 @@ pub mod parquet_batch {
         timings.parallel = parallel_start.elapsed();
 
         let merge_start = Instant::now();
-        let mut columns: Vec<Vec<f32>> = (0..descriptor_size)
-            .map(|_| Vec::with_capacity(batch_size))
-            .collect();
-        for (_, chunk) in chunk_columns {
-            for (col_idx, column) in columns.iter_mut().enumerate() {
-                column.extend(chunk[col_idx].iter().copied());
-            }
-        }
+        let columns: Vec<Vec<f32>> = pool.install(|| {
+            (0..descriptor_size)
+                .into_par_iter()
+                .map(|col_idx| {
+                    let mut col = Vec::with_capacity(batch_size);
+                    for (_, chunk) in &chunk_columns {
+                        col.extend(chunk[col_idx].iter().copied());
+                    }
+                    col
+                })
+                .collect()
+        });
         timings.merge = merge_start.elapsed();
 
         (columns, timings)

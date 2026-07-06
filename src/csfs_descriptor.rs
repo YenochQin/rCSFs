@@ -290,10 +290,13 @@ pub mod parquet_batch {
         let output_file_handle = std::fs::File::create(output_file)
             .with_context(|| format!("Failed to create output file: {}", output_file.display()))?;
 
-        // Descriptor columns use PLAIN encoding (dictionary disabled) for write throughput
+        // Normalized Float32 descriptors have near-unique values where dictionary
+        // encoding is pure overhead (confirmed by benchmark: ~11.5s saved at 48 workers).
+        // Raw Int32 descriptors may have enough repetition for dictionary to help,
+        // but this has not been A/B benchmarked yet — keep parquet default (enabled).
         let props = WriterProperties::builder()
             .set_compression(parse_compression(compression)?)
-            .set_dictionary_enabled(false)
+            .set_dictionary_enabled(!normalize)
             .build();
 
         let writer = ArrowWriter::try_new(output_file_handle, output_schema.clone(), Some(props))
@@ -807,9 +810,10 @@ pub mod parquet_batch {
         let output_file_handle = std::fs::File::create(output_file)
             .with_context(|| format!("Failed to create output file: {}", output_file.display()))?;
 
+        // See sequential path for dictionary encoding rationale.
         let props = WriterProperties::builder()
             .set_compression(parse_compression(compression)?)
-            .set_dictionary_enabled(false)
+            .set_dictionary_enabled(!normalize)
             .build();
 
         let writer = ArrowWriter::try_new(output_file_handle, schema.clone(), Some(props))

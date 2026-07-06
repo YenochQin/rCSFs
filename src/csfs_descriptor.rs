@@ -526,6 +526,7 @@ pub mod parquet_batch {
         lifetime: std::time::Duration,
         recv_wait_elapsed: std::time::Duration,
         array_build_elapsed: std::time::Duration,
+        batch_build_elapsed: std::time::Duration,
         write_elapsed: std::time::Duration,
         finish_elapsed: std::time::Duration,
     }
@@ -846,11 +847,16 @@ pub mod parquet_batch {
 
             let mut batch_idx = 0usize;
             let mut total_csfs = 0usize;
+            let mut read_elapsed = Duration::ZERO;
             let mut row_copy_elapsed = Duration::ZERO;
             let mut send_wait_elapsed = Duration::ZERO;
 
             loop {
-                match reader.next() {
+                let read_start = Instant::now();
+                let next_batch = reader.next();
+                read_elapsed += read_start.elapsed();
+
+                match next_batch {
                     Some(Ok(batch)) => {
                         let batch_size = batch.num_rows();
                         total_csfs += batch_size;
@@ -917,6 +923,7 @@ pub mod parquet_batch {
                 total_csfs,
                 batch_idx,
                 reader_start.elapsed(),
+                read_elapsed,
                 row_copy_elapsed,
                 send_wait_elapsed,
             ))
@@ -1028,6 +1035,7 @@ pub mod parquet_batch {
                 let mut total_batches_written = 0usize;
                 let mut recv_wait_elapsed = Duration::ZERO;
                 let mut array_build_elapsed = Duration::ZERO;
+                let mut batch_build_elapsed = Duration::ZERO;
                 let mut write_elapsed = Duration::ZERO;
 
                 loop {
@@ -1050,7 +1058,7 @@ pub mod parquet_batch {
                         }
                         total_descriptors += batch_size;
 
-                        let build_start = Instant::now();
+                        let array_start = Instant::now();
                         let column_arrays: Vec<Arc<dyn Array>> = if normalize {
                             let columns = match result_item.columns {
                                 DescriptorColumns::Normalized(columns) => columns,
@@ -1080,7 +1088,9 @@ pub mod parquet_batch {
                                 .map(|column| Arc::new(Int32Array::from(column)) as Arc<dyn Array>)
                                 .collect()
                         };
+                        array_build_elapsed += array_start.elapsed();
 
+                        let batch_start = Instant::now();
                         let output_batch = match RecordBatch::try_new(schema.clone(), column_arrays)
                         {
                             Ok(b) => b,
@@ -1091,7 +1101,7 @@ pub mod parquet_batch {
                                 ));
                             }
                         };
-                        array_build_elapsed += build_start.elapsed();
+                        batch_build_elapsed += batch_start.elapsed();
 
                         let write_start = Instant::now();
                         if writer_guard
@@ -1123,6 +1133,7 @@ pub mod parquet_batch {
                     lifetime: writer_start.elapsed(),
                     recv_wait_elapsed,
                     array_build_elapsed,
+                    batch_build_elapsed,
                     write_elapsed,
                     finish_elapsed,
                 })
@@ -1199,7 +1210,7 @@ pub mod parquet_batch {
             ));
         }
 
-        let (total_csfs, _, reader_elapsed, row_copy_elapsed, reader_send_wait) =
+        let (total_csfs, _, reader_elapsed, read_elapsed, row_copy_elapsed, reader_send_wait) =
             reader_result.expect("reader result exists when no errors occurred");
         let writer_stats = writer_result.expect("writer result exists when no errors occurred");
 
@@ -1218,8 +1229,8 @@ pub mod parquet_batch {
             total_start.elapsed(),
         );
         println!(
-            "  reader:   lifetime {:.2?} | row_copy {:.2?} | send_wait {:.2?}",
-            reader_elapsed, row_copy_elapsed, reader_send_wait,
+            "  reader:   lifetime {:.2?} | read_decode {:.2?} | row_copy {:.2?} | send_wait {:.2?}",
+            reader_elapsed, read_elapsed, row_copy_elapsed, reader_send_wait,
         );
         println!(
             "  compute:  parallel {:.2?} | merge {:.2?} | wait_reader {:.2?} | wait_writer {:.2?}",
@@ -1229,10 +1240,11 @@ pub mod parquet_batch {
             total_send_elapsed,
         );
         println!(
-            "  writer:   lifetime {:.2?} | recv_wait {:.2?} | array_build {:.2?} | write {:.2?} | finish {:.2?}",
+            "  writer:   lifetime {:.2?} | recv_wait {:.2?} | array_build {:.2?} | batch_build {:.2?} | write {:.2?} | finish {:.2?}",
             writer_stats.lifetime,
             writer_stats.recv_wait_elapsed,
             writer_stats.array_build_elapsed,
+            writer_stats.batch_build_elapsed,
             writer_stats.write_elapsed,
             writer_stats.finish_elapsed,
         );

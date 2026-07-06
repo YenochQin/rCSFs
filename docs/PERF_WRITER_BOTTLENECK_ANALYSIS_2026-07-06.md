@@ -7,7 +7,13 @@
 
 ## TL;DR
 
-Throughput plateaus around 17–18 s once `--num-workers` reaches ~24 on this host. Active-stage instrumentation identified the root cause: **Parquet dictionary encoding** in `ArrowWriter::write()` consumed ~11.5 s per run (65 % of writer active work), independent of worker count. ZSTD compression was only ~0.4 s of the 17.7 s write time. Disabling dictionary encoding (`set_dictionary_enabled(false)`, commit `034f760`) dropped `writer.write` from 17.71 s to 6.20 s and total from 18.03 s to 14.12 s. The bottleneck has now shifted to the compute stage (7.74 s active work: parallel 6.10 s + sequential merge 1.64 s).
+Throughput plateaus around 17–18 s once `--num-workers` reaches ~24 on this host. Active-stage instrumentation identified two root causes and confirmed the optimal compression setting:
+
+1. **Parquet dictionary encoding** in `ArrowWriter::write()` consumed ~11.5 s per run. Disabling it (`set_dictionary_enabled(false)`, commit `034f760`) dropped `writer.write` from 17.71 s to 6.20 s.
+2. **Sequential chunk-column merge** in compute cost ~1.6 s. Parallelizing it across descriptor columns via Rayon (commit `f0c9dd8`) dropped `merge` from 1.64 s to 229 ms.
+3. **ZSTD level 3 is the optimal compression**: `none` is slower (13.86 s write, I/O-bound) and `snappy` is marginally worse (7.29 s write). ZSTD-3's compression CPU (~0.4 s) is more than offset by the reduced I/O volume.
+
+Combined effect: total dropped from ~18 s to ~14.5 s (-19 %). The pipeline is now balanced at ~6.5 s active work per stage (reader, compute, writer). Further gains require parallelizing the writer or restoring batch-level pipeline parallelism.
 
 ## Background
 
@@ -134,6 +140,44 @@ With dictionary encoding disabled, the bottleneck has moved from writer to compu
 
 Writer `recv_wait` jumped to 7.79 s, confirming the writer now spends 55 % of its lifetime idle, waiting for compute to produce results. The pipeline is now **compute-bound**.
 
+### Parallel merge (test_f)
+
+The sequential chunk-column merge was replaced with Rayon `into_par_iter` over the 168 descriptor columns (commit `f0c9dd8`). Each thread independently collects its column from all chunks:
+
+| Metric | Sequential merge (test_e) | Parallel merge (test_f) | Delta |
+|--------|--------------------------|------------------------|-------|
+| compute.merge | 1.64 s | **228.80 ms** | **-1.41 s (-86 %)** |
+| compute.parallel | 6.10 s | 6.28 s | +0.18 s (noise) |
+| total | 14.12 s | 14.51 s | +0.39 s (noise) |
+
+Merge dropped by 86 % as predicted (168 columns / 48 threads ≈ 3.5 columns per thread). Total did not improve because the pipeline bottleneck bounced back to `writer.write` (~6.5 s): compute per-batch (29.2 ms) and writer per-batch (29.4 ms) are now neck-and-neck.
+
+### Compression comparison (test_g, test_h)
+
+Tested all three compression modes with dictionary OFF + 48 workers + parallel merge:
+
+| Compression | writer.write | writer.finish | total | Output size (est.) |
+|-------------|-------------|---------------|-------|--------------------|
+| **zstd-3** | **6.55 s** | 15.60 ms | **14.51 s** | ~2.5 GB |
+| snappy | 7.29 s | 39.51 ms | 15.10 s | ~5 GB |
+| none | 13.86 s | 466 ms | 15.65 s | ~9.8 GB |
+
+`writer.write` includes both CPU encoding and disk I/O. ZSTD-3 wins because its ~0.4 s compression CPU reduces I/O volume by ~4×, and the I/O savings far exceed the CPU cost. `none` is worst because the disk must absorb the full ~9.8 GB of raw Float32 data (~1 GB/s effective write speed → ~14 s I/O-dominated). `snappy` sits between: faster compression CPU but ~2× the I/O volume of ZSTD-3.
+
+**Conclusion: ZSTD level 3 is the optimal compression for this workload and should not be changed.**
+
+### Final bottleneck structure
+
+After all optimizations (dictionary OFF + parallel merge + zstd-3), the pipeline stages are balanced:
+
+| Stage | Active work (48 workers) | Per-batch |
+|-------|-------------------------|-----------|
+| reader | ~6.6 s (read_decode ~1.8 + row_copy ~4.9) | ~29.5 ms |
+| compute | ~6.5 s (parallel ~6.3 + merge ~0.23) | ~29.2 ms |
+| writer | ~6.6 s (write ~6.5 + overhead ~0.04) | ~29.5 ms |
+
+All three stages process each batch in ~29 ms. The pipeline is tightly balanced — no single stage dominates. Total (~14.5 s) is approximately 2.2× the per-stage active work, reflecting pipeline startup/drain overhead from single-batch-at-a-time dispatch.
+
 ## Revised root cause analysis
 
 ### Candidate 1: compute-stage memory traffic and batch merge
@@ -224,29 +268,31 @@ Implemented in commit `034f760` as `set_dictionary_enabled(false)` in both `Writ
 
 Instrumentation proved `array_build` is ~1.3 ms total (zero-copy). No action needed.
 
-### Option 2: reduce compute-stage memory traffic — NEXT
+### Option 2: parallelize chunk-column merge — DONE
 
-With the writer bottleneck resolved, compute is now the limiting stage at 7.74 s active work. The `merge` sub-step (1.64 s, 21 % of compute) is sequential and grows with worker count. Approaches:
+Implemented in commit `f0c9dd8`. Replaced the sequential `for chunk × for column` merge loop with Rayon `into_par_iter` over the 168 descriptor columns. Each thread independently collects its column from all chunk buffers.
 
-- Parallelize the chunk-column merge using Rayon.
-- Eliminate the merge entirely by pre-allocating batch-level column buffers and having each Rayon chunk write into its own disjoint row range.
-- Add `normalize_descriptor_into()` to reuse caller-owned buffers.
+Result: `merge` dropped from 1.64 s to 229 ms (-86 %) at 48 workers. Total did not improve because the pipeline bottleneck bounced back to `writer.write`, but the sequential bottleneck is eliminated and compute is healthier for future scaling.
+
+### Compression: ZSTD-3 confirmed optimal — RESOLVED
+
+Tested `none`, `snappy`, and `zstd-3` with dictionary OFF + parallel merge. ZSTD-3 produces the lowest `writer.write` time (6.55 s) because its ~0.4 s compression CPU reduces I/O volume by ~4×. Both `none` (13.86 s) and `snappy` (7.29 s) are slower — the extra I/O volume outweighs any CPU savings. No compression change is warranted.
 
 ### Option 1: reduce reader `row_copy` — DEFERRED
 
-`row_copy` is 3.75 s of reader active work, but the reader currently finishes early and blocks on `send_wait` (8.09 s). Eliminating `row_copy` will only reduce `total` once compute drops below ~5.4 s (reader's current active-work time). Worth doing after Option 2 if compute optimization makes the reader the new limiting stage.
+`row_copy` is ~4.9 s of reader active work, but the reader is not the pipeline bottleneck (~6.6 s vs ~14.5 s total). Eliminating `row_copy` will only reduce `total` once both compute and writer drop below ~5 s. Not justified at current performance levels.
 
-### Option 3C: parallel writer threads — CLOSED (for now)
+### Option 3C: parallel writer threads — CANDIDATE
 
-Writer active work is now 6.22 s, below compute's 7.74 s. Parallelizing the writer is not justified until compute is also optimized.
+Writer active work is ~6.5 s, roughly equal to compute. Parallelizing the writer (multiple threads writing temporary shard files, then merging) could break the single-threaded Parquet encoding floor. This is the highest-impact remaining option but also the highest-risk refactor.
 
-### Option 4: restore batch-level pipeline parallelism — DEFERRED
+### Option 4: restore batch-level pipeline parallelism — CANDIDATE
 
-Still worth investigating if one-batch-at-a-time dispatch limits compute throughput after the merge optimization.
+Single-batch-at-a-time dispatch means the pipeline efficiency factor is ~2.2× (total / max-stage-active-work). Allowing multiple batches in compute simultaneously could improve pipeline fill ratio. Medium-risk refactor.
 
 ## Open questions
 
-1. **Is disk I/O a factor?** The host's storage subsystem was not characterized. If writes go to a network filesystem, uncompressed output could be substantially slower. Recommend checking `iostat` during a run.
+1. **Disk I/O is a confirmed factor.** The compression comparison (test_g) showed that `writer.write` with `compression=none` takes 13.86 s for ~9.8 GB of output, implying an effective write speed of ~1 GB/s. ZSTD-3 compression reduces I/O volume to ~2.5 GB, making the I/O portion of `write` approximately 3 s. The remaining ~3.5 s of `write` (with zstd-3) is Parquet PLAIN encoding + page formatting CPU work.
 2. **NUMA effects.** Dual-socket means Rayon threads span both sockets. Memory allocated on socket 0 and touched by a worker on socket 1 pays UPI latency. `numactl --cpunodebind --membind` experiments would isolate this.
 3. **Allocator choice.** With 43.8 M small allocations in `row_copy`, switching from the system allocator to `jemalloc` or `mimalloc` may move `row_copy` materially. Worth a one-line `#[global_allocator]` A/B test before restructuring.
 4. **Physical-core vs logical-core default.** This host has no hyperthreading, but on other hosts `num_cpus::get()` may return logical CPUs. If the pipeline is memory-bandwidth-bound, defaulting to physical cores may be more stable than using all logical CPUs.
@@ -257,9 +303,10 @@ Still worth investigating if one-batch-at-a-time dispatch limits compute through
 - Active-stage instrumentation: `b79aff1` (`descriptor: add active-stage pipeline instrumentation`)
 - read_decode / batch_build timing split: `f71b03b` (`descriptor: add read_decode and batch_build timing split`)
 - Dictionary encoding disabled: `034f760` (`descriptor: disable dictionary encoding in parquet writer`)
+- Parallel chunk-column merge: `f0c9dd8` (`descriptor: parallelize chunk-column merge across descriptor columns`)
 - Relevant source: `src/csfs_descriptor.rs`
   - `parse_compression`: lines ~58–108
   - reader `row_copy` block: lines ~850–865
-  - `build_*_descriptor_columns_parallel`: lines ~552–690 (return `StageTimings`)
+  - `build_*_descriptor_columns_parallel`: lines ~572–712 (return `StageTimings`, parallel merge)
   - writer thread: Phase 5, lines ~1020+
 - Prior review context: `docs/CODE_REVIEW_1.2.2-beta1_FAST_PATH_FOLLOWUP.md`

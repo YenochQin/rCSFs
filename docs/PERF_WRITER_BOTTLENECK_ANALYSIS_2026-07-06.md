@@ -7,7 +7,7 @@
 
 ## TL;DR
 
-Throughput plateaus around 17–18 s once `--num-workers` reaches ~24 on this host. **ZSTD compression is not the dominant factor**: removing compression (`--compression none`) did not improve total time and did not reduce writer backpressure at 48 workers. Current evidence does **not** prove the writer thread is the hard throughput floor, because `writer_thread_lifetime` measures thread lifetime, including time blocked on `result_rx.recv()`, not active write time. The likely bottleneck is a combination of compute-stage memory traffic, single-batch compute dispatch/merge, reader-side `row_copy` allocations, and single-threaded Parquet encoding/write. More instrumentation is needed before choosing the highest-leverage fix.
+Throughput plateaus around 17–18 s once `--num-workers` reaches ~24 on this host. Active-stage instrumentation identified the root cause: **Parquet dictionary encoding** in `ArrowWriter::write()` consumed ~11.5 s per run (65 % of writer active work), independent of worker count. ZSTD compression was only ~0.4 s of the 17.7 s write time. Disabling dictionary encoding (`set_dictionary_enabled(false)`, commit `034f760`) dropped `writer.write` from 17.71 s to 6.20 s and total from 18.03 s to 14.12 s. The bottleneck has now shifted to the compute stage (7.74 s active work: parallel 6.10 s + sequential merge 1.64 s).
 
 ## Background
 
@@ -63,6 +63,76 @@ uv run rcsfs gen-descriptors \
 ### Conclusion
 
 The compression-specific hypothesis is rejected: ZSTD level 3 is not the main reason throughput plateaus. The data is still insufficient to name one primary bottleneck. The next step should be finer-grained timing of active writer work, compute-stage merge work, and reader/compute waiting.
+
+## Instrumentation results
+
+Option 0 was implemented (commits `b79aff1`, `f71b03b`). All three pipeline stages now report active-work and channel-wait timings separately. The experiments below were run on the same dataset and host described above.
+
+### Full timing breakdown (dictionary encoding ON, zstd-3)
+
+| Metric | 16 workers | 24 workers | 48 workers |
+|--------|-----------|-----------|-----------|
+| **total** | 20.94 s | 18.06 s | 18.03 s |
+| **reader** | | | |
+| lifetime | 20.04 s | 16.87 s | 16.60 s |
+| read_decode | 1.97 s | 2.03 s | 1.59 s |
+| row_copy | 5.36 s | 5.29 s | 4.02 s |
+| send_wait | 12.70 s | 9.54 s | 10.97 s |
+| **compute** | | | |
+| parallel | 14.94 s | 10.25 s | 6.16 s |
+| merge | 1.32 s | 2.08 s | 2.69 s |
+| wait_reader | 31 ms | 32 ms | 30 ms |
+| wait_writer | 1.89 ms | 239 µs | 2.72 s |
+| **writer** | | | |
+| lifetime | 20.93 s | 18.05 s | 18.02 s |
+| recv_wait | 3.25 s | 282 ms | 156 ms |
+| array_build | 1.77 ms | 1.25 ms | 1.31 ms |
+| batch_build | 2.05 ms | 1.82 ms | 1.82 ms |
+| write | 17.55 s | 17.61 s | 17.71 s |
+| finish | 17.88 ms | 18.42 ms | 18.52 ms |
+
+### Key observations from instrumentation
+
+1. **`writer.write` is ~17.6 s regardless of worker count** (17.55 → 17.61 → 17.71 for 16 → 24 → 48 workers). This is the throughput floor — it does not scale with compute parallelism because it is single-threaded.
+2. **`array_build` is ~1.3 ms total** across all 223 batches. `Float32Array::from(Vec<f32>)` is effectively zero-copy (wraps the vector as an Arrow buffer). Option 3A (parallelizing array construction) is closed — no benefit.
+3. **`batch_build` and `finish` are negligible** (~1.8 ms and ~18 ms respectively).
+4. **`compute.merge` grows with worker count** (1.32 → 2.08 → 2.69 s) because more workers produce more chunks that must be sequentially merged. At 48 workers it is 30 % of `compute.parallel`.
+5. **`reader.send_wait` is consistently 9–13 s** — the reader finishes its actual work (read_decode + row_copy ≈ 5–7 s) quickly, then blocks because the bounded channel to compute is full.
+
+### Isolation test: compression only (test_d)
+
+Ran with `--compression none` at 48 workers (dictionary encoding still ON) to isolate ZSTD cost inside `write`:
+
+| Metric | zstd-3 (test_c) | none (test_d) | Delta |
+|--------|----------------|---------------|-------|
+| writer.write | 17.71 s | 17.30 s | **-0.41 s** |
+
+**ZSTD compression accounts for only ~0.4 s of the 17.7 s write time.** The remaining ~17.3 s is Parquet encoding overhead (dictionary building, RLE, page formatting).
+
+### Breakthrough: disable dictionary encoding (test_e)
+
+Ran at 48 workers with `set_dictionary_enabled(false)` in both `WriterProperties` builders (commit `034f760`):
+
+| Metric | dictionary ON (test_c) | dictionary OFF (test_e) | Delta |
+|--------|----------------------|------------------------|-------|
+| **total** | 18.03 s | **14.12 s** | **-3.91 s** |
+| **writer.write** | 17.71 s | **6.20 s** | **-11.51 s** |
+| writer.recv_wait | 156 ms | 7.79 s | +7.64 s |
+| compute.wait_writer | 2.72 s | 1.30 ms | -2.72 s |
+
+**Dictionary encoding was consuming 11.5 s of writer time.** For normalized Float32 descriptor columns (168 columns of near-unique float values), the dictionary encoder builds a hash table per column chunk, finds most values are unique, and falls back to PLAIN encoding — but the dictionary-building cost is already paid.
+
+### Bottleneck shift
+
+With dictionary encoding disabled, the bottleneck has moved from writer to compute:
+
+| Stage | Active work (dictionary OFF) | Was (dictionary ON) |
+|-------|------------------------------|---------------------|
+| reader | 5.42 s (read_decode 1.67 + row_copy 3.75) | 5.61 s |
+| **compute** | **7.74 s** (parallel 6.10 + merge 1.64) | 8.85 s |
+| writer | 6.22 s (write 6.20 + overhead 0.02) | 17.73 s |
+
+Writer `recv_wait` jumped to 7.79 s, confirming the writer now spends 55 % of its lifetime idle, waiting for compute to produce results. The pipeline is now **compute-bound**.
 
 ## Revised root cause analysis
 
@@ -140,49 +210,39 @@ This may cap scaling at high worker counts, especially if one batch has enough m
 
 ## Proposed mitigations
 
-### Option 0 (recommended first): add active-stage instrumentation
+### Option 0: add active-stage instrumentation — DONE
 
-**Expected value:** identify the real limiting stage before changing architecture.
+Implemented in commits `b79aff1` and `f71b03b`. All three stages now report active-work and channel-wait timings. Results are recorded in the [Instrumentation results](#instrumentation-results) section above.
 
-Add timings for:
+### Option 3B: disable dictionary encoding — DONE (hardcoded)
 
-- reader: Parquet read/decode time, row-copy time, `work_tx.send()` wait time
-- compute dispatch: `work_rx.recv()` wait time, Rayon parse/normalize time, chunk-column merge time, `result_tx.send()` wait time
-- writer: `result_rx.recv()` wait time, Arrow array construction time, `RecordBatch::try_new()` time, `writer.write()` time, `writer.finish()` time
+Implemented in commit `034f760` as `set_dictionary_enabled(false)` in both `WriterProperties` builders. Confirmed as the primary writer bottleneck: `writer.write` dropped from 17.71 s to 6.20 s (-65 %), total dropped from 18.03 s to 14.12 s (-22 %).
 
-This will distinguish "thread lifetime" from "active work". It also makes future benchmark comparisons safer.
+**Follow-up:** parameterize as `--encoding {dictionary,plain}` CLI option so users can choose. Default should be `plain` for descriptor output (numeric columns with near-unique values). For raw Int32 descriptors with significant value repetition, dictionary encoding may still be worth offering.
 
-### Option 1: reduce reader `row_copy` by passing batch references
+### Option 3A: parallelize Arrow array construction — CLOSED
 
-**Expected saving:** up to ~4–5 s of reader work; total-runtime saving depends on whether downstream stages wait on the reader.
+Instrumentation proved `array_build` is ~1.3 ms total (zero-copy). No action needed.
 
-Change `DescriptorRow` from an owned `(u64, Arc<str>, Arc<str>, Arc<str>)` tuple to a borrow-based view that holds an `Arc<RecordBatch>` (or the underlying `Arc<Ref<...>>`) plus row index. The reader thread sends `Arc<RecordBatch>` directly without per-row string copies. Compute workers index into the batch columns.
+### Option 2: reduce compute-stage memory traffic — NEXT
 
-Trade-off: more complex lifetime bookkeeping and possible cache-locality changes. It removes 43.8 M allocations from the reader path.
+With the writer bottleneck resolved, compute is now the limiting stage at 7.74 s active work. The `merge` sub-step (1.64 s, 21 % of compute) is sequential and grows with worker count. Approaches:
 
-### Option 2: reduce compute-stage memory traffic
+- Parallelize the chunk-column merge using Rayon.
+- Eliminate the merge entirely by pre-allocating batch-level column buffers and having each Rayon chunk write into its own disjoint row range.
+- Add `normalize_descriptor_into()` to reuse caller-owned buffers.
 
-**Expected saving:** unknown until merge timing is measured; likely important because compute dominates total time at 16/24 workers.
+### Option 1: reduce reader `row_copy` — DEFERRED
 
-Possible approaches:
+`row_copy` is 3.75 s of reader active work, but the reader currently finishes early and blocks on `send_wait` (8.09 s). Eliminating `row_copy` will only reduce `total` once compute drops below ~5.4 s (reader's current active-work time). Worth doing after Option 2 if compute optimization makes the reader the new limiting stage.
 
-- Split compute timing into parse/normalize vs chunk merge.
-- Add `normalize_descriptor_into()` so normalization can reuse caller-owned buffers instead of allocating a new vector per CSF.
-- Avoid the sequential chunk-column merge by preallocating final batch columns and letting Rayon chunks write into disjoint column ranges, if Rust aliasing and safety can be handled cleanly.
+### Option 3C: parallel writer threads — CLOSED (for now)
 
-### Option 3: investigate writer active work
+Writer active work is now 6.22 s, below compute's 7.74 s. Parallelizing the writer is not justified until compute is also optimized.
 
-**Expected saving:** unknown; only justified if active writer timing is high.
+### Option 4: restore batch-level pipeline parallelism — DEFERRED
 
-Sub-options:
-
-- **3A (low risk)** — time Arrow array construction separately. `Float32Array::from(Vec<f32>)` may mostly wrap the vector as an Arrow buffer rather than copying every element, so parallelizing this may have little benefit.
-- **3B (medium)** — tune Parquet writer settings after measuring `writer.write()` and `finish()` time: row group/page sizes, encoding options, and compression level.
-- **3C (large)** — write temporary shard files in parallel and merge/consume them later. Multiple writer threads cannot safely write independent row groups into one `ArrowWriter<File>` without a deeper Parquet writer redesign.
-
-### Option 4 (deferred): restore batch-level pipeline parallelism
-
-Revert the single compute-dispatch thread to the older multi-worker model where N OS threads compete on `work_rx.recv()`. This was flagged in the prior follow-up review. It is worth doing only after instrumentation shows that one-batch-at-a-time dispatch is limiting throughput and will not simply increase result-channel backpressure.
+Still worth investigating if one-batch-at-a-time dispatch limits compute throughput after the merge optimization.
 
 ## Open questions
 
@@ -193,10 +253,13 @@ Revert the single compute-dispatch thread to the older multi-worker model where 
 
 ## Artifacts
 
-- Compression feature commit: `e4131af` (`descriptor: add configurable parquet compression`)
-- Workspace gitlink update: `c634c77` (`workspace: update rCSFs submodule`)
+- Compression feature: `e4131af` (`descriptor: add configurable parquet compression`)
+- Active-stage instrumentation: `b79aff1` (`descriptor: add active-stage pipeline instrumentation`)
+- read_decode / batch_build timing split: `f71b03b` (`descriptor: add read_decode and batch_build timing split`)
+- Dictionary encoding disabled: `034f760` (`descriptor: disable dictionary encoding in parquet writer`)
 - Relevant source: `src/csfs_descriptor.rs`
   - `parse_compression`: lines ~58–108
-  - reader `row_copy` block: lines ~796–808
-  - writer thread: Phase 5, lines ~916+
+  - reader `row_copy` block: lines ~850–865
+  - `build_*_descriptor_columns_parallel`: lines ~552–690 (return `StageTimings`)
+  - writer thread: Phase 5, lines ~1020+
 - Prior review context: `docs/CODE_REVIEW_1.2.2-beta1_FAST_PATH_FOLLOWUP.md`

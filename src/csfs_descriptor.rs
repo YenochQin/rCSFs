@@ -293,6 +293,7 @@ pub mod parquet_batch {
         // Use ZSTD compression for better I/O performance and smaller file size
         let props = WriterProperties::builder()
             .set_compression(parse_compression(compression)?)
+            .set_dictionary_enabled(false)
             .build();
 
         let writer = ArrowWriter::try_new(output_file_handle, output_schema.clone(), Some(props))
@@ -799,6 +800,7 @@ pub mod parquet_batch {
 
         let props = WriterProperties::builder()
             .set_compression(parse_compression(compression)?)
+            .set_dictionary_enabled(false)
             .build();
 
         let writer = ArrowWriter::try_new(output_file_handle, schema.clone(), Some(props))

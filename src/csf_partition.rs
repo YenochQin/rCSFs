@@ -271,6 +271,7 @@ pub fn partition_csfs(
     let mut output_csf_count: usize = 0;
     let mut first_order_count: usize = 0;
 
+    println!("   Block    Zero-order Space   Complete Space");
     for b in 0..block_count {
         let zlen = zero_lengths[b];
         let flen = full_lengths[b];
@@ -323,9 +324,7 @@ pub fn partition_csfs(
             writeln!(out, "{}", BLOCK_SEPARATOR)?;
         }
 
-        if (b + 1) % 10 == 0 {
-            println!("已处理 {} / {} 块", b + 1, block_count);
-        }
+        println!("{:>5}{:>20}{:>20}", b + 1, zlen, flen);
     }
 
     out.flush()?;

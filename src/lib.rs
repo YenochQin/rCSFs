@@ -6,6 +6,7 @@ use std::path::Path;
 // Public modules for integration testing
 pub mod csfs_conversion;
 pub mod csfs_descriptor;
+pub mod csf_partition;
 pub mod descriptor_normalization;
 
 #[pymodule]
@@ -13,6 +14,7 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(convert_csfs, m)?)?;
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
+    m.add_function(wrap_pyfunction!(partition_csfs, m)?)?;
 
     // Register CSF descriptor module
     csfs_descriptor::register_descriptor_module(m)?;
@@ -138,6 +140,72 @@ fn convert_csfs(
             stats.set_item("success", false)?;
             stats.set_item("error", e.to_string())?;
             Ok(stats.into())
+        }
+    }
+}
+
+/// Partition CSFs into zero-order + first-order space per symmetry block.
+///
+/// Reads two CSF Parquet files (a zero-order reference and the complete list)
+/// together with their `{stem}_header.toml` sidecars, reorders each symmetry
+/// block so the zero-order CSFs are locked to the head followed by the
+/// first-order complement, and writes the result as a CSF text file.
+///
+/// Args:
+/// - zero_parquet: Path to the zero-order reference Parquet file.
+/// - zero_header: Path to the zero-order `{stem}_header.toml`.
+/// - full_parquet: Path to the complete-list Parquet file.
+/// - full_header: Path to the complete-list `{stem}_header.toml`.
+/// - output_csf: Path to the destination CSF text file.
+///
+/// Returns:
+/// Dictionary with partition statistics:
+/// - success: Whether partition succeeded
+/// - zero_parquet / full_parquet / output_file: input/output paths
+/// - block_count: number of symmetry blocks
+/// - zero_csf_count: total CSFs in the zero-order reference
+/// - full_csf_count: total CSFs in the full list
+/// - output_csf_count: total CSFs written (zero + complement)
+/// - first_order_count: complement count (full CSFs not in zero-order)
+/// - error: error message (only present on failure)
+#[pyfunction]
+fn partition_csfs(
+    py: Python,
+    zero_parquet: String,
+    zero_header: String,
+    full_parquet: String,
+    full_header: String,
+    output_csf: String,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    let result = py.detach(|| {
+        csf_partition::partition_csfs(
+            Path::new(&zero_parquet),
+            Path::new(&zero_header),
+            Path::new(&full_parquet),
+            Path::new(&full_header),
+            Path::new(&output_csf),
+        )
+    });
+
+    match result {
+        Ok(stats) => {
+            let d = PyDict::new(py);
+            d.set_item("success", true)?;
+            d.set_item("zero_parquet", &zero_parquet)?;
+            d.set_item("full_parquet", &full_parquet)?;
+            d.set_item("output_file", &output_csf)?;
+            d.set_item("block_count", stats.block_count)?;
+            d.set_item("zero_csf_count", stats.zero_csf_count)?;
+            d.set_item("full_csf_count", stats.full_csf_count)?;
+            d.set_item("output_csf_count", stats.output_csf_count)?;
+            d.set_item("first_order_count", stats.first_order_count)?;
+            Ok(d.into())
+        }
+        Err(e) => {
+            let d = PyDict::new(py);
+            d.set_item("success", false)?;
+            d.set_item("error", e.to_string())?;
+            Ok(d.into())
         }
     }
 }

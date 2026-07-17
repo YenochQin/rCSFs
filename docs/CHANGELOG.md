@@ -4,6 +4,42 @@
 
 ---
 
+## [1.3.1-beta.1] - 2026-07-17
+
+### ✨ 新功能
+
+#### ✅ CSF 零阶/一阶划分（zero-first partition）
+
+**功能描述**:
+- 新增 CSF 对称块（J^P）内的零阶/一阶空间划分能力，对标 GRASP2018 的 `rcsfzerofirst`
+  Fortran 工具，但走 Parquet 中介路径。
+- 每个块内：零阶参考 CSF 锁定到块首，完整列表中不在零阶的 CSF（一阶补集）追加其后。
+- 匹配键为三行记录 `(line1, line2, line3)` 的精确字符串相等，与 `lodcsl_Part.f90` 一致。
+
+**新增内容**:
+- `src/csf_partition.rs`：Rust 核心，流式读取两个 Parquet + 按 `block_lengths` 切块 +
+  `HashSet` 反匹配 + 写回 CSF 文本。
+- `src/lib.rs`：注册 `partition_csfs` PyO3 函数。
+- `src/csfs_conversion.rs`：`HeaderData`/`BlockInfo`/`HeaderInfo` 设为 `pub`，供 partition 复用。
+- `rcsfs/__init__.py`：`partition_csfs` Python 包装 + `PartitionStats` TypedDict。
+- `rcsfs/cli.py`：`zero-first` 子命令（CSF 进 → Parquet 中介 → CSF 出，含临时文件管理）。
+- `tests/csf_partition_test.rs`：6 个 Rust 集成测试。
+- `tests/cli_test.py`：5 个 CLI 测试。
+
+**CLI 用法**:
+```
+uv run rcsfs zero-first zero.csf full.csf [reordered.csf]
+```
+
+**验证结果**:
+- ✅ `uv run cargo test` 全绿（6 partition + 23 integration + 22 normalization + 1 doctest）。
+- ✅ `uv run pytest` 全绿（10 个测试，含 5 个新 CLI 测试）。
+- ✅ `uv run ruff check .` 通过。
+- ✅ 端到端实测：`sample.csf` 拆分为 zero(4)+full(28)，输出 28 CSF（4 锁定到首 + 24 补集），
+  header 一致、无丢失/重复。
+
+---
+
 ## [1.2.2-beta.1] - 2026-04-28
 
 ### ⚡ 性能优化

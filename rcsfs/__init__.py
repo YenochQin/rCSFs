@@ -69,6 +69,9 @@ from ._rcsfs import (
 from ._rcsfs import (
     py_read_peel_subshells as _read_peel_subshells,
 )
+from ._rcsfs import (
+    partition_csfs as _partition_csfs,
+)
 
 # ///////////////////////////////////////////////////////////////////////////////
 # Type Definitions
@@ -100,6 +103,21 @@ class DescriptorGenerationStats(TypedDict):
     descriptor_count: NotRequired[int]
     orbital_count: NotRequired[int]
     descriptor_size: NotRequired[int]
+    error: NotRequired[str]
+
+
+class PartitionStats(TypedDict):
+    """Statistics returned from a zero-first partition operation."""
+
+    success: bool
+    zero_parquet: str
+    full_parquet: str
+    output_file: str
+    block_count: NotRequired[int]
+    zero_csf_count: NotRequired[int]
+    full_csf_count: NotRequired[int]
+    output_csf_count: NotRequired[int]
+    first_order_count: NotRequired[int]
     error: NotRequired[str]
 
 
@@ -318,6 +336,62 @@ def generate_descriptors_from_parquet(
 
 
 # ///////////////////////////////////////////////////////////////////////////////
+# Zero-First Partition Functions
+# ///////////////////////////////////////////////////////////////////////////////
+
+
+def partition_csfs(
+    zero_parquet: Union[str, Path],
+    zero_header: Union[str, Path],
+    full_parquet: Union[str, Path],
+    full_header: Union[str, Path],
+    output_csf: Union[str, Path],
+) -> PartitionStats:
+    """
+    Partition CSFs into a zero-order + first-order space per symmetry block.
+
+    For each symmetry block, the zero-order reference CSFs are locked to the
+    head of the block and the first-order complement (full-block CSFs not
+    present in the zero-order block) is appended after them. This mirrors
+    GRASP2018's ``rcsfzerofirst`` Fortran utility, but operates on the Parquet
+    representation produced by :func:`convert_csfs`.
+
+    Match semantics: a CSF is identified by exact string equality of its
+    three-line record ``(line1, line2, line3)``. The 5-line header is taken
+    from the full file (the complete space). Blocks are paired by index; both
+    files must report the same block count.
+
+    Args:
+        zero_parquet: Path to the zero-order reference Parquet file.
+        zero_header: Path to the zero-order ``{stem}_header.toml`` sidecar.
+        full_parquet: Path to the complete-list Parquet file.
+        full_header: Path to the complete-list ``{stem}_header.toml`` sidecar.
+        output_csf: Path to the destination CSF text file.
+
+    Returns:
+        Dictionary containing partition statistics (success, paths, block and
+        CSF counts, first-order complement count).
+
+    Example:
+        >>> from rcsfs import convert_csfs, partition_csfs
+        >>> convert_csfs("zero.csf", "zero.parquet")
+        >>> convert_csfs("full.csf", "full.parquet")
+        >>> stats = partition_csfs(
+        ...     "zero.parquet", "zero_header.toml",
+        ...     "full.parquet", "full_header.toml",
+        ...     "reordered.csf",
+        ... )
+    """
+    return _partition_csfs(
+        zero_parquet=str(zero_parquet),
+        zero_header=str(zero_header),
+        full_parquet=str(full_parquet),
+        full_header=str(full_header),
+        output_csf=str(output_csf),
+    )
+
+
+# ///////////////////////////////////////////////////////////////////////////////
 # Public API
 # ///////////////////////////////////////////////////////////////////////////////
 
@@ -330,7 +404,10 @@ __all__ = [
     # Batch descriptor generation
     "generate_descriptors_from_parquet",
     "read_peel_subshells",
+    # Zero-first partition
+    "partition_csfs",
     # Type definitions
     "ConversionStats",
     "DescriptorGenerationStats",
+    "PartitionStats",
 ]

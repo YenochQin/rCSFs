@@ -143,9 +143,9 @@ fn extract_header_lines(
     Ok(headers)
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct HeaderInfo {
-    header_lines: Vec<String>,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct HeaderInfo {
+    pub header_lines: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -155,17 +155,17 @@ pub struct ConversionStats {
     pub truncated_count: usize,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct BlockInfo {
-    block_lengths: Vec<usize>,
-    block_count: usize,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BlockInfo {
+    pub block_lengths: Vec<usize>,
+    pub block_count: usize,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct HeaderData {
-    header_info: HeaderInfo,
-    block_info: BlockInfo,
-    conversion_stats: ConversionStats,
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct HeaderData {
+    pub header_info: HeaderInfo,
+    pub block_info: BlockInfo,
+    pub conversion_stats: ConversionStats,
 }
 
 #[derive(Debug)]

@@ -95,22 +95,31 @@ impl CsfRowStream {
         }
     }
 
-    fn ingest_batch(&mut self, batch: &RecordBatch) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    fn ingest_batch(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let line1 = batch
             .column(1)
             .as_any()
             .downcast_ref::<StringArray>()
-            .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "Parquet line1 column is not Utf8"))?;
+            .ok_or_else(|| {
+                IoError::new(ErrorKind::InvalidData, "Parquet line1 column is not Utf8")
+            })?;
         let line2 = batch
             .column(2)
             .as_any()
             .downcast_ref::<StringArray>()
-            .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "Parquet line2 column is not Utf8"))?;
+            .ok_or_else(|| {
+                IoError::new(ErrorKind::InvalidData, "Parquet line2 column is not Utf8")
+            })?;
         let line3 = batch
             .column(3)
             .as_any()
             .downcast_ref::<StringArray>()
-            .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "Parquet line3 column is not Utf8"))?;
+            .ok_or_else(|| {
+                IoError::new(ErrorKind::InvalidData, "Parquet line3 column is not Utf8")
+            })?;
         for i in 0..batch.num_rows() {
             self.pending.push((
                 line1.value(i).to_string(),
@@ -126,7 +135,10 @@ impl CsfRowStream {
     /// Returns an error if the stream ends before `n` rows are available —
     /// that indicates a header TOML / Parquet mismatch and must not silently
     /// truncate output.
-    fn take_rows(&mut self, n: usize) -> Result<Vec<CsfRow>, Box<dyn std::error::Error + Send + Sync>> {
+    fn take_rows(
+        &mut self,
+        n: usize,
+    ) -> Result<Vec<CsfRow>, Box<dyn std::error::Error + Send + Sync>> {
         let mut out: Vec<CsfRow> = Vec::with_capacity(n);
         while out.len() < n {
             if self.pending.is_empty() && !self.refill()? {
@@ -149,7 +161,10 @@ impl CsfRowStream {
     /// Read up to `max` rows (fewer if the stream ends). Used for the full
     /// block, where the total is bounded by `full_lengths[b]` but we do not
     /// want to force the whole block into memory at once.
-    fn take_up_to(&mut self, max: usize) -> Result<Vec<CsfRow>, Box<dyn std::error::Error + Send + Sync>> {
+    fn take_up_to(
+        &mut self,
+        max: usize,
+    ) -> Result<Vec<CsfRow>, Box<dyn std::error::Error + Send + Sync>> {
         let mut out: Vec<CsfRow> = Vec::with_capacity(max.min(FULL_BLOCK_BATCH_ROWS));
         while out.len() < max {
             if self.pending.is_empty() {
@@ -271,6 +286,26 @@ pub fn partition_csfs(
     let mut output_csf_count: usize = 0;
     let mut first_order_count: usize = 0;
 
+    // ============================================================
+    // 输出格式契约 —— 不可随意修改（DO NOT MODIFY FORMAT）
+    // ------------------------------------------------------------
+    // 下方表头 println! 和 for 循环内的每块数据行 println!（格式
+    // "{:>5}{:>20}{:>20}"）刻意按 GRASP Fortran 程序 RCSFzerofirst
+    // 的 stdout 格式书写，是 graspkit-tools/scripts/rzf_arg.py 的隐式
+    // 输入契约：
+    //
+    //   zf_block_input_parameter() 用正则 r"\s+\d+\s+(\d+)\s+\d+$"
+    //   逐行匹配，捕获第二列（Zero-order Space，每块零阶 CSF 数）。
+    //
+    // 必须保持：
+    //   - 表头文本与列顺序：Block | Zero-order Space | Complete Space
+    //   - 数据行格式："{:>5}{:>20}{:>20}"（首列块号，第二列零阶 CSF 数，
+    //     第三列完整 CSF 数；仅用空白分隔，纯数字）
+    //   - 不在数据行中混入任何单位、文字、注释
+    //
+    // 如需调整，必须同步修改 rzf_arg.py 的解析逻辑并补回归测试。
+    // ============================================================
+    println!("==========================================");
     println!("   Block    Zero-order Space   Complete Space");
     for b in 0..block_count {
         let zlen = zero_lengths[b];
@@ -324,6 +359,7 @@ pub fn partition_csfs(
             writeln!(out, "{}", BLOCK_SEPARATOR)?;
         }
 
+        // 见上方"输出格式契约"：此行格式是 rzf_arg.py 的输入契约，不可修改。
         println!("{:>5}{:>20}{:>20}", b + 1, zlen, flen);
     }
 

@@ -55,7 +55,7 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("rcsfs")
 except PackageNotFoundError:
-    __version__ = "1.3.1-beta1"
+    __version__ = "1.3.1"
 
 from ._rcsfs import (
     convert_csfs as _convert_csfs,

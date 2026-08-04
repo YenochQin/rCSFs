@@ -52,7 +52,7 @@ uv run pytest --speed
 # Lint and type-check Python
 uv run ruff check .
 uv run ruff format .
-uv run mypy rcsfs/
+uv run basedpyright rcsfs/
 ```
 
 **Note:** `tests/rcsfs_test.py` exercises the canonical API from `rcsfs/__init__.py`.

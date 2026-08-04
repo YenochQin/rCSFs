@@ -40,7 +40,7 @@ uv run maturin develop
 - `uv run pytest --speed`: run tests with speed benchmarking.
 - `uv run ruff check .`: lint Python code.
 - `uv run ruff format .`: format Python code.
-- `uv run mypy rcsfs/`: type-check the Python wrapper.
+- `uv run basedpyright rcsfs/`: type-check the Python wrapper.
 
 Always use `uv run maturin build --release` for production. The development build from `uv run maturin develop` skips LTO.
 
@@ -100,7 +100,7 @@ Run both Rust and Python checks before opening a PR:
 uv run cargo test
 uv run pytest
 uv run ruff check .
-uv run mypy rcsfs/
+uv run basedpyright rcsfs/
 ```
 
 ## Commit & Pull Request Guidelines

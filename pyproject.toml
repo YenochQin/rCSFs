@@ -45,7 +45,6 @@ dev = [
 ]
 lint = [
     "basedpyright>=1.39.9",
-    "mypy>=1.13.0",
     "ruff>=0.8.2",
 ]
 
@@ -53,6 +52,14 @@ lint = [
 python-source = "."
 module-name = "rcsfs._rcsfs"
 features = ["pyo3/extension-module", "pyo3/generate-import-lib"]
+
+[tool.basedpyright]
+include = ["rcsfs"]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+
+reportMissingImports = "error"
+reportMissingTypeStubs = false
 
 [[tool.uv.index]]
 name = "tuna"

@@ -27,6 +27,7 @@ classifiers = [
 dynamic = ["license", "readme", "version"]
 dependencies = [
     "maturin>=1.7.8",
+    "polars>=1.36.1",
 ]
 
 [project.scripts]

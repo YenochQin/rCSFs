@@ -1,18 +1,22 @@
+use arrow::record_batch::RecordBatchIterator;
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods};
+use pyo3_arrow::PyRecordBatchReader;
 use std::path::Path;
 
 // Public modules for integration testing
+pub mod csf_partition;
 pub mod csfs_conversion;
 pub mod csfs_descriptor;
-pub mod csf_partition;
+pub mod csfs_memory;
 pub mod descriptor_normalization;
 
 #[pymodule]
 fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(convert_csfs, m)?)?;
+    m.add_function(wrap_pyfunction!(read_csfs_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
     m.add_function(wrap_pyfunction!(partition_csfs, m)?)?;
 
@@ -20,6 +24,44 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     csfs_descriptor::register_descriptor_module(m)?;
 
     Ok(())
+}
+
+/// Read a CSF file into an Arrow C Stream for zero-copy import by Polars.
+#[pyfunction]
+#[pyo3(signature = (
+    input_path,
+    max_line_len=None,
+    num_workers=None,
+    include_block_id=false
+))]
+fn read_csfs_arrow(
+    py: Python,
+    input_path: String,
+    max_line_len: Option<usize>,
+    num_workers: Option<usize>,
+    include_block_id: bool,
+) -> PyResult<PyRecordBatchReader> {
+    let max_line_len = max_line_len.unwrap_or(256);
+    if max_line_len == 0 {
+        return Err(PyValueError::new_err("max_line_len must be greater than 0"));
+    }
+    if matches!(num_workers, Some(0)) {
+        return Err(PyValueError::new_err("num_workers must be greater than 0"));
+    }
+
+    let batch = py
+        .detach(|| {
+            csfs_memory::read_csfs_to_record_batch(
+                Path::new(&input_path),
+                max_line_len,
+                num_workers,
+                include_block_id,
+            )
+        })
+        .map_err(|error| PyIOError::new_err(error.to_string()))?;
+    let schema = batch.schema();
+    let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
+    Ok(PyRecordBatchReader::new(Box::new(reader)))
 }
 
 /// Get Parquet file basic information and metadata

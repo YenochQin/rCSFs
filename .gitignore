@@ -15,6 +15,7 @@ Cargo.lock
 **/*.dylib
 **/*.pyc
 **/*.pyd
+**/*.pdb
 __pycache__/
 *.egg-info/
 

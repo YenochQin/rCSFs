@@ -8,8 +8,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
 use _rcsfs::csf_partition::partition_csfs;
+use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
 
 const HEADER_LINES: [&str; 5] = ["H1", "H2", "H3", "H4", "H5"];
 const LINE2: &str = "L2";
@@ -116,10 +116,7 @@ fn test_partition_locks_zero_to_head_and_appends_complement() {
     // full: 2 blocks of 4 CSFs each (A,B,C,D | E,F,G,H)
     // zero: 2 blocks of 2 CSFs each (B,D | F,H) -- NOT first in full
     // expected: [B,D] + complement[A,C] | [F,H] + complement[E,G]
-    let full_text = build_csf_text(&[
-        vec!["A", "B", "C", "D"],
-        vec!["E", "F", "G", "H"],
-    ]);
+    let full_text = build_csf_text(&[vec!["A", "B", "C", "D"], vec!["E", "F", "G", "H"]]);
     let zero_text = build_csf_text(&[vec!["B", "D"], vec!["F", "H"]]);
 
     let (zero_pq, zero_hdr) = convert("zf_lock_zero", &zero_text);
@@ -141,16 +138,15 @@ fn test_partition_locks_zero_to_head_and_appends_complement() {
     assert_eq!(tags_of(&parsed.blocks[1]), vec!["F", "H", "E", "G"]);
 
     cleanup(&[zero_pq, zero_hdr, full_pq, full_hdr, output]);
-    cleanup(&[temp_dir().join("zf_lock_zero"), temp_dir().join("zf_lock_full")]);
+    cleanup(&[
+        temp_dir().join("zf_lock_zero"),
+        temp_dir().join("zf_lock_full"),
+    ]);
 }
 
 #[test]
 fn test_partition_writes_block_separator_between_blocks_only() {
-    let full_text = build_csf_text(&[
-        vec!["A", "B"],
-        vec!["C", "D"],
-        vec!["E", "F"],
-    ]);
+    let full_text = build_csf_text(&[vec!["A", "B"], vec!["C", "D"], vec!["E", "F"]]);
     let zero_text = build_csf_text(&[vec!["A"], vec!["C"], vec!["E"]]);
 
     let (zero_pq, zero_hdr) = convert("zf_sep_zero", &zero_text);

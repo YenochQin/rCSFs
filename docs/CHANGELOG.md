@@ -8,6 +8,16 @@
 
 ### ✨ 新功能
 
+- `read_csfs()` 新增可选的 `include_coupling_signature=True`，通过 descriptor
+  共用的定宽解析器追加非空 `List(Int32)` 列；列表按已占据 peel subshell 顺序
+  保存 coupling `2J`，末项为总 `2J`，并可直接在 Polars 中切片和分组。
+- 默认关闭 coupling signature，原有 schema 与快速路径不变；可与
+  `include_block_id=True` 组合使用，在 block 内比较不含 parity 的 coupling key。
+- Windows x64 development build 微基准（`tests/fixtures/sample.csf`，28 CSFs，
+  预热 20 次后调用 2,000 次）：disabled/default 为 0.462 ms/call、进程峰值
+  working set 81.9 MiB；enabled 的 1/8/default workers 分别为
+  1.108/0.823/0.654 ms/call，峰值 87.6/89.5/88.5 MiB。该小文件结果主要反映
+  调用与线程池开销，不代表大文件吞吐量。
 - 新增 `read_csfs(...) -> tuple[CsfHeaderData, polars.DataFrame]`，通过 Arrow C
   Stream 将 Rust 构造的 Arrow 数据直接交给 Polars，无需写入和重新读取
   Parquet；返回的 header 字典与 `convert_csfs` 写出的 TOML 结构一致。

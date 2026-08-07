@@ -10,6 +10,34 @@ use std::fs::read_to_string;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub(crate) fn parse_peel_subshells_from_header_lines(
+    header_lines: &[String],
+) -> Result<Vec<String>> {
+    let line = header_lines
+        .get(3)
+        .ok_or_else(|| anyhow::anyhow!("header_lines[3] is missing"))?;
+    let subshells = line
+        .split_whitespace()
+        .filter(|subshell| {
+            subshell.chars().any(|character| character.is_alphabetic())
+                && subshell.chars().all(|character| {
+                    character.is_alphanumeric()
+                        || character == '+'
+                        || character == '-'
+                        || character == '_'
+                })
+        })
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+
+    if subshells.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Could not find peel subshells in header lines"
+        ));
+    }
+    Ok(subshells)
+}
+
 /// Parquet reading/writing support
 pub mod parquet_batch {
     use super::*;
@@ -72,8 +100,7 @@ pub mod parquet_batch {
 
         let Some(spec) = compression else {
             return Ok(Compression::ZSTD(
-                parquet::basic::ZstdLevel::try_new(3)
-                    .expect("zstd level 3 is always valid"),
+                parquet::basic::ZstdLevel::try_new(3).expect("zstd level 3 is always valid"),
             ));
         };
 
@@ -82,8 +109,7 @@ pub mod parquet_batch {
             "none" | "uncompressed" => Ok(Compression::UNCOMPRESSED),
             "snappy" => Ok(Compression::SNAPPY),
             "zstd" => Ok(Compression::ZSTD(
-                parquet::basic::ZstdLevel::try_new(3)
-                    .expect("zstd level 3 is always valid"),
+                parquet::basic::ZstdLevel::try_new(3).expect("zstd level 3 is always valid"),
             )),
             other if other.starts_with("zstd-") => {
                 let level_str = &other["zstd-".len()..];
@@ -135,34 +161,17 @@ pub mod parquet_batch {
             .and_then(|v| v.as_array())
             .ok_or_else(|| anyhow::anyhow!("header_info.header_lines not found in TOML"))?;
 
-        // Peel subshells are on line 4 (index 3): "  2s   2p-  2p   3s..."
-        if let Some(line_value) = header_lines.get(3) {
-            let line = line_value
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("header_lines[3] is not a string"))?;
-
-            // Parse space-separated subshell names
-            let parts: Vec<&str> = line.split_whitespace().collect();
-
-            // Filter valid subshell names (must contain at least one letter)
-            let subshells: Vec<String> = parts
-                .into_iter()
-                .filter(|s| {
-                    s.chars().any(|c| c.is_alphabetic())
-                        && s.chars()
-                            .all(|c| c.is_alphanumeric() || c == '+' || c == '-' || c == '_')
-                })
-                .map(|s| s.to_string())
-                .collect();
-
-            if !subshells.is_empty() {
-                return Ok(subshells);
-            }
-        }
-
-        Err(anyhow::anyhow!(
-            "Could not find peel subshells in header file"
-        ))
+        let peel_line = header_lines
+            .get(3)
+            .and_then(|line| line.as_str())
+            .ok_or_else(|| anyhow::anyhow!("header_lines[3] is not a string"))?;
+        let header_lines = vec![
+            String::new(),
+            String::new(),
+            String::new(),
+            peel_line.to_owned(),
+        ];
+        parse_peel_subshells_from_header_lines(&header_lines)
     }
 
     /// Find the header file for a given parquet file
@@ -929,85 +938,76 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 5: Writer thread - maintain order and write to parquet (multi-column format)
         ////////////////////////////////////////////////////////////////////////////////
-        let writer_handle: std::thread::JoinHandle<Result<usize>> =
-            std::thread::spawn(move || {
-                use arrow::array::{Float32Array, Int32Array};
+        let writer_handle: std::thread::JoinHandle<Result<usize>> = std::thread::spawn(move || {
+            use arrow::array::{Float32Array, Int32Array};
 
-                let mut pending: BTreeMap<usize, ResultItem> = BTreeMap::new();
-                let mut next_write_idx = 0usize;
-                let mut total_descriptors = 0usize;
+            let mut pending: BTreeMap<usize, ResultItem> = BTreeMap::new();
+            let mut next_write_idx = 0usize;
+            let mut total_descriptors = 0usize;
 
-                while let Ok(result_item) = result_rx.recv() {
-                    let batch_idx = result_item.batch_idx;
-                    pending.insert(batch_idx, result_item);
+            while let Ok(result_item) = result_rx.recv() {
+                let batch_idx = result_item.batch_idx;
+                pending.insert(batch_idx, result_item);
 
-                    // Write all consecutive batches we have
-                    while let Some(result_item) = pending.remove(&next_write_idx) {
-                        let batch_size = result_item.batch_size;
-                        if batch_size == 0 {
-                            next_write_idx += 1;
-                            continue;
-                        }
-                        total_descriptors += batch_size;
+                // Write all consecutive batches we have
+                while let Some(result_item) = pending.remove(&next_write_idx) {
+                    let batch_size = result_item.batch_size;
+                    if batch_size == 0 {
+                        next_write_idx += 1;
+                        continue;
+                    }
+                    total_descriptors += batch_size;
 
-                        let column_arrays: Vec<Arc<dyn Array>> = if normalize {
-                            let columns = match result_item.columns {
-                                DescriptorColumns::Normalized(columns) => columns,
-                                DescriptorColumns::Raw(_) => {
-                                    return Err(anyhow::anyhow!(
-                                        "Expected normalized descriptor columns"
-                                    ));
-                                }
-                            };
-                            columns
-                                .into_iter()
-                                .map(|column| {
-                                    Arc::new(Float32Array::from(column)) as Arc<dyn Array>
-                                })
-                                .collect()
-                        } else {
-                            let columns = match result_item.columns {
-                                DescriptorColumns::Raw(columns) => columns,
-                                DescriptorColumns::Normalized(_) => {
-                                    return Err(anyhow::anyhow!(
-                                        "Expected raw descriptor columns"
-                                    ));
-                                }
-                            };
-                            columns
-                                .into_iter()
-                                .map(|column| Arc::new(Int32Array::from(column)) as Arc<dyn Array>)
-                                .collect()
-                        };
-
-                        let output_batch = match RecordBatch::try_new(schema.clone(), column_arrays)
-                        {
-                            Ok(b) => b,
-                            Err(e) => {
+                    let column_arrays: Vec<Arc<dyn Array>> = if normalize {
+                        let columns = match result_item.columns {
+                            DescriptorColumns::Normalized(columns) => columns,
+                            DescriptorColumns::Raw(_) => {
                                 return Err(anyhow::anyhow!(
-                                    "Failed to create output batch: {}",
-                                    e
+                                    "Expected normalized descriptor columns"
                                 ));
                             }
                         };
+                        columns
+                            .into_iter()
+                            .map(|column| Arc::new(Float32Array::from(column)) as Arc<dyn Array>)
+                            .collect()
+                    } else {
+                        let columns = match result_item.columns {
+                            DescriptorColumns::Raw(columns) => columns,
+                            DescriptorColumns::Normalized(_) => {
+                                return Err(anyhow::anyhow!("Expected raw descriptor columns"));
+                            }
+                        };
+                        columns
+                            .into_iter()
+                            .map(|column| Arc::new(Int32Array::from(column)) as Arc<dyn Array>)
+                            .collect()
+                    };
 
-                        if writer_guard
-                            .writer
-                            .as_mut()
-                            .expect("writer exists until finish")
-                            .write(&output_batch)
-                            .is_err()
-                        {
-                            return Err(anyhow::anyhow!("Failed to write batch"));
+                    let output_batch = match RecordBatch::try_new(schema.clone(), column_arrays) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            return Err(anyhow::anyhow!("Failed to create output batch: {}", e));
                         }
+                    };
 
-                        next_write_idx += 1;
+                    if writer_guard
+                        .writer
+                        .as_mut()
+                        .expect("writer exists until finish")
+                        .write(&output_batch)
+                        .is_err()
+                    {
+                        return Err(anyhow::anyhow!("Failed to write batch"));
                     }
-                }
 
-                writer_guard.finish()?;
-                Ok(total_descriptors)
-            });
+                    next_write_idx += 1;
+                }
+            }
+
+            writer_guard.finish()?;
+            Ok(total_descriptors)
+        });
 
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 6: Wait for all threads and collect results
@@ -1181,12 +1181,18 @@ pub mod parquet_batch {
         #[test]
         fn parse_compression_handles_named_codecs() {
             use parquet::basic::Compression;
-            assert!(matches!(parse_compression(Some("none")).unwrap(), Compression::UNCOMPRESSED));
+            assert!(matches!(
+                parse_compression(Some("none")).unwrap(),
+                Compression::UNCOMPRESSED
+            ));
             assert!(matches!(
                 parse_compression(Some("uncompressed")).unwrap(),
                 Compression::UNCOMPRESSED
             ));
-            assert!(matches!(parse_compression(Some("snappy")).unwrap(), Compression::SNAPPY));
+            assert!(matches!(
+                parse_compression(Some("snappy")).unwrap(),
+                Compression::SNAPPY
+            ));
         }
 
         #[test]
@@ -1209,7 +1215,10 @@ pub mod parquet_batch {
         #[test]
         fn parse_compression_is_case_insensitive_and_trims_whitespace() {
             use parquet::basic::Compression;
-            assert!(matches!(parse_compression(Some("NONE")).unwrap(), Compression::UNCOMPRESSED));
+            assert!(matches!(
+                parse_compression(Some("NONE")).unwrap(),
+                Compression::UNCOMPRESSED
+            ));
             assert!(matches!(
                 parse_compression(Some("  Snappy ")).unwrap(),
                 Compression::SNAPPY
@@ -1297,6 +1306,27 @@ fn fixed_width_field(line: &str, start: usize, width: usize) -> &str {
 
 fn fixed_width_trimmed_field(line: &str, start: usize, width: usize) -> &str {
     fixed_width_field(line, start, width).trim()
+}
+
+pub(crate) fn coupling_signature_from_descriptor_into(
+    descriptor: &[i32],
+    signature: &mut Vec<i32>,
+) -> Result<()> {
+    if !descriptor.len().is_multiple_of(3) {
+        return Err(anyhow::anyhow!(
+            "descriptor length {} is not a multiple of 3",
+            descriptor.len()
+        ));
+    }
+
+    signature.clear();
+    signature.extend(
+        descriptor
+            .chunks_exact(3)
+            .filter(|triplet| triplet[0] > 0)
+            .map(|triplet| triplet[2]),
+    );
+    Ok(())
 }
 
 /// CSF Descriptor Generator
@@ -1493,6 +1523,18 @@ impl CSFDescriptorGenerator {
         // Unoccupied orbitals remain with all zeros (default initialization)
 
         Ok(())
+    }
+
+    pub(crate) fn parse_coupling_signature_into(
+        &self,
+        line1: &str,
+        line2: &str,
+        line3: &str,
+        descriptor: &mut [i32],
+        signature: &mut Vec<i32>,
+    ) -> Result<()> {
+        self.parse_csf_into(line1, line2, line3, descriptor)?;
+        coupling_signature_from_descriptor_into(descriptor, signature)
     }
 }
 
@@ -1733,6 +1775,39 @@ mod tests {
             .unwrap();
 
         assert_eq!(descriptor[0], 0);
+    }
+
+    #[test]
+    fn coupling_signature_keeps_occupied_zero_and_omits_unoccupied_positions() {
+        let descriptor = [2, 1, 0, 0, 0, 0, 3, 5, 8];
+        let mut signature = Vec::new();
+
+        coupling_signature_from_descriptor_into(&descriptor, &mut signature).unwrap();
+
+        assert_eq!(signature, [0, 8]);
+    }
+
+    #[test]
+    fn parse_coupling_signature_reuses_all_descriptor_fixed_width_rules() {
+        let generator = CSFDescriptorGenerator::new(vec![
+            "5s".to_string(),
+            "4d-".to_string(),
+            "4d".to_string(),
+        ]);
+        let line1 = "  5s ( 2)  4d-( 4)  4d ( 6)";
+        // The second 9-character field uses the value after ';'. Its aligned
+        // line3 field is empty, so coupling falls back to that middle value.
+        let line2 = "             1;3/2";
+        let line3 = "                        4-  ";
+        let mut descriptor = vec![0; generator.orbital_count() * 3];
+        let mut signature = Vec::new();
+
+        generator
+            .parse_coupling_signature_into(line1, line2, line3, &mut descriptor, &mut signature)
+            .unwrap();
+
+        assert_eq!(descriptor, [2, 0, 0, 4, 3, 3, 6, 0, 8]);
+        assert_eq!(signature, [0, 3, 8]);
     }
 
     #[test]

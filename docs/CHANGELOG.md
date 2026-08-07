@@ -4,6 +4,19 @@
 
 ---
 
+## [Unreleased]
+
+### ✨ 新功能
+
+- 新增 `read_csfs(...) -> polars.DataFrame`，通过 Arrow C Stream 将 Rust 构造的
+  Arrow 数据直接交给 Polars，无需写入和重新读取 Parquet。
+- 支持包含多个 J 值块的 CSF 文件：`*` 分隔符不会进入 DataFrame；设置
+  `include_block_id=True` 时增加零起始的 `UInt32` 块编号列。
+- 新增 Polars 运行时依赖以及多 block、参数校验、异常输入和不完整末尾数据测试。
+- 为 PyO3 扩展新增 `_rcsfs.pyi`，集中定义公开 `TypedDict`，并将 Python API
+  更新为 Python 3.14 的 `X | None` 注解风格；严格 `basedpyright` 检查不再产生
+  `Unknown`、裸 `dict` 或缺失类型参数错误。
+
 ## [1.3.1-beta.1] - 2026-07-17
 
 ### ✨ 新功能

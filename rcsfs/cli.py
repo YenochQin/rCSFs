@@ -7,10 +7,15 @@ import json
 import shutil
 import sys
 import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Mapping, Sequence
 
-from . import convert_csfs, generate_descriptors_from_parquet, partition_csfs, read_peel_subshells
+from . import (
+    convert_csfs,
+    generate_descriptors_from_parquet,
+    partition_csfs,
+    read_peel_subshells,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,8 +77,12 @@ def build_parser() -> argparse.ArgumentParser:
             "layer produced by convert_csfs."
         ),
     )
-    zero_first.add_argument("zero_csf", type=Path, help="Zero-order reference CSF file.")
-    zero_first.add_argument("full_csf", type=Path, help="Complete CSF list to be partitioned.")
+    zero_first.add_argument(
+        "zero_csf", type=Path, help="Zero-order reference CSF file."
+    )
+    zero_first.add_argument(
+        "full_csf", type=Path, help="Complete CSF list to be partitioned."
+    )
     zero_first.add_argument(
         "output_csf",
         nargs="?",
@@ -112,7 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_gen_descriptors_summary(stats: Mapping[str, object], normalize: bool) -> None:
+def _print_gen_descriptors_summary(
+    stats: Mapping[str, object], normalize: bool
+) -> None:
     descriptor_kind = "normalized descriptors" if normalize else "descriptors"
     output_file = stats.get("output_file", "")
     print(f"Generated {descriptor_kind}: {output_file}")
@@ -160,7 +171,9 @@ def _run_zero_first(args: argparse.Namespace) -> int:
         else full_path.with_name(f"{full_path.stem}_zf.csf")
     )
 
-    base_dir = args.work_dir if args.work_dir is not None else Path(tempfile.gettempdir())
+    base_dir = (
+        args.work_dir if args.work_dir is not None else Path(tempfile.gettempdir())
+    )
     base_dir.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="rcsfs-zero-first-", dir=str(base_dir)))
 

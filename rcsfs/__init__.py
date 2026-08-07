@@ -47,10 +47,18 @@ For detailed documentation, see function documentation:
 - `read_peel_subshells()`: Extract peel subshells from header file
 """
 
-from pathlib import Path
-from typing import NotRequired, Optional, TypedDict, Union
+from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+from polars import DataFrame
+
+from ._types import (
+    ConversionStats,
+    DescriptorGenerationStats,
+    ParquetInfo,
+    PartitionStats,
+)
 
 try:
     __version__ = version("rcsfs")
@@ -72,53 +80,7 @@ from ._rcsfs import (
 from ._rcsfs import (
     partition_csfs as _partition_csfs,
 )
-
-# ///////////////////////////////////////////////////////////////////////////////
-# Type Definitions
-# ///////////////////////////////////////////////////////////////////////////////
-
-
-class ConversionStats(TypedDict):
-    """Statistics returned from CSF conversion operations."""
-
-    success: bool
-    input_file: str
-    output_file: str
-    header_file: NotRequired[str]
-    max_line_len: int
-    chunk_size: int
-    error: NotRequired[str]
-    total_lines: NotRequired[int]
-    csf_count: NotRequired[int]
-    truncated_count: NotRequired[int]
-
-
-class DescriptorGenerationStats(TypedDict):
-    """Statistics returned from batch descriptor generation."""
-
-    success: bool
-    input_file: str
-    output_file: str
-    csf_count: NotRequired[int]
-    descriptor_count: NotRequired[int]
-    orbital_count: NotRequired[int]
-    descriptor_size: NotRequired[int]
-    error: NotRequired[str]
-
-
-class PartitionStats(TypedDict):
-    """Statistics returned from a zero-first partition operation."""
-
-    success: bool
-    zero_parquet: str
-    full_parquet: str
-    output_file: str
-    block_count: NotRequired[int]
-    zero_csf_count: NotRequired[int]
-    full_csf_count: NotRequired[int]
-    output_csf_count: NotRequired[int]
-    first_order_count: NotRequired[int]
-    error: NotRequired[str]
+from ._rcsfs import read_csfs_arrow as _read_csfs_arrow
 
 
 # ///////////////////////////////////////////////////////////////////////////////
@@ -126,12 +88,35 @@ class PartitionStats(TypedDict):
 # ///////////////////////////////////////////////////////////////////////////////
 
 
+def read_csfs(
+    input_path: str | Path,
+    max_line_len: int | None = 256,
+    num_workers: int | None = None,
+    *,
+    include_block_id: bool = False,
+) -> DataFrame:
+    """Read a CSF file directly into a Polars DataFrame.
+
+    The first five header lines and ``*`` block separators are omitted. Set
+    ``include_block_id=True`` to add the zero-based block identifier as a
+    ``UInt32`` column. Arrow buffers produced by Rust are transferred to Polars
+    through the Arrow C Stream interface without a Parquet round trip.
+    """
+    arrow_stream = _read_csfs_arrow(
+        input_path=str(input_path),
+        max_line_len=max_line_len,
+        num_workers=num_workers,
+        include_block_id=include_block_id,
+    )
+    return DataFrame(arrow_stream)
+
+
 def convert_csfs(
-    input_path: Union[str, Path],
-    output_path: Union[str, Path],
-    max_line_len: Optional[int] = 256,
-    chunk_size: Optional[int] = 3000000,
-    num_workers: Optional[int] = None,
+    input_path: str | Path,
+    output_path: str | Path,
+    max_line_len: int | None = 256,
+    chunk_size: int | None = 3000000,
+    num_workers: int | None = None,
 ) -> ConversionStats:
     """
     Convert CSF text file to Parquet format using parallel processing.
@@ -173,7 +158,7 @@ def convert_csfs(
     )
 
 
-def get_parquet_info(input_path: Union[str, Path]) -> dict:
+def get_parquet_info(input_path: str | Path) -> ParquetInfo:
     """
     Get basic information and metadata from a Parquet file.
 
@@ -197,7 +182,7 @@ def get_parquet_info(input_path: Union[str, Path]) -> dict:
 # ///////////////////////////////////////////////////////////////////////////////
 
 
-def read_peel_subshells(header_path: Union[str, Path]) -> list[str]:
+def read_peel_subshells(header_path: str | Path) -> list[str]:
     """
     Extract peel subshells from a header TOML file.
 
@@ -216,12 +201,12 @@ def read_peel_subshells(header_path: Union[str, Path]) -> list[str]:
 
 
 def generate_descriptors_from_parquet(
-    input_parquet: Union[str, Path],
-    output_parquet: Union[str, Path],
+    input_parquet: str | Path,
+    output_parquet: str | Path,
     peel_subshells: list[str],
-    num_workers: Optional[int] = None,
+    num_workers: int | None = None,
     normalize: bool = False,
-    compression: Optional[str] = None,
+    compression: str | None = None,
 ) -> DescriptorGenerationStats:
     """
     Generate CSF descriptors from a parquet file using parallel processing.
@@ -341,11 +326,11 @@ def generate_descriptors_from_parquet(
 
 
 def partition_csfs(
-    zero_parquet: Union[str, Path],
-    zero_header: Union[str, Path],
-    full_parquet: Union[str, Path],
-    full_header: Union[str, Path],
-    output_csf: Union[str, Path],
+    zero_parquet: str | Path,
+    zero_header: str | Path,
+    full_parquet: str | Path,
+    full_header: str | Path,
+    output_csf: str | Path,
 ) -> PartitionStats:
     """
     Partition CSFs into a zero-order + first-order space per symmetry block.
@@ -399,6 +384,7 @@ __all__ = [
     # Version
     "__version__",
     # CSF file conversion
+    "read_csfs",
     "convert_csfs",
     "get_parquet_info",
     # Batch descriptor generation
@@ -408,6 +394,7 @@ __all__ = [
     "partition_csfs",
     # Type definitions
     "ConversionStats",
+    "ParquetInfo",
     "DescriptorGenerationStats",
     "PartitionStats",
 ]

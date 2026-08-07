@@ -9,6 +9,7 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Literal, Protocol, cast
 
 from . import (
     convert_csfs,
@@ -16,6 +17,36 @@ from . import (
     partition_csfs,
     read_peel_subshells,
 )
+
+
+class GenDescriptorsArgs(Protocol):
+    """Parsed arguments for the ``gen-descriptors`` subcommand."""
+
+    command: Literal["gen-descriptors"]
+    input_parquet: Path
+    output_parquet: Path
+    header: Path
+    num_workers: int | None
+    normalize: bool
+    compression: str | None
+    json: bool
+
+
+class ZeroFirstArgs(Protocol):
+    """Parsed arguments for the ``zero-first`` subcommand."""
+
+    command: Literal["zero-first"]
+    zero_csf: Path
+    full_csf: Path
+    output_csf: Path | None
+    keep_parquet: bool
+    work_dir: Path | None
+    num_workers: int | None
+    max_line_len: int
+    json: bool
+
+
+type CliArgs = GenDescriptorsArgs | ZeroFirstArgs
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,26 +60,26 @@ def build_parser() -> argparse.ArgumentParser:
         "gen-descriptors",
         help="Generate descriptor Parquet data from a CSF Parquet file.",
     )
-    gen_descriptors.add_argument("input_parquet", type=Path)
-    gen_descriptors.add_argument("output_parquet", type=Path)
-    gen_descriptors.add_argument(
+    _ = gen_descriptors.add_argument("input_parquet", type=Path)
+    _ = gen_descriptors.add_argument("output_parquet", type=Path)
+    _ = gen_descriptors.add_argument(
         "--header",
         required=True,
         type=Path,
         help="Header TOML file generated during CSF conversion.",
     )
-    gen_descriptors.add_argument(
+    _ = gen_descriptors.add_argument(
         "--num-workers",
         type=int,
         default=None,
         help="Number of worker threads to use.",
     )
-    gen_descriptors.add_argument(
+    _ = gen_descriptors.add_argument(
         "--normalize",
         action="store_true",
         help="Normalize descriptor values.",
     )
-    gen_descriptors.add_argument(
+    _ = gen_descriptors.add_argument(
         "--compression",
         default=None,
         help=(
@@ -60,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
         + [f"zstd-{i}" for i in range(1, 23)],
         metavar="{none,snappy,zstd,zstd-N}",
     )
-    gen_descriptors.add_argument(
+    _ = gen_descriptors.add_argument(
         "--json",
         action="store_true",
         help="Print descriptor generation statistics as JSON.",
@@ -77,48 +108,57 @@ def build_parser() -> argparse.ArgumentParser:
             "layer produced by convert_csfs."
         ),
     )
-    zero_first.add_argument(
+    _ = zero_first.add_argument(
         "zero_csf", type=Path, help="Zero-order reference CSF file."
     )
-    zero_first.add_argument(
+    _ = zero_first.add_argument(
         "full_csf", type=Path, help="Complete CSF list to be partitioned."
     )
-    zero_first.add_argument(
+    _ = zero_first.add_argument(
         "output_csf",
         nargs="?",
         type=Path,
         help="Destination CSF file. Default: {full_stem}_zf.csf beside the full input.",
     )
-    zero_first.add_argument(
+    _ = zero_first.add_argument(
         "--keep-parquet",
         action="store_true",
         help="Keep intermediate Parquet + header TOML files (default: clean up).",
     )
-    zero_first.add_argument(
+    _ = zero_first.add_argument(
         "--work-dir",
         type=Path,
         default=None,
         help="Directory for intermediate Parquet files. Default: system temp dir.",
     )
-    zero_first.add_argument(
+    _ = zero_first.add_argument(
         "--num-workers",
         type=int,
         default=None,
         help="Worker threads for CSF-to-Parquet conversion.",
     )
-    zero_first.add_argument(
+    _ = zero_first.add_argument(
         "--max-line-len",
         type=int,
         default=256,
         help="Maximum CSF line length for conversion (default: 256).",
     )
-    zero_first.add_argument(
+    _ = zero_first.add_argument(
         "--json",
         action="store_true",
         help="Print partition statistics as JSON.",
     )
 
     return parser
+
+
+def _parse_args(
+    parser: argparse.ArgumentParser,
+    argv: Sequence[str] | None,
+) -> CliArgs:
+    """Parse the CLI's discriminated argument union at one dynamic boundary."""
+    namespace = cast(object, parser.parse_args(argv))
+    return cast(CliArgs, namespace)
 
 
 def _print_gen_descriptors_summary(
@@ -145,7 +185,7 @@ def _print_zero_first_summary(stats: Mapping[str, object]) -> None:
 
 
 def _convert_to_parquet(
-    src: Path, dest_parquet: Path, args: argparse.Namespace, label: str
+    src: Path, dest_parquet: Path, args: ZeroFirstArgs, label: str
 ) -> str:
     stats = convert_csfs(
         src,
@@ -162,9 +202,9 @@ def _convert_to_parquet(
     return header
 
 
-def _run_zero_first(args: argparse.Namespace) -> int:
-    zero_path: Path = args.zero_csf
-    full_path: Path = args.full_csf
+def _run_zero_first(args: ZeroFirstArgs) -> int:
+    zero_path = args.zero_csf
+    full_path = args.full_csf
     output_path = (
         args.output_csf
         if args.output_csf is not None
@@ -174,7 +214,7 @@ def _run_zero_first(args: argparse.Namespace) -> int:
     base_dir = (
         args.work_dir if args.work_dir is not None else Path(tempfile.gettempdir())
     )
-    base_dir.mkdir(parents=True, exist_ok=True)
+    _ = base_dir.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="rcsfs-zero-first-", dir=str(base_dir)))
 
     try:
@@ -196,7 +236,7 @@ def _run_zero_first(args: argparse.Namespace) -> int:
 
         if args.json:
             json.dump(stats, sys.stdout, indent=2, sort_keys=True)
-            sys.stdout.write("\n")
+            _ = sys.stdout.write("\n")
         elif stats.get("success") is True:
             _print_zero_first_summary(stats)
         else:
@@ -214,7 +254,7 @@ def _run_zero_first(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = _parse_args(parser, argv)
 
     if args.command == "gen-descriptors":
         peel_subshells = read_peel_subshells(args.header)
@@ -228,7 +268,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if args.json:
             json.dump(stats, sys.stdout, indent=2, sort_keys=True)
-            sys.stdout.write("\n")
+            _ = sys.stdout.write("\n")
         elif stats.get("success") is True:
             _print_gen_descriptors_summary(stats, normalize=args.normalize)
         else:
@@ -237,11 +277,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return 0 if stats.get("success") is True else 1
 
-    if args.command == "zero-first":
-        return _run_zero_first(args)
-
-    parser.error(f"unknown command: {args.command}")
-    return 2
+    return _run_zero_first(args)
 
 
 if __name__ == "__main__":

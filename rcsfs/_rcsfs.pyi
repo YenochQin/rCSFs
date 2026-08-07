@@ -4,6 +4,7 @@ from typing import Protocol
 
 from ._types import (
     ConversionStats,
+    CsfHeaderData,
     DescriptorGenerationStats,
     ParquetInfo,
     PartitionStats,
@@ -21,7 +22,7 @@ def read_csfs_arrow(
     max_line_len: int | None = None,
     num_workers: int | None = None,
     include_block_id: bool = False,
-) -> ArrowRecordBatchReader: ...
+) -> tuple[CsfHeaderData, ArrowRecordBatchReader]: ...
 def convert_csfs(
     input_path: str,
     output_path: str,

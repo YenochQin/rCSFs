@@ -71,12 +71,15 @@ input_csf = Path("tests/fixtures/sample.csf")
 csf_parquet = Path("sample.parquet")
 desc_parquet = Path("sample_descriptors.parquet")
 
-# 将 CSF 文本直接读取为 Polars DataFrame（不生成中间 Parquet 文件）
-csf_df = read_csfs(input_csf, num_workers=8)
+# 直接读取 header 元数据和 CSF 数据（不生成中间 Parquet 文件）
+header, csf_df = read_csfs(input_csf, num_workers=8)
+print(header["block_info"])
 print(csf_df.head())
 
 # 需要保留 J^P block 归属时，设置 include_block_id=True
-blocked_csf_df = read_csfs(input_csf, num_workers=8, include_block_id=True)
+blocked_header, blocked_csf_df = read_csfs(
+    input_csf, num_workers=8, include_block_id=True
+)
 
 # 1. 将 CSF 文本转为 Parquet，用于需要持久化的数据流程
 stats = convert_csfs(input_csf, csf_parquet)
@@ -224,7 +227,7 @@ info = get_parquet_info("output.parquet")
 
 | 函数 | 说明 |
 | --- | --- |
-| `read_csfs(input_path, max_line_len=256, num_workers=None, include_block_id=False)` | 将 CSF 文本直接读取为 Polars DataFrame；跳过 `*` 分隔行，并可通过 `block_id` 保留 block 归属 |
+| `read_csfs(input_path, max_line_len=256, num_workers=None, include_block_id=False)` | 无需中间 Parquet，直接返回 `(header, dataframe)`；`header` 与转换生成的 TOML 结构一致，跳过 `*` 分隔行，并可通过 `block_id` 保留 block 归属 |
 | `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | 将 CSF 文本转换为 Parquet |
 | `get_parquet_info(input_path)` | 读取 Parquet 元数据 |
 | `read_peel_subshells(header_path)` | 从头文件 TOML 中提取 peel subshells |

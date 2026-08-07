@@ -55,6 +55,10 @@ from polars import DataFrame
 
 from ._types import (
     ConversionStats,
+    CsfBlockInfo,
+    CsfDataStats,
+    CsfHeaderData,
+    CsfHeaderInfo,
     DescriptorGenerationStats,
     ParquetInfo,
     PartitionStats,
@@ -94,21 +98,23 @@ def read_csfs(
     num_workers: int | None = None,
     *,
     include_block_id: bool = False,
-) -> DataFrame:
-    """Read a CSF file directly into a Polars DataFrame.
+) -> tuple[CsfHeaderData, DataFrame]:
+    """Read CSF header metadata and data rows directly into memory.
 
     The first five header lines and ``*`` block separators are omitted. Set
     ``include_block_id=True`` to add the zero-based block identifier as a
     ``UInt32`` column. Arrow buffers produced by Rust are transferred to Polars
-    through the Arrow C Stream interface without a Parquet round trip.
+    through the Arrow C Stream interface without a Parquet round trip. The
+    returned header dictionary has the same schema as the TOML sidecar written
+    by :func:`convert_csfs`.
     """
-    arrow_stream = _read_csfs_arrow(
+    header, arrow_stream = _read_csfs_arrow(
         input_path=str(input_path),
         max_line_len=max_line_len,
         num_workers=num_workers,
         include_block_id=include_block_id,
     )
-    return DataFrame(arrow_stream)
+    return header, DataFrame(arrow_stream)
 
 
 def convert_csfs(
@@ -393,6 +399,10 @@ __all__ = [
     # Zero-first partition
     "partition_csfs",
     # Type definitions
+    "CsfHeaderInfo",
+    "CsfBlockInfo",
+    "CsfDataStats",
+    "CsfHeaderData",
     "ConversionStats",
     "ParquetInfo",
     "DescriptorGenerationStats",

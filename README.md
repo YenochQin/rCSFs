@@ -71,12 +71,15 @@ input_csf = Path("tests/fixtures/sample.csf")
 csf_parquet = Path("sample.parquet")
 desc_parquet = Path("sample_descriptors.parquet")
 
-# Read CSF text directly into Polars (no intermediate Parquet file)
-csf_df = read_csfs(input_csf, num_workers=8)
+# Read header metadata and CSF rows directly (no intermediate Parquet file)
+header, csf_df = read_csfs(input_csf, num_workers=8)
+print(header["block_info"])
 print(csf_df.head())
 
 # Add include_block_id=True when J^P block membership is needed
-blocked_csf_df = read_csfs(input_csf, num_workers=8, include_block_id=True)
+blocked_header, blocked_csf_df = read_csfs(
+    input_csf, num_workers=8, include_block_id=True
+)
 
 # 1. Convert CSF text to parquet for persistent workflows
 stats = convert_csfs(input_csf, csf_parquet)
@@ -224,7 +227,7 @@ Returned metadata includes:
 
 | Function | Description |
 | --- | --- |
-| `read_csfs(input_path, max_line_len=256, num_workers=None, include_block_id=False)` | Read CSF text directly into a Polars DataFrame; `*` separators are skipped and optional `block_id` preserves block membership |
+| `read_csfs(input_path, max_line_len=256, num_workers=None, include_block_id=False)` | Return `(header, dataframe)` without a Parquet round trip; `header` matches the conversion TOML schema, `*` separators are skipped, and optional `block_id` preserves block membership |
 | `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | Convert CSF text to Parquet |
 | `get_parquet_info(input_path)` | Inspect Parquet metadata |
 | `read_peel_subshells(header_path)` | Read peel subshells from header TOML |

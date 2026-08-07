@@ -7,6 +7,8 @@ use std::io::{BufRead, BufReader, Error as IoError, ErrorKind};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::csfs_conversion::{BlockInfo, ConversionStats, HeaderData, HeaderInfo};
+
 const CSF_HEADER_LINE_COUNT: usize = 5;
 
 #[derive(Debug)]
@@ -14,6 +16,7 @@ struct DataLine {
     value: String,
     number: usize,
     block_id: u32,
+    truncated: bool,
 }
 
 fn process_data_line_owned(mut line: DataLine, max_line_len: usize) -> Result<DataLine, IoError> {
@@ -29,6 +32,7 @@ fn process_data_line_owned(mut line: DataLine, max_line_len: usize) -> Result<Da
 
     if line.value.len() > max_line_len {
         line.value.truncate(max_line_len);
+        line.truncated = true;
     }
     Ok(line)
 }
@@ -42,7 +46,7 @@ pub fn read_csfs_to_record_batch(
     max_line_len: usize,
     num_workers: Option<usize>,
     include_block_id: bool,
-) -> Result<RecordBatch, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(HeaderData, RecordBatch), Box<dyn std::error::Error + Send + Sync>> {
     if max_line_len == 0 {
         return Err(IoError::new(
             ErrorKind::InvalidInput,
@@ -60,16 +64,22 @@ pub fn read_csfs_to_record_batch(
 
     let file = File::open(csfs_path)?;
     let reader = BufReader::new(file);
+    let mut header_lines = Vec::with_capacity(CSF_HEADER_LINE_COUNT);
     let mut data_lines = Vec::new();
     let mut current_block_line_count = 0usize;
+    let mut block_lengths = Vec::new();
+    let mut saw_separator = false;
     let mut block_id = 0u32;
+    let mut total_lines = 0usize;
 
     for (zero_based_line_number, line) in reader.lines().enumerate() {
         let line = line?;
         if zero_based_line_number < CSF_HEADER_LINE_COUNT {
+            header_lines.push(line);
             continue;
         }
 
+        total_lines += 1;
         let data_line_number = zero_based_line_number + 1 - CSF_HEADER_LINE_COUNT;
         if line.trim() == "*" {
             if !current_block_line_count.is_multiple_of(3) {
@@ -82,7 +92,9 @@ pub fn read_csfs_to_record_batch(
                 )
                 .into());
             }
+            block_lengths.push(current_block_line_count / 3);
             current_block_line_count = 0;
+            saw_separator = true;
             block_id = block_id.checked_add(1).ok_or_else(|| {
                 IoError::new(ErrorKind::InvalidData, "CSF file contains too many blocks")
             })?;
@@ -94,8 +106,11 @@ pub fn read_csfs_to_record_batch(
             value: line,
             number: data_line_number,
             block_id,
+            truncated: false,
         });
     }
+
+    header_lines.resize(CSF_HEADER_LINE_COUNT, String::new());
 
     // Match the established conversion behavior: ignore an incomplete final CSF.
     let incomplete_line_count = current_block_line_count % 3;
@@ -119,6 +134,22 @@ pub fn read_csfs_to_record_batch(
     };
 
     let row_count = rows.len() / 3;
+    let truncated_count = rows.iter().filter(|row| row.truncated).count();
+    if saw_separator || current_block_line_count > 0 {
+        block_lengths.push(current_block_line_count / 3);
+    }
+    let header_data = HeaderData {
+        header_info: HeaderInfo { header_lines },
+        block_info: BlockInfo {
+            block_count: block_lengths.len(),
+            block_lengths,
+        },
+        conversion_stats: ConversionStats {
+            csf_count: row_count,
+            total_lines,
+            truncated_count,
+        },
+    };
     let line1_bytes = rows.iter().step_by(3).map(|row| row.value.len()).sum();
     let line2_bytes = rows
         .iter()
@@ -167,8 +198,6 @@ pub fn read_csfs_to_record_batch(
         Arc::new(line3_builder.finish()) as ArrayRef,
     ]);
 
-    Ok(RecordBatch::try_new(
-        Arc::new(Schema::new(fields)),
-        columns,
-    )?)
+    let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
+    Ok((header_data, batch))
 }

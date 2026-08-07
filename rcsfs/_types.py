@@ -3,6 +3,35 @@
 from typing import NotRequired, TypedDict
 
 
+class CsfHeaderInfo(TypedDict):
+    """The five source header lines retained from a CSF file."""
+
+    header_lines: list[str]
+
+
+class CsfBlockInfo(TypedDict):
+    """Symmetry-block metadata extracted from ``*`` separators."""
+
+    block_lengths: list[int]
+    block_count: int
+
+
+class CsfDataStats(TypedDict):
+    """In-memory CSF parsing statistics matching the TOML sidecar schema."""
+
+    csf_count: int
+    total_lines: int
+    truncated_count: int
+
+
+class CsfHeaderData(TypedDict):
+    """Header dictionary matching the TOML written by :func:`convert_csfs`."""
+
+    header_info: CsfHeaderInfo
+    block_info: CsfBlockInfo
+    conversion_stats: CsfDataStats
+
+
 class ConversionStats(TypedDict):
     """Statistics returned from CSF conversion operations."""
 

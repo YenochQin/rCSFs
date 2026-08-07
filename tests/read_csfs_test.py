@@ -1,10 +1,11 @@
 from pathlib import Path
+import tomllib
 from typing import get_type_hints
 
 import polars as pl
 import pytest
 
-from rcsfs import read_csfs
+from rcsfs import CsfHeaderData, convert_csfs, read_csfs
 
 
 def _write_multiblock_csf(path: Path) -> None:
@@ -29,7 +30,7 @@ def _write_multiblock_csf(path: Path) -> None:
 
 
 def test_read_csfs_runtime_return_annotation_resolves() -> None:
-    assert get_type_hints(read_csfs)["return"] is pl.DataFrame
+    assert get_type_hints(read_csfs)["return"] == tuple[CsfHeaderData, pl.DataFrame]
 
 
 def test_read_csfs_returns_polars_dataframe_and_skips_block_separators(
@@ -38,8 +39,19 @@ def test_read_csfs_returns_polars_dataframe_and_skips_block_separators(
     input_path = tmp_path / "multiblock.csf"
     _write_multiblock_csf(input_path)
 
-    frame = read_csfs(input_path, num_workers=2)
+    header, frame = read_csfs(input_path, num_workers=2)
 
+    assert header == {
+        "header_info": {
+            "header_lines": ["Header 1", "Header 2", "Header 3", "Header 4", "Header 5"]
+        },
+        "block_info": {"block_lengths": [1, 2], "block_count": 2},
+        "conversion_stats": {
+            "csf_count": 3,
+            "total_lines": 10,
+            "truncated_count": 0,
+        },
+    }
     assert isinstance(frame, pl.DataFrame)
     assert frame.schema == {
         "idx": pl.UInt64,
@@ -59,11 +71,30 @@ def test_read_csfs_can_include_zero_based_block_id(tmp_path: Path) -> None:
     input_path = tmp_path / "multiblock.csf"
     _write_multiblock_csf(input_path)
 
-    frame = read_csfs(input_path, include_block_id=True, num_workers=2)
+    _, frame = read_csfs(input_path, include_block_id=True, num_workers=2)
 
     assert frame.columns == ["idx", "block_id", "line1", "line2", "line3"]
     assert frame["block_id"].dtype == pl.UInt32
     assert frame["block_id"].to_list() == [0, 1, 1]
+
+
+def test_read_csfs_header_matches_convert_csfs_toml(tmp_path: Path) -> None:
+    input_path = tmp_path / "multiblock.csf"
+    output_path = tmp_path / "multiblock.parquet"
+    _write_multiblock_csf(input_path)
+
+    header, _ = read_csfs(input_path, max_line_len=6, num_workers=2)
+    stats = convert_csfs(
+        input_path,
+        output_path,
+        max_line_len=6,
+        chunk_size=4,
+        num_workers=2,
+    )
+
+    assert stats["success"] is True
+    sidecar = tomllib.loads(Path(stats["header_file"]).read_text(encoding="utf-8"))
+    assert header == sidecar
 
 
 @pytest.mark.parametrize(
@@ -97,7 +128,7 @@ def test_read_csfs_ignores_incomplete_final_csf(tmp_path: Path) -> None:
         encoding="ascii",
     )
 
-    frame = read_csfs(input_path)
+    _, frame = read_csfs(input_path)
 
     assert frame.height == 1
     assert frame["line1"].to_list() == ["config-a"]

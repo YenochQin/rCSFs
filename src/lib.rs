@@ -26,7 +26,7 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-/// Read a CSF file into an Arrow C Stream for zero-copy import by Polars.
+/// Read CSF header metadata and data rows for zero-copy import by Polars.
 #[pyfunction]
 #[pyo3(signature = (
     input_path,
@@ -40,7 +40,7 @@ fn read_csfs_arrow(
     max_line_len: Option<usize>,
     num_workers: Option<usize>,
     include_block_id: bool,
-) -> PyResult<PyRecordBatchReader> {
+) -> PyResult<(Py<PyAny>, PyRecordBatchReader)> {
     let max_line_len = max_line_len.unwrap_or(256);
     if max_line_len == 0 {
         return Err(PyValueError::new_err("max_line_len must be greater than 0"));
@@ -49,7 +49,7 @@ fn read_csfs_arrow(
         return Err(PyValueError::new_err("num_workers must be greater than 0"));
     }
 
-    let batch = py
+    let (header_data, batch) = py
         .detach(|| {
             csfs_memory::read_csfs_to_record_batch(
                 Path::new(&input_path),
@@ -59,9 +59,27 @@ fn read_csfs_arrow(
             )
         })
         .map_err(|error| PyIOError::new_err(error.to_string()))?;
+
+    let header_info = PyDict::new(py);
+    header_info.set_item("header_lines", &header_data.header_info.header_lines)?;
+    let block_info = PyDict::new(py);
+    block_info.set_item("block_lengths", &header_data.block_info.block_lengths)?;
+    block_info.set_item("block_count", header_data.block_info.block_count)?;
+    let conversion_stats = PyDict::new(py);
+    conversion_stats.set_item("csf_count", header_data.conversion_stats.csf_count)?;
+    conversion_stats.set_item("total_lines", header_data.conversion_stats.total_lines)?;
+    conversion_stats.set_item(
+        "truncated_count",
+        header_data.conversion_stats.truncated_count,
+    )?;
+    let header = PyDict::new(py);
+    header.set_item("header_info", header_info)?;
+    header.set_item("block_info", block_info)?;
+    header.set_item("conversion_stats", conversion_stats)?;
+
     let schema = batch.schema();
     let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
-    Ok(PyRecordBatchReader::new(Box::new(reader)))
+    Ok((header.into(), PyRecordBatchReader::new(Box::new(reader))))
 }
 
 /// Get Parquet file basic information and metadata

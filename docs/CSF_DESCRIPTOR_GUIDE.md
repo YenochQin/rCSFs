@@ -33,6 +33,52 @@ descriptor = generator.parse_csf(line1, line2, line3)
 # Returns: [2.0, 0.0, 0.0, 4.0, 0.0, 0.0, 6.0, 3.0, 3.0, 2.0, 0.0, 0.0, 4.0, 0.0, 8.0, 2.0, 0.0, 8.0]
 ```
 
+## In-memory coupling signatures
+
+`rcsfs.read_csfs()` can annotate each raw CSF with the coupling values produced
+by the same fixed-width parser used for descriptors:
+
+```python
+from pathlib import Path
+
+import polars as pl
+from rcsfs import read_csfs
+
+header, frame = read_csfs(
+    Path("tests/fixtures/sample.csf"),
+    num_workers=8,
+    include_block_id=True,
+    include_coupling_signature=True,
+)
+
+coupling_level = 2
+summary = (
+    frame
+    .with_columns(
+        pl.col("coupling_signature")
+        .list.slice(-coupling_level)
+        .alias("selected_coupling")
+    )
+    .group_by(["block_id", "selected_coupling"], maintain_order=True)
+    .agg(
+        pl.len().alias("count"),
+        pl.col("idx").alias("global_idxs"),
+    )
+)
+```
+
+`coupling_signature` is a non-null `List(Int32)`. It contains `coupling_2J`
+for each occupied peel subshell in peel order, including a physically valid
+zero, and its final item is total `2J`. Unoccupied peel positions are omitted.
+Parity is not included, so compare signatures within `block_id`. The existing
+`idx` remains a global row index; derive a block-local index when a downstream
+workflow needs rmix-local positions.
+
+The option defaults to `False`, preserving the original schema and fast path.
+Enabling it adds parsing and list-column memory. Because truncation can remove
+fixed-width physics fields, calculation-quality callers should require
+`header["conversion_stats"]["truncated_count"] == 0`.
+
 ## API Reference
 
 ### `py_j_to_double_j(j_str: str) -> int`

@@ -78,6 +78,84 @@ def test_read_csfs_can_include_zero_based_block_id(tmp_path: Path) -> None:
     assert frame["block_id"].to_list() == [0, 1, 1]
 
 
+@pytest.mark.parametrize(
+    ("include_block_id", "include_coupling_signature", "expected_columns"),
+    [
+        (False, False, ["idx", "line1", "line2", "line3"]),
+        (True, False, ["idx", "block_id", "line1", "line2", "line3"]),
+        (
+            False,
+            True,
+            ["idx", "line1", "line2", "line3", "coupling_signature"],
+        ),
+        (
+            True,
+            True,
+            [
+                "idx",
+                "block_id",
+                "line1",
+                "line2",
+                "line3",
+                "coupling_signature",
+            ],
+        ),
+    ],
+)
+def test_read_csfs_option_combinations_preserve_column_order(
+    include_block_id: bool,
+    include_coupling_signature: bool,
+    expected_columns: list[str],
+) -> None:
+    input_path = Path(__file__).parent / "fixtures" / "sample.csf"
+
+    _, frame = read_csfs(
+        input_path,
+        num_workers=2,
+        include_block_id=include_block_id,
+        include_coupling_signature=include_coupling_signature,
+    )
+
+    assert frame.columns == expected_columns
+    if include_coupling_signature:
+        assert frame.schema["coupling_signature"] == pl.List(pl.Int32)
+
+
+def test_read_csfs_coupling_signatures_match_complex_fixture() -> None:
+    input_path = Path(__file__).parent / "fixtures" / "sample.csf"
+
+    header, frame = read_csfs(
+        input_path,
+        num_workers=2,
+        include_block_id=True,
+        include_coupling_signature=True,
+    )
+
+    signatures = frame["coupling_signature"]
+    assert frame.height == 28
+    assert frame["idx"].to_list() == list(range(28))
+    assert signatures.dtype == pl.List(pl.Int32)
+    assert signatures.null_count() == 0
+    assert all(signatures.list.len() > 0)
+    assert signatures.list.last().to_list() == [8] * 28
+    assert header["conversion_stats"]["truncated_count"] == 0
+
+    coupling_level = 2
+    summary = (
+        frame.with_columns(
+            pl.col("coupling_signature")
+            .list.slice(-coupling_level)
+            .alias("selected_coupling")
+        )
+        .group_by(["block_id", "selected_coupling"], maintain_order=True)
+        .agg(
+            pl.len().alias("count"),
+            pl.col("idx").alias("global_idxs"),
+        )
+    )
+    assert summary["count"].sum() == 28
+
+
 def test_read_csfs_header_matches_convert_csfs_toml(tmp_path: Path) -> None:
     input_path = tmp_path / "multiblock.csf"
     output_path = tmp_path / "multiblock.parquet"

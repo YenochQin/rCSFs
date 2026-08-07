@@ -1,4 +1,6 @@
-use arrow::array::{ArrayRef, StringBuilder, UInt32Builder, UInt64Builder};
+use arrow::array::{
+    ArrayRef, Int32Builder, ListBuilder, StringBuilder, UInt32Builder, UInt64Builder,
+};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use rayon::prelude::*;
@@ -8,6 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::csfs_conversion::{BlockInfo, ConversionStats, HeaderData, HeaderInfo};
+use crate::csfs_descriptor::{CSFDescriptorGenerator, parse_peel_subshells_from_header_lines};
 
 const CSF_HEADER_LINE_COUNT: usize = 5;
 
@@ -46,6 +49,7 @@ pub fn read_csfs_to_record_batch(
     max_line_len: usize,
     num_workers: Option<usize>,
     include_block_id: bool,
+    include_coupling_signature: bool,
 ) -> Result<(HeaderData, RecordBatch), Box<dyn std::error::Error + Send + Sync>> {
     if max_line_len == 0 {
         return Err(IoError::new(
@@ -112,20 +116,58 @@ pub fn read_csfs_to_record_batch(
 
     header_lines.resize(CSF_HEADER_LINE_COUNT, String::new());
 
+    let signature_generator = include_coupling_signature
+        .then(|| {
+            parse_peel_subshells_from_header_lines(&header_lines)
+                .map(CSFDescriptorGenerator::new)
+                .map_err(|error| IoError::new(ErrorKind::InvalidData, error.to_string()))
+        })
+        .transpose()?;
+
     // Match the established conversion behavior: ignore an incomplete final CSF.
     let incomplete_line_count = current_block_line_count % 3;
     if incomplete_line_count != 0 {
         data_lines.truncate(data_lines.len() - incomplete_line_count);
     }
 
-    let process = || {
-        data_lines
+    let process = || -> Result<(Vec<DataLine>, Option<Vec<Vec<i32>>>), IoError> {
+        let rows = data_lines
             .into_par_iter()
             .map(|line| process_data_line_owned(line, max_line_len))
-            .collect::<Result<Vec<_>, IoError>>()
+            .collect::<Result<Vec<_>, IoError>>()?;
+        let signatures = signature_generator
+            .as_ref()
+            .map(|generator| {
+                rows.par_chunks_exact(3)
+                    .map_init(
+                        || {
+                            (
+                                vec![0i32; generator.orbital_count() * 3],
+                                Vec::with_capacity(generator.orbital_count()),
+                            )
+                        },
+                        |(descriptor, signature), lines| {
+                            generator
+                                .parse_coupling_signature_into(
+                                    &lines[0].value,
+                                    &lines[1].value,
+                                    &lines[2].value,
+                                    descriptor,
+                                    signature,
+                                )
+                                .map_err(|error| {
+                                    IoError::new(ErrorKind::InvalidData, error.to_string())
+                                })?;
+                            Ok(signature.clone())
+                        },
+                    )
+                    .collect::<Result<Vec<_>, IoError>>()
+            })
+            .transpose()?;
+        Ok((rows, signatures))
     };
 
-    let rows = match num_workers {
+    let (rows, signatures) = match num_workers {
         Some(worker_count) => rayon::ThreadPoolBuilder::new()
             .num_threads(worker_count)
             .build()?
@@ -168,6 +210,14 @@ pub fn read_csfs_to_record_batch(
     let mut line1_builder = StringBuilder::with_capacity(row_count, line1_bytes);
     let mut line2_builder = StringBuilder::with_capacity(row_count, line2_bytes);
     let mut line3_builder = StringBuilder::with_capacity(row_count, line3_bytes);
+    let mut coupling_signature_builder = signatures.as_ref().map(|signatures| {
+        let value_count = signatures.iter().map(Vec::len).sum();
+        let item_field = Arc::new(Field::new("item", DataType::Int32, false));
+        let builder =
+            ListBuilder::with_capacity(Int32Builder::with_capacity(value_count), row_count)
+                .with_field(item_field.clone());
+        (builder, item_field)
+    });
 
     for (idx, lines) in rows.chunks_exact(3).enumerate() {
         debug_assert_eq!(lines[0].block_id, lines[1].block_id);
@@ -179,6 +229,12 @@ pub fn read_csfs_to_record_batch(
         line1_builder.append_value(&lines[0].value);
         line2_builder.append_value(&lines[1].value);
         line3_builder.append_value(&lines[2].value);
+        if let (Some((builder, _)), Some(signatures)) =
+            (&mut coupling_signature_builder, &signatures)
+        {
+            builder.values().append_slice(&signatures[idx]);
+            builder.append(true);
+        }
     }
 
     let mut fields = vec![Field::new("idx", DataType::UInt64, false)];
@@ -197,6 +253,14 @@ pub fn read_csfs_to_record_batch(
         Arc::new(line2_builder.finish()) as ArrayRef,
         Arc::new(line3_builder.finish()) as ArrayRef,
     ]);
+    if let Some((mut builder, item_field)) = coupling_signature_builder {
+        fields.push(Field::new(
+            "coupling_signature",
+            DataType::List(item_field),
+            false,
+        ));
+        columns.push(Arc::new(builder.finish()));
+    }
 
     let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)?;
     Ok((header_data, batch))

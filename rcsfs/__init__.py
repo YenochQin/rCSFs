@@ -98,21 +98,28 @@ def read_csfs(
     num_workers: int | None = None,
     *,
     include_block_id: bool = False,
+    include_coupling_signature: bool = False,
 ) -> tuple[CsfHeaderData, DataFrame]:
     """Read CSF header metadata and data rows directly into memory.
 
     The first five header lines and ``*`` block separators are omitted. Set
     ``include_block_id=True`` to add the zero-based block identifier as a
-    ``UInt32`` column. Arrow buffers produced by Rust are transferred to Polars
-    through the Arrow C Stream interface without a Parquet round trip. The
-    returned header dictionary has the same schema as the TOML sidecar written
-    by :func:`convert_csfs`.
+    ``UInt32`` column. Set ``include_coupling_signature=True`` to append a
+    non-null ``List(Int32)`` column containing coupling ``2J`` values for
+    occupied peel subshells, in peel order; its final item is total ``2J``.
+    Parity is not encoded, so compare signatures within ``block_id``. This
+    option adds parsing and memory cost. Arrow buffers produced by Rust are
+    transferred to Polars through the Arrow C Stream interface without a
+    Parquet round trip. The returned header dictionary has the same schema as
+    the TOML sidecar written by :func:`convert_csfs`. For calculation-quality
+    input, require ``header["conversion_stats"]["truncated_count"] == 0``.
     """
     header, arrow_stream = _read_csfs_arrow(
         input_path=str(input_path),
         max_line_len=max_line_len,
         num_workers=num_workers,
         include_block_id=include_block_id,
+        include_coupling_signature=include_coupling_signature,
     )
     return header, DataFrame(arrow_stream)
 

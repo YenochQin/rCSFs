@@ -59,8 +59,13 @@ include = ["rcsfs"]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
 
-reportMissingImports = "error"
-reportMissingTypeStubs = false
+# reportMissingImports = "error"
+# reportMissingTypeStubs = false
+reportAny = "error"
+reportInvalidCast = "error"
+reportUninitializedInstanceVariable = "error"
+reportUnusedCallResult = "error"
+reportUnreachable = "error"
 
 [[tool.uv.index]]
 name = "tuna"

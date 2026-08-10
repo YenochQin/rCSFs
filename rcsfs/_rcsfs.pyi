@@ -23,6 +23,7 @@ def read_csfs_arrow(
     num_workers: int | None = None,
     include_block_id: bool = False,
     include_coupling_signature: bool = False,
+    strict: bool = True,
 ) -> tuple[CsfHeaderData, ArrowRecordBatchReader]: ...
 def convert_csfs(
     input_path: str,

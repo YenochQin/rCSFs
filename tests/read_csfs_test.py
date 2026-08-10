@@ -197,7 +197,7 @@ def test_read_csfs_rejects_separator_inside_incomplete_csf(tmp_path: Path) -> No
         read_csfs(input_path)
 
 
-def test_read_csfs_ignores_incomplete_final_csf(tmp_path: Path) -> None:
+def test_read_csfs_rejects_incomplete_final_csf_by_default(tmp_path: Path) -> None:
     input_path = tmp_path / "incomplete-final.csf"
     input_path.write_text(
         "h1\nh2\nh3\nh4\nh5\n"
@@ -206,7 +206,22 @@ def test_read_csfs_ignores_incomplete_final_csf(tmp_path: Path) -> None:
         encoding="ascii",
     )
 
-    _, frame = read_csfs(input_path)
+    with pytest.raises(OSError, match="final CSF block.*not a multiple of 3"):
+        read_csfs(input_path)
+
+
+def test_read_csfs_can_ignore_incomplete_final_csf_when_not_strict(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "incomplete-final.csf"
+    input_path.write_text(
+        "h1\nh2\nh3\nh4\nh5\n"
+        "config-a\nmiddle-a\nfinal-a\n"
+        "config-incomplete\nmiddle-incomplete\n",
+        encoding="ascii",
+    )
+
+    _, frame = read_csfs(input_path, strict=False)
 
     assert frame.height == 1
     assert frame["line1"].to_list() == ["config-a"]

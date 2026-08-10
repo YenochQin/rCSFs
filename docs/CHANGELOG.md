@@ -8,6 +8,8 @@
 
 ### ✨ 新功能
 
+- `read_csfs()` 新增 `strict=True`；默认拒绝末尾不足三行的 CSF，显式设置
+  `strict=False` 时才沿用丢弃不完整末尾记录的转换行为。
 - `read_csfs()` 新增可选的 `include_coupling_signature=True`，通过 descriptor
   共用的定宽解析器追加非空 `List(Int32)` 列；列表按已占据 peel subshell 顺序
   保存 coupling `2J`，末项为总 `2J`，并可直接在 Polars 中切片和分组。

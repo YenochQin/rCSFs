@@ -50,6 +50,7 @@ pub fn read_csfs_to_record_batch(
     num_workers: Option<usize>,
     include_block_id: bool,
     include_coupling_signature: bool,
+    strict: bool,
 ) -> Result<(HeaderData, RecordBatch), Box<dyn std::error::Error + Send + Sync>> {
     if max_line_len == 0 {
         return Err(IoError::new(
@@ -124,9 +125,17 @@ pub fn read_csfs_to_record_batch(
         })
         .transpose()?;
 
-    // Match the established conversion behavior: ignore an incomplete final CSF.
     let incomplete_line_count = current_block_line_count % 3;
     if incomplete_line_count != 0 {
+        if strict {
+            return Err(IoError::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "final CSF block has {current_block_line_count} data lines, not a multiple of 3"
+                ),
+            )
+            .into());
+        }
         data_lines.truncate(data_lines.len() - incomplete_line_count);
     }
 

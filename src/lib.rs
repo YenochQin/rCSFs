@@ -33,7 +33,8 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     max_line_len=None,
     num_workers=None,
     include_block_id=false,
-    include_coupling_signature=false
+    include_coupling_signature=false,
+    strict=true
 ))]
 fn read_csfs_arrow(
     py: Python,
@@ -42,6 +43,7 @@ fn read_csfs_arrow(
     num_workers: Option<usize>,
     include_block_id: bool,
     include_coupling_signature: bool,
+    strict: bool,
 ) -> PyResult<(Py<PyAny>, PyRecordBatchReader)> {
     let max_line_len = max_line_len.unwrap_or(256);
     if max_line_len == 0 {
@@ -59,6 +61,7 @@ fn read_csfs_arrow(
                 num_workers,
                 include_block_id,
                 include_coupling_signature,
+                strict,
             )
         })
         .map_err(|error| PyIOError::new_err(error.to_string()))?;

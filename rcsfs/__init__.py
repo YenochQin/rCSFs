@@ -99,6 +99,7 @@ def read_csfs(
     *,
     include_block_id: bool = False,
     include_coupling_signature: bool = False,
+    strict: bool = True,
 ) -> tuple[CsfHeaderData, DataFrame]:
     """Read CSF header metadata and data rows directly into memory.
 
@@ -108,7 +109,9 @@ def read_csfs(
     non-null ``List(Int32)`` column containing coupling ``2J`` values for
     occupied peel subshells, in peel order; its final item is total ``2J``.
     Parity is not encoded, so compare signatures within ``block_id``. This
-    option adds parsing and memory cost. Arrow buffers produced by Rust are
+    option adds parsing and memory cost. With ``strict=True`` (the default), an
+    incomplete final three-line CSF is rejected instead of silently dropped.
+    Arrow buffers produced by Rust are
     transferred to Polars through the Arrow C Stream interface without a
     Parquet round trip. The returned header dictionary has the same schema as
     the TOML sidecar written by :func:`convert_csfs`. For calculation-quality
@@ -120,6 +123,7 @@ def read_csfs(
         num_workers=num_workers,
         include_block_id=include_block_id,
         include_coupling_signature=include_coupling_signature,
+        strict=strict,
     )
     return header, DataFrame(arrow_stream)
 

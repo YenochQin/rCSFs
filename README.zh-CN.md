@@ -227,7 +227,7 @@ info = get_parquet_info("output.parquet")
 
 | 函数 | 说明 |
 | --- | --- |
-| `read_csfs(input_path, max_line_len=256, num_workers=None, include_block_id=False)` | 无需中间 Parquet，直接返回 `(header, dataframe)`；`header` 与转换生成的 TOML 结构一致，跳过 `*` 分隔行，并可通过 `block_id` 保留 block 归属 |
+| `read_csfs(input_path, max_line_len=256, num_workers=None, *, include_block_id=False, include_coupling_signature=False, strict=True)` | 无需中间 Parquet，直接返回 `(header, dataframe)`；可选列保留 block 归属和定宽 coupling signature，严格模式会拒绝末尾不完整的 CSF |
 | `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | 将 CSF 文本转换为 Parquet |
 | `get_parquet_info(input_path)` | 读取 Parquet 元数据 |
 | `read_peel_subshells(header_path)` | 从头文件 TOML 中提取 peel subshells |

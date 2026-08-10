@@ -227,7 +227,7 @@ Returned metadata includes:
 
 | Function | Description |
 | --- | --- |
-| `read_csfs(input_path, max_line_len=256, num_workers=None, include_block_id=False)` | Return `(header, dataframe)` without a Parquet round trip; `header` matches the conversion TOML schema, `*` separators are skipped, and optional `block_id` preserves block membership |
+| `read_csfs(input_path, max_line_len=256, num_workers=None, *, include_block_id=False, include_coupling_signature=False, strict=True)` | Return `(header, dataframe)` without a Parquet round trip; optional columns preserve block membership and fixed-width coupling signatures, while strict mode rejects incomplete final CSFs |
 | `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | Convert CSF text to Parquet |
 | `get_parquet_info(input_path)` | Inspect Parquet metadata |
 | `read_peel_subshells(header_path)` | Read peel subshells from header TOML |

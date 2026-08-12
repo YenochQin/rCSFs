@@ -26,7 +26,6 @@ classifiers = [
 ]
 dynamic = ["license", "readme", "version"]
 dependencies = [
-    "maturin>=1.7.8",
     "polars>=1.36.1",
 ]
 
@@ -35,6 +34,7 @@ rcsfs = "rcsfs.cli:main"
 
 [dependency-groups]
 dev = [
+    "maturin>=1.14,<2.0",
     "pytest>=9.0.2",
     "pytest-pretty>=1.2.0",
     "pytest-speed>=0.3.5",

@@ -167,10 +167,8 @@ impl CsfRowStream {
     ) -> Result<Vec<CsfRow>, Box<dyn std::error::Error + Send + Sync>> {
         let mut out: Vec<CsfRow> = Vec::with_capacity(max.min(FULL_BLOCK_BATCH_ROWS));
         while out.len() < max {
-            if self.pending.is_empty() {
-                if !self.refill()? {
-                    break;
-                }
+            if self.pending.is_empty() && !self.refill()? {
+                break;
             }
             let need = max - out.len();
             let take = need.min(self.pending.len());

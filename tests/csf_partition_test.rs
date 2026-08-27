@@ -52,7 +52,7 @@ fn build_csf_text(blocks: &[Vec<&str>]) -> String {
             s.push('\n');
         }
         if bi + 1 < blocks.len() {
-            s.push_str(" ");
+            s.push(' ');
             s.push_str(BLOCK_SEP);
             s.push('\n');
         }

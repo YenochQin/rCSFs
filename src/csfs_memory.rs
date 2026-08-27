@@ -22,6 +22,9 @@ struct DataLine {
     truncated: bool,
 }
 
+type CouplingSignatures = Vec<Vec<i32>>;
+type ProcessResult = (Vec<DataLine>, Option<CouplingSignatures>);
+
 fn process_data_line_owned(mut line: DataLine, max_line_len: usize) -> Result<DataLine, IoError> {
     if !line.value.is_ascii() {
         return Err(IoError::new(
@@ -139,7 +142,7 @@ pub fn read_csfs_to_record_batch(
         data_lines.truncate(data_lines.len() - incomplete_line_count);
     }
 
-    let process = || -> Result<(Vec<DataLine>, Option<Vec<Vec<i32>>>), IoError> {
+    let process = || -> Result<ProcessResult, IoError> {
         let rows = data_lines
             .into_par_iter()
             .map(|line| process_data_line_owned(line, max_line_len))

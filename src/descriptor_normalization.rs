@@ -329,7 +329,9 @@ pub fn normalize_descriptor_per_csf(
 /// must be ignored when recovering `2J_target`.
 pub fn infer_two_j_target(descriptor: &[i32]) -> i32 {
     descriptor
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .rev()
         .find(|chunk| chunk[0] > 0)
         .map(|chunk| chunk[2])

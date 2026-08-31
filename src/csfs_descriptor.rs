@@ -1322,7 +1322,9 @@ pub(crate) fn coupling_signature_from_descriptor_into(
     signature.clear();
     signature.extend(
         descriptor
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .filter(|triplet| triplet[0] > 0)
             .map(|triplet| triplet[2]),
     );

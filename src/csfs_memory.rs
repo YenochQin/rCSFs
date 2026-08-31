@@ -231,7 +231,7 @@ pub fn read_csfs_to_record_batch(
         (builder, item_field)
     });
 
-    for (idx, lines) in rows.chunks_exact(3).enumerate() {
+    for (idx, lines) in rows.as_chunks::<3>().0.iter().enumerate() {
         debug_assert_eq!(lines[0].block_id, lines[1].block_id);
         debug_assert_eq!(lines[1].block_id, lines[2].block_id);
         idx_builder.append_value(idx as u64);

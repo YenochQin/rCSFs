@@ -3,6 +3,17 @@
 //! The ML descriptor intentionally discards some state information. This module
 //! keeps every integer needed to reproduce the three fixed-width CSF lines,
 //! including optional seniority labels and sparse intermediate couplings.
+//!
+//! Parsing accepts only the spellings the GRASP writers emit, so parsing and
+//! formatting are mutually inverse and a successful round-trip is
+//! byte-identical. Anything a writer would re-emit differently — a separator
+//! other than `" *"`, an empty symmetry block, a misplaced seniority digit, a
+//! sign-prefixed or unreduced J value — is an error rather than a silent
+//! rewrite.
+//!
+//! Note that [`CompleteCsfFile::couplings`] is sparse: `kopp2.f90` suppresses
+//! leading intermediate couplings, so consumers needing a dense chain must
+//! reconstruct the suppressed prefix themselves.
 
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::HashMap;
@@ -13,6 +24,16 @@ use std::path::Path;
 
 const HEADER_LINE_COUNT: usize = 5;
 const FIELD_WIDTH: usize = 9;
+
+/// The only separator `rcsfblock.f90` writes between symmetry blocks.
+const BLOCK_SEPARATOR: &str = " *";
+
+/// Fixed header labels written by `fivefirst.f90`, keyed by header line index.
+const HEADER_LABELS: [(usize, &str); 3] = [
+    (0, "Core subshells:"),
+    (2, "Peel subshells:"),
+    (4, "CSF(s):"),
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Parity {
@@ -51,6 +72,10 @@ pub struct OccupiedSubshell {
 }
 
 /// An explicitly printed intermediate coupling at a GRASP field boundary.
+///
+/// These are stored sparsely: `kopp2.f90` prints a boundary only once its
+/// `first` flag clears, so most interior boundaries carry no value and must be
+/// looked up through [`Self::boundary`] rather than by position.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IntermediateCoupling {
     /// Zero-based 9-character field boundary. The first printable boundary is 2.
@@ -108,6 +133,7 @@ impl CompleteCsfFile {
         let header_lines: [String; HEADER_LINE_COUNT] = header
             .try_into()
             .expect("exactly five header lines were collected");
+        validate_header_labels(&header_lines)?;
         let subshells = parse_peel_subshells(&header_lines[3])?;
         let subshell_index = subshells
             .iter()
@@ -129,19 +155,31 @@ impl CompleteCsfFile {
             let line_number = line_index + 1;
             let line = line.with_context(|| format!("failed to read line {line_number}"))?;
             ensure_ascii(&line, line_number)?;
-            if line.trim() == "*" {
+            if line == BLOCK_SEPARATOR {
                 ensure!(
                     data_lines.is_empty(),
                     "block separator at line {line_number} interrupts a CSF record"
                 );
+                ensure!(
+                    block_start < records.len(),
+                    "block separator at line {line_number} closes an empty symmetry block"
+                );
                 finish_block(&records, &mut blocks, &mut block_start)?;
                 continue;
             }
+            ensure!(
+                line.trim() != "*",
+                "line {line_number}: block separator must be exactly {BLOCK_SEPARATOR:?}, found {line:?}"
+            );
 
             data_lines.push((line_number, line));
             if data_lines.len() == 3 {
+                let record_lines: &[(usize, String); 3] = data_lines
+                    .as_slice()
+                    .try_into()
+                    .expect("exactly three record lines were collected");
                 let record = parse_record(
-                    &data_lines,
+                    record_lines,
                     &subshell_index,
                     &mut occupied_subshells,
                     &mut intermediate_couplings,
@@ -156,6 +194,7 @@ impl CompleteCsfFile {
             "final CSF record has {} of 3 lines",
             data_lines.len()
         );
+        ensure!(!records.is_empty(), "CSF file contains no CSF records");
         finish_block(&records, &mut blocks, &mut block_start)?;
 
         Ok(Self {
@@ -182,7 +221,7 @@ impl CompleteCsfFile {
         }
         for (block_index, block) in self.blocks.iter().enumerate() {
             if block_index > 0 {
-                writeln!(writer, " *")?;
+                writeln!(writer, "{BLOCK_SEPARATOR}")?;
             }
             let start = usize::try_from(block.record_start)?;
             let len = usize::try_from(block.record_len)?;
@@ -225,6 +264,10 @@ impl CompleteCsfFile {
         )
     }
 
+    /// The intermediate couplings GRASP printed for this record.
+    ///
+    /// Sparse — see [`IntermediateCoupling`]. The length is unrelated to
+    /// `occupied(record).len() - 2`.
     pub fn couplings(&self, record: &CsfRecord) -> Result<&[IntermediateCoupling]> {
         checked_slice(
             &self.intermediate_couplings,
@@ -312,6 +355,10 @@ impl CompleteCsfFile {
                 block.record_start == expected_start,
                 "non-contiguous symmetry block layout"
             );
+            ensure!(
+                block.record_len > 0,
+                "empty symmetry block at record {expected_start}"
+            );
             let end = block
                 .record_start
                 .checked_add(block.record_len)
@@ -338,7 +385,7 @@ impl CompleteCsfFile {
 }
 
 fn parse_record(
-    lines: &[(usize, String)],
+    lines: &[(usize, String); 3],
     subshell_index: &HashMap<&str, u16>,
     occupied_arena: &mut Vec<OccupiedSubshell>,
     coupling_arena: &mut Vec<IntermediateCoupling>,
@@ -428,6 +475,18 @@ fn parse_record(
     })
 }
 
+fn validate_header_labels(header_lines: &[String; HEADER_LINE_COUNT]) -> Result<()> {
+    for (index, label) in HEADER_LABELS {
+        ensure!(
+            header_lines[index].trim_end() == label,
+            "line {}: expected CSF header label {label:?}, found {:?}",
+            index + 1,
+            header_lines[index]
+        );
+    }
+    Ok(())
+}
+
 fn parse_peel_subshells(line: &str) -> Result<Vec<String>> {
     let subshells = line
         .split_ascii_whitespace()
@@ -452,22 +511,34 @@ fn parse_peel_subshells(line: &str) -> Result<Vec<String>> {
     Ok(subshells)
 }
 
+/// Parse one 9-character state field.
+///
+/// `kopp1` writes seniority at field offsets 3 and 4 (`"s;"`) and right-aligns
+/// the J value at offset 8, so those exact columns are required here. A
+/// differently padded field would parse but be re-emitted in the canonical
+/// columns, silently breaking a byte-identical round-trip.
 fn parse_state_field(field: &str) -> Result<Option<SubshellState>> {
-    let field = field.trim();
-    if field.is_empty() {
+    let trimmed = field.trim();
+    if trimmed.is_empty() {
         return Ok(None);
     }
-    let (seniority, j_value) = match field.split_once(';') {
-        Some((seniority, j_value)) => (
-            Some(
-                seniority
-                    .trim()
-                    .parse::<u8>()
-                    .with_context(|| format!("invalid seniority {seniority:?}"))?,
-            ),
-            j_value,
-        ),
-        None => (None, field),
+    let (seniority, j_value) = match trimmed.split_once(';') {
+        Some((seniority, j_value)) => {
+            ensure!(
+                field.len() == FIELD_WIDTH
+                    && field.as_bytes()[3].is_ascii_digit()
+                    && field.as_bytes()[4] == b';',
+                "seniority must occupy field offsets 3 and 4 as a single digit followed by ';'"
+            );
+            let seniority = parse_decimal(seniority.trim())
+                .with_context(|| format!("invalid seniority {seniority:?}"))?;
+            let seniority = u8::try_from(seniority)
+                .ok()
+                .filter(|value| *value <= 9)
+                .context("seniority exceeds one GRASP output digit")?;
+            (Some(seniority), j_value)
+        }
+        None => (None, trimmed),
     };
     Ok(Some(SubshellState {
         two_j: parse_two_j(j_value.trim())?,
@@ -482,18 +553,41 @@ fn fixed_width_field(line: &str, start: usize, width: usize) -> &str {
     &line[start..start.saturating_add(width).min(line.len())]
 }
 
+/// Parse a GRASP J field into 2J.
+///
+/// Only the two spellings `kopp1`/`kopp2` actually emit are accepted: bare
+/// decimal digits for integer J, and an odd numerator over `/2` for
+/// half-integer J. Sign prefixes and unreduced forms such as `"8/2"` are
+/// rejected so that parsing and [`format_two_j`] stay mutually inverse — a
+/// silently rewritten field would otherwise break byte-identical round-trips.
 fn parse_two_j(value: &str) -> Result<u16> {
     if let Some((numerator, denominator)) = value.split_once('/') {
         ensure!(denominator == "2", "unsupported J denominator in {value:?}");
-        return numerator
-            .parse::<u16>()
-            .with_context(|| format!("invalid half-integer J {value:?}"));
+        let two_j = parse_decimal(numerator)
+            .with_context(|| format!("invalid half-integer J {value:?}"))?;
+        ensure!(
+            !two_j.is_multiple_of(2),
+            "half-integer J {value:?} is unreduced; write integer J as {}",
+            two_j / 2
+        );
+        return Ok(two_j);
     }
-    value
-        .parse::<u16>()
+    parse_decimal(value)
         .with_context(|| format!("invalid integer J {value:?}"))?
         .checked_mul(2)
         .with_context(|| format!("2J overflow for {value:?}"))
+}
+
+/// Parse ASCII decimal digits only, rejecting the sign prefixes that
+/// `u16::from_str` would otherwise accept.
+fn parse_decimal(value: &str) -> Result<u16> {
+    ensure!(
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()),
+        "{value:?} is not a bare decimal number"
+    );
+    value
+        .parse::<u16>()
+        .with_context(|| format!("{value:?} exceeds the supported range"))
 }
 
 fn format_two_j(two_j: u16) -> String {
@@ -538,9 +632,10 @@ fn finish_block(
     blocks: &mut Vec<SymmetryBlock>,
     block_start: &mut usize,
 ) -> Result<()> {
-    if *block_start == records.len() {
-        return Ok(());
-    }
+    ensure!(
+        *block_start < records.len(),
+        "cannot close an empty symmetry block"
+    );
     let first = records[*block_start];
     for record in &records[*block_start..] {
         ensure!(
@@ -634,5 +729,100 @@ mod tests {
         let input = CSF.replacen("4f-( 3)", "5g-( 3)", 1);
         let error = CompleteCsfFile::parse_reader(Cursor::new(input)).unwrap_err();
         assert!(error.to_string().contains("absent from peel subshells"));
+    }
+
+    #[test]
+    fn rejects_separator_without_grasp_leading_space() {
+        let input = CSF.replacen(" *", "*", 1);
+        let error = CompleteCsfFile::parse_reader(Cursor::new(input)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("block separator must be exactly")
+        );
+    }
+
+    #[test]
+    fn rejects_empty_symmetry_block() {
+        let input = CSF.replacen(" *\n", " *\n *\n", 1);
+        let error = CompleteCsfFile::parse_reader(Cursor::new(input)).unwrap_err();
+        assert!(error.to_string().contains("empty symmetry block"));
+    }
+
+    #[test]
+    fn rejects_trailing_separator() {
+        let input = format!("{CSF} *\n");
+        let error = CompleteCsfFile::parse_reader(Cursor::new(input)).unwrap_err();
+        assert!(error.to_string().contains("empty symmetry block"));
+    }
+
+    #[test]
+    fn rejects_unexpected_header_label() {
+        let input = CSF.replacen("Peel subshells:", "Peel subshell:", 1);
+        let error = CompleteCsfFile::parse_reader(Cursor::new(input)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("expected CSF header label \"Peel subshells:\"")
+        );
+    }
+
+    #[test]
+    fn rejects_file_without_records() {
+        let header = CSF
+            .split_inclusive('\n')
+            .take(HEADER_LINE_COUNT)
+            .collect::<String>();
+        let error = CompleteCsfFile::parse_reader(Cursor::new(header)).unwrap_err();
+        assert!(error.to_string().contains("contains no CSF records"));
+    }
+
+    /// Replace one 1-based line of `CSF`, so tests never depend on hand-counted
+    /// padding in the fixed-width literal above.
+    fn with_line(line_number: usize, replacement: &str) -> String {
+        let mut lines = CSF.lines().map(str::to_owned).collect::<Vec<_>>();
+        lines[line_number - 1] = replacement.to_owned();
+        lines
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect::<String>()
+    }
+
+    /// `kopp2` never writes an even numerator over `/2`; accepting it would
+    /// silently rewrite the field to reduced form on output.
+    #[test]
+    fn rejects_unreduced_half_integer_j() {
+        let input = with_line(8, "                  8/2      4-");
+        let error = CompleteCsfFile::parse_reader(Cursor::new(input)).unwrap_err();
+        assert!(format!("{error:#}").contains("is unreduced"));
+    }
+
+    /// `u16::from_str` accepts a leading `+`, but no GRASP writer emits one.
+    #[test]
+    fn rejects_sign_prefixed_j() {
+        let input = with_line(8, "                  7/2     +4-");
+        let error = CompleteCsfFile::parse_reader(Cursor::new(input)).unwrap_err();
+        assert!(format!("{error:#}").contains("not a bare decimal number"));
+    }
+
+    /// `kopp1` fixes the seniority separator at field offset 4.
+    #[test]
+    fn rejects_misaligned_seniority_separator() {
+        let input = with_line(7, "      3/2  4 ;   4      3/2");
+        let error = CompleteCsfFile::parse_reader(Cursor::new(input)).unwrap_err();
+        assert!(format!("{error:#}").contains("seniority must occupy field offsets 3 and 4"));
+    }
+
+    /// The suppression rule in `kopp2` leaves interior boundaries blank, so
+    /// `couplings()` is sparse and indexed by `boundary`, not dense.
+    #[test]
+    fn printed_couplings_are_sparse() {
+        let parsed = CompleteCsfFile::parse_reader(Cursor::new(CSF)).unwrap();
+        let record = &parsed.records[0];
+        let occupied = parsed.occupied(record).unwrap();
+        let couplings = parsed.couplings(record).unwrap();
+        assert_eq!(occupied.len(), 3);
+        assert_eq!(couplings.len(), 1);
+        assert_eq!(couplings[0].boundary, 2);
     }
 }

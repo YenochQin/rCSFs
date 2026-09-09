@@ -227,13 +227,14 @@ Returned metadata includes:
 
 The development API in `complete_csf` reads a complete GRASP CSF file into a
 compact in-memory integer representation. Unlike the ML descriptor, it keeps
-subshell occupations, explicitly printed zero states, seniority labels,
-intermediate couplings, total `2J`, parity, block boundaries, and record order.
+subshell occupations, explicitly printed zero states, seniority labels, the
+printed intermediate couplings, total `2J`, parity, block boundaries, and record
+order.
 
 Use the round-trip tool to validate a CSF file:
 
 ```bash
-uv run cargo run --example roundtrip_csf -- \
+uv run cargo run --release --example roundtrip_csf -- \
   /path/to/input.c \
   /path/to/output.c
 ```
@@ -278,6 +279,22 @@ fn main() -> anyhow::Result<()> {
 `allocated_bytes()` reports the heap capacity owned by the integer structure.
 It excludes allocator bookkeeping and temporary parser/formatter buffers, so
 it is not the process peak RSS.
+
+`couplings()` returns only the intermediate couplings GRASP actually prints, not
+a dense coupling chain. The `first` flag in `kopp2.f90` suppresses leading
+couplings, so the result is sparse and must be indexed through the `boundary`
+field — on `e1_cc1as1.c` only 670,869 of 1,524,176 interior boundaries are
+printed. Consumers that need a value at every boundary, such as the cumulative
+`2J` column of the ML descriptor, have to reconstruct the suppressed prefix
+themselves.
+
+Parsing is strict, and only the spellings the GRASP writers emit are accepted.
+The block separator must be exactly `" *"`, empty symmetry blocks are rejected,
+the three header labels are verified, seniority must occupy field offsets 3 and
+4, and J fields must be bare decimals in reduced form — `"+4"` and `"8/2"` are
+errors rather than fields that would be silently rewritten on output. This keeps
+parsing and formatting mutually inverse, so a successful round-trip is
+byte-identical.
 
 This is currently a Rust development API. It is the lossless data-model
 foundation for the planned Fortran-equivalent CSF generator; generation and

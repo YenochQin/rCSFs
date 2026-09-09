@@ -225,12 +225,12 @@ info = get_parquet_info("output.parquet")
 
 ### 5. 使用完整整数表示解析和还原 CSF
 
-开发中的 `complete_csf` API 可以将完整的 GRASP CSF 文件读入紧凑的内存整数结构。与机器学习描述符不同，该结构会保留子壳层占据、显式写出的零状态、seniority、中间耦合、总 `2J`、宇称、block 边界和 CSF 顺序。
+开发中的 `complete_csf` API 可以将完整的 GRASP CSF 文件读入紧凑的内存整数结构。与机器学习描述符不同，该结构会保留子壳层占据、显式写出的零状态、seniority、实际打印出的中间耦合、总 `2J`、宇称、block 边界和 CSF 顺序。
 
 可以用往返工具验证一个 CSF 文件：
 
 ```bash
-uv run cargo run --example roundtrip_csf -- \
+uv run cargo run --release --example roundtrip_csf -- \
   /path/to/input.c \
   /path/to/output.c
 ```
@@ -270,6 +270,10 @@ fn main() -> anyhow::Result<()> {
 ```
 
 `allocated_bytes()` 统计整数结构自身拥有的堆容量，不包含分配器元数据和解析、格式化时的临时缓冲，因此不等于进程峰值 RSS。
+
+`couplings()` 只返回 GRASP 实际打印出的中间耦合，不是完整的耦合链。`kopp2.f90` 中的 `first` 标志会抑制前导的耦合，因此返回结果是稀疏的，必须通过 `boundary` 字段索引 —— 在 `e1_cc1as1.c` 上，1,524,176 个内部耦合位中只有 670,869 个被打印。需要每个边界都有取值的消费方（例如机器学习描述符的累积 `2J` 列）必须自行重建被抑制的前缀。
+
+解析是严格的，只接受原版 GRASP 写出端实际产生的写法：block 分隔符必须恰好是 `" *"`，空 block 会被拒绝，三个表头标签会被校验，seniority 必须占据字段偏移 3 和 4，J 字段必须是约简形式的纯十进制数 —— `"+4"` 和 `"8/2"` 会报错，而不是在写出时被静默改写。这保证解析与格式化互为逆运算，因此往返成功即意味着逐字节一致。
 
 目前这是 Rust 开发接口，用作后续 Fortran 等价 CSF 生成器的无损数据模型基础。CSF 生成能力以及该表示的 Python 绑定尚未实现。
 

@@ -7,6 +7,7 @@ use std::path::Path;
 
 // Public modules for integration testing
 pub mod complete_csf;
+pub mod csf_generation;
 pub mod csf_partition;
 pub mod csfs_conversion;
 pub mod csfs_descriptor;

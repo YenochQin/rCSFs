@@ -234,6 +234,7 @@ impl CompleteCsfFile {
     }
 
     pub fn write_to(&self, mut writer: impl Write) -> Result<()> {
+        ensure!(!self.records.is_empty(), "cannot write an empty CSF list");
         self.validate_layout()?;
         for line in &self.header_lines {
             writeln!(writer, "{line}")?;
@@ -252,6 +253,48 @@ impl CompleteCsfFile {
             }
         }
         writer.flush()?;
+        Ok(())
+    }
+
+    /// Append directly from the generator's integer buffers, without text I/O.
+    pub(crate) fn append_generated_record(
+        &mut self,
+        occupied: &[OccupiedSubshell],
+        couplings: &[IntermediateCoupling],
+        total_two_j: u16,
+        parity: Parity,
+    ) -> Result<()> {
+        let record = CsfRecord {
+            occupied_start: u64::try_from(self.occupied_subshells.len())?,
+            occupied_len: u16::try_from(occupied.len())?,
+            coupling_start: u64::try_from(self.intermediate_couplings.len())?,
+            coupling_len: u16::try_from(couplings.len())?,
+            total_two_j,
+            parity,
+        };
+        self.records.try_reserve(1)?;
+        self.occupied_subshells.try_reserve(occupied.len())?;
+        self.intermediate_couplings.try_reserve(couplings.len())?;
+        if self
+            .blocks
+            .last()
+            .is_none_or(|block| block.total_two_j != total_two_j || block.parity != parity)
+        {
+            self.blocks.try_reserve(1)?;
+            self.blocks.push(SymmetryBlock {
+                record_start: u64::try_from(self.records.len())?,
+                record_len: 0,
+                total_two_j,
+                parity,
+            });
+        }
+        self.occupied_subshells.extend_from_slice(occupied);
+        self.intermediate_couplings.extend_from_slice(couplings);
+        self.records.push(record);
+        self.blocks
+            .last_mut()
+            .expect("block was created")
+            .record_len += 1;
         Ok(())
     }
 

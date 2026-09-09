@@ -1,0 +1,10 @@
+# A fixed relativistic configuration: 1s^2 core, 2p_{3/2}^2 peel.
+# Enumerates J=0 and J=2 states; J=1 is excluded by equivalent-electron rules.
+core_subshells = ["1s"]
+min_two_j = 0
+max_two_j = 4
+max_records = 10000
+
+[[occupations]]
+subshell = "2p"
+electrons = 2

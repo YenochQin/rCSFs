@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### CSF 串行生成开发接口
+
+- 新增 `csf_generation::generate_csfs`，从固定相对论占据组态直接枚举整数 CSF，
+  包含原版态表、seniority、角动量耦合和按 J 分块的顺序。
+- 新增 `generate_csfs` TOML 开发示例、记录上限和 Fortran `GEN` 差分测试；
+  激发枚举、多参考合并及 Python 生成接口尚未实现。
+- 严格 CSF writer 拒绝写出空列表，避免生成无法由严格 parser 读取的文件。
+
 ### 修复
 
 - 完整整数 CSF 解析器逐条验证规范格式，拒绝会被静默改写的占据数、J 值、

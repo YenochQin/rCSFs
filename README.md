@@ -298,9 +298,29 @@ columns. Lines must end with LF; CRLF and a missing final LF are rejected. This 
 parsing and formatting mutually inverse, so a successful round-trip is
 byte-identical.
 
-This is currently a Rust development API. It is the lossless data-model
-foundation for the planned Fortran-equivalent CSF generator; generation and
-Python bindings for this representation are not implemented yet.
+This is currently a Rust development API. The serial generator now uses this
+representation to enumerate states and couplings for one explicit relativistic
+occupation configuration. Python bindings for this representation are not
+implemented yet.
+
+### 6. Generate CSFs for a fixed relativistic configuration
+
+```bash
+uv run cargo run --release --example generate_csfs -- \
+  examples/fixed_configuration.toml /path/to/new-output.c
+```
+
+The example produces the two allowed CSFs of `2p_{3/2}^2` with a filled `1s`
+core. It accepts a TOML request with explicit subshell occupations, an inclusive
+`2J` range, and a record limit; output must be a new file.
+
+The Rust interface is `csf_generation::generate_csfs(&GenerationRequest)`.
+It returns integer records directly, preserving GRASP's state-table order,
+seniority labels and coupling formatting. This implements the fixed-occupation
+`GEN` stage; excitation enumeration, nonrelativistic occupation splitting,
+multiple-reference merging and Python generation bindings remain planned.
+See [the generation guide](docs/CSF_GENERATION.md) for usage, limits and the
+Fortran differential test.
 
 ## Public Python API
 

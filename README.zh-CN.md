@@ -275,7 +275,18 @@ fn main() -> anyhow::Result<()> {
 
 解析是严格的，只接受原版 GRASP 写出端实际产生的写法：block 分隔符必须恰好是 `" *"`，空 block 会被拒绝，三个表头标签会被校验，seniority 必须占据字段偏移 3 和 4，J 字段必须是约简形式的纯十进制数 —— `"+4"` 和 `"8/2"` 会报错，而不是在写出时被静默改写。每条记录都会与规范格式逐字节对照，包括填充空白和未使用的列。所有行必须以 LF 结尾；CRLF 和末行缺少 LF 都会被拒绝。这保证解析与格式化互为逆运算，因此往返成功即意味着逐字节一致。
 
-目前这是 Rust 开发接口，用作后续 Fortran 等价 CSF 生成器的无损数据模型基础。CSF 生成能力以及该表示的 Python 绑定尚未实现。
+目前这是 Rust 开发接口。串行生成器已可从一个明确给定的相对论占据组态枚举子壳层态与耦合，并直接返回该整数表示；该表示的 Python 绑定尚未实现。
+
+### 6. 从固定相对论占据组态生成 CSF
+
+```bash
+uv run cargo run --release --example generate_csfs -- \
+  examples/fixed_configuration.toml /path/to/new-output.c
+```
+
+示例生成闭核 `1s` 加 `2p_{3/2}^2` 的两个合法 CSF。TOML 请求明确指定每个相对论子壳层的占据、总 `2J` 范围和记录数上限；输出路径必须尚不存在。
+
+Rust 接口为 `csf_generation::generate_csfs(&GenerationRequest)`，直接返回整数记录，保留原版态表顺序、seniority 标签与耦合输出规则。目前实现的是固定占据的 `GEN` 阶段；激发枚举、非相对论占据拆分、多参考合并与 Python 生成入口仍待实现。用法、限制与 Fortran 对照测试见 [生成指南](docs/CSF_GENERATION.md)。
 
 ## Python 公共 API
 

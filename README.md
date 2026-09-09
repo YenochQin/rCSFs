@@ -223,6 +223,66 @@ Returned metadata includes:
 - `num_columns`
 - `compression`
 
+### 5. Parse and reproduce a CSF with the complete integer representation
+
+The development API in `complete_csf` reads a complete GRASP CSF file into a
+compact in-memory integer representation. Unlike the ML descriptor, it keeps
+subshell occupations, explicitly printed zero states, seniority labels,
+intermediate couplings, total `2J`, parity, block boundaries, and record order.
+
+Use the round-trip tool to validate a CSF file:
+
+```bash
+uv run cargo run --example roundtrip_csf -- \
+  /path/to/input.c \
+  /path/to/output.c
+```
+
+Example output:
+
+```text
+records=225157 blocks=7 occupied_entries=1974490 coupling_entries=670869 allocated_bytes=27263731 byte_identical=true
+```
+
+The command parses the input, writes it back from the integer representation,
+and compares both files without loading the two text files into memory for the
+comparison. It exits with an error if the output is not byte-identical. Use a
+different output path so the original baseline remains unchanged.
+
+The same representation is available from Rust:
+
+```rust
+use _rcsfs::complete_csf::CompleteCsfFile;
+use std::path::Path;
+
+fn main() -> anyhow::Result<()> {
+    let csfs = CompleteCsfFile::parse_path(Path::new("input.c"))?;
+    println!("CSFs: {}", csfs.records.len());
+    println!("J/P blocks: {}", csfs.blocks.len());
+    println!("allocated bytes: {}", csfs.allocated_bytes());
+
+    let first = &csfs.records[0];
+    let occupied = csfs.occupied(first)?;
+    let intermediate_couplings = csfs.couplings(first)?;
+    println!(
+        "occupied={} intermediate_couplings={}",
+        occupied.len(),
+        intermediate_couplings.len()
+    );
+
+    csfs.write_path(Path::new("output.c"))?;
+    Ok(())
+}
+```
+
+`allocated_bytes()` reports the heap capacity owned by the integer structure.
+It excludes allocator bookkeeping and temporary parser/formatter buffers, so
+it is not the process peak RSS.
+
+This is currently a Rust development API. It is the lossless data-model
+foundation for the planned Fortran-equivalent CSF generator; generation and
+Python bindings for this representation are not implemented yet.
+
 ## Public Python API
 
 | Function | Description |

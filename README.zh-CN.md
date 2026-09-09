@@ -223,6 +223,56 @@ info = get_parquet_info("output.parquet")
 - `num_columns`
 - `compression`
 
+### 5. 使用完整整数表示解析和还原 CSF
+
+开发中的 `complete_csf` API 可以将完整的 GRASP CSF 文件读入紧凑的内存整数结构。与机器学习描述符不同，该结构会保留子壳层占据、显式写出的零状态、seniority、中间耦合、总 `2J`、宇称、block 边界和 CSF 顺序。
+
+可以用往返工具验证一个 CSF 文件：
+
+```bash
+uv run cargo run --example roundtrip_csf -- \
+  /path/to/input.c \
+  /path/to/output.c
+```
+
+输出示例：
+
+```text
+records=225157 blocks=7 occupied_entries=1974490 coupling_entries=670869 allocated_bytes=27263731 byte_identical=true
+```
+
+该命令会解析输入文件，从整数结构重新写出 CSF，然后以流式方式比较两个文本文件。若输出不是逐字节一致，命令会返回错误。请使用不同的输出路径，避免覆盖原始基准文件。
+
+Rust 代码也可以直接使用该表示：
+
+```rust
+use _rcsfs::complete_csf::CompleteCsfFile;
+use std::path::Path;
+
+fn main() -> anyhow::Result<()> {
+    let csfs = CompleteCsfFile::parse_path(Path::new("input.c"))?;
+    println!("CSF 数量：{}", csfs.records.len());
+    println!("J/P block 数量：{}", csfs.blocks.len());
+    println!("已分配字节数：{}", csfs.allocated_bytes());
+
+    let first = &csfs.records[0];
+    let occupied = csfs.occupied(first)?;
+    let intermediate_couplings = csfs.couplings(first)?;
+    println!(
+        "占据子壳层={} 中间耦合={}",
+        occupied.len(),
+        intermediate_couplings.len()
+    );
+
+    csfs.write_path(Path::new("output.c"))?;
+    Ok(())
+}
+```
+
+`allocated_bytes()` 统计整数结构自身拥有的堆容量，不包含分配器元数据和解析、格式化时的临时缓冲，因此不等于进程峰值 RSS。
+
+目前这是 Rust 开发接口，用作后续 Fortran 等价 CSF 生成器的无损数据模型基础。CSF 生成能力以及该表示的 Python 绑定尚未实现。
+
 ## Python 公共 API
 
 | 函数 | 说明 |

@@ -247,8 +247,8 @@ records=225157 blocks=7 occupied_entries=1974490 coupling_entries=670869 allocat
 
 The command parses the input, writes it back from the integer representation,
 and compares both files without loading the two text files into memory for the
-comparison. It exits with an error if the output is not byte-identical. Use a
-different output path so the original baseline remains unchanged.
+comparison. It exits with an error if the output is not byte-identical. The output path must not already exist; existing files (including links to the
+input) are rejected before writing, preserving the original baseline.
 
 The same representation is available from Rust:
 
@@ -292,7 +292,9 @@ Parsing is strict, and only the spellings the GRASP writers emit are accepted.
 The block separator must be exactly `" *"`, empty symmetry blocks are rejected,
 the three header labels are verified, seniority must occupy field offsets 3 and
 4, and J fields must be bare decimals in reduced form — `"+4"` and `"8/2"` are
-errors rather than fields that would be silently rewritten on output. This keeps
+errors rather than fields that would be silently rewritten on output. Every
+record is checked against its canonical formatting, including padding and unused
+columns. Lines must end with LF; CRLF and a missing final LF are rejected. This keeps
 parsing and formatting mutually inverse, so a successful round-trip is
 byte-identical.
 

@@ -1,5 +1,9 @@
 use _rcsfs::complete_csf::{CompleteCsfFile, Parity};
-use _rcsfs::csf_generation::{GenerationRequest, Subshell, SubshellOccupation, generate_csfs};
+use _rcsfs::csf_generation::{
+    EnumeratedConfiguration, ExcitationRequest, GenerationRequest, Subshell, SubshellOccupation,
+    enumerate_occupations, generate_csfs,
+};
+use std::collections::BTreeMap;
 use std::io::Cursor;
 
 fn request(entries: &[(&str, u8)], min_two_j: u16, max_two_j: u16) -> GenerationRequest {
@@ -149,6 +153,148 @@ fn record_cap_reports_failure_instead_of_returning_a_partial_space() {
 fn custom_coupling_order_is_preserved() {
     let result = roundtrip(&request(&[("3s", 1), ("1s", 1), ("2s", 1)], 1, 1));
     assert_eq!(result.subshells, ["3s", "1s", "2s"]);
+}
+
+/// Per-symmetry-block record counts from the unmodified `rcsfgenerate` driven
+/// by the registered transcripts.  The `o1` case reproduces the registered
+/// baseline `o1_cc1as1.c` byte for byte, so its counts are the file's own.
+///
+/// Comparing blocks rather than a single total keeps this sensitive to the
+/// reference-parity filter of `blanda.f90`: dropping it roughly doubles every
+/// block instead of shifting records between them.
+/// One registered transcript: its text, the parity every CSF it yields must
+/// have, and the `(2J, record count)` pair of each symmetry block.
+type RegisteredBlocks = (&'static str, Parity, &'static [(u16, usize)]);
+
+const REGISTERED_BLOCK_COUNTS: [RegisteredBlocks; 2] = [
+    (
+        include_str!("fixtures/e1_cc1as1.rcsfgenerate"),
+        Parity::Even,
+        &[
+            (0, 18514),
+            (2, 51172),
+            (4, 75529),
+            (6, 86587),
+            (8, 86016),
+            (10, 75114),
+            (12, 59441),
+        ],
+    ),
+    (
+        include_str!("fixtures/o1_cc1as1.rcsfgenerate"),
+        Parity::Odd,
+        &[(5, 42663), (7, 47123)],
+    ),
+];
+
+#[test]
+fn registered_rcsfgenerate_inputs_reproduce_grasp_block_counts() {
+    for (input, parity, expected) in REGISTERED_BLOCK_COUNTS {
+        let request = ExcitationRequest::from_transcript(input).unwrap();
+        let occupations = enumerate_occupations(&request).unwrap();
+        let mut counts = BTreeMap::<u16, usize>::new();
+        for configuration in &occupations.configurations {
+            let generated = generate_csfs(&GenerationRequest {
+                core_subshells: occupations.core_subshells.clone(),
+                configuration: configuration.occupations.clone(),
+                min_two_j: request.min_two_j,
+                max_two_j: request.max_two_j,
+                max_records: 200_000,
+            })
+            .unwrap();
+            for record in &generated.records {
+                assert_eq!(record.parity, parity, "reference parity is not preserved");
+                *counts.entry(record.total_two_j).or_default() += 1;
+            }
+        }
+        assert_eq!(counts.into_iter().collect::<Vec<_>>(), expected);
+    }
+}
+
+#[test]
+fn registered_rcsfgenerate_inputs_parse_and_merge_reference_tasks() {
+    for input in [
+        include_str!("fixtures/e1_cc1as1.rcsfgenerate"),
+        include_str!("fixtures/o1_cc1as1.rcsfgenerate"),
+    ] {
+        let request = ExcitationRequest::from_transcript(input).unwrap();
+        assert_eq!(request.core, 3);
+        assert_eq!(request.references.len(), 2);
+        assert_eq!(request.max_excitations, 2);
+        let occupations = enumerate_occupations(&request).unwrap();
+        assert!(!occupations.configurations.is_empty());
+        assert!(!occupations.core_subshells.is_empty());
+        assert!(!occupations.active_subshells.is_empty());
+
+        // LIKA/TEST merge both consumes equal keys and keeps the descending
+        // order, so the merged list is strictly descending and duplicate-free.
+        if let Some((index, pair)) = occupations
+            .configurations
+            .windows(2)
+            .enumerate()
+            .find(|(_, pair)| pair[0].key() <= pair[1].key())
+        {
+            panic!(
+                "tasks are not strictly descending at {index}: {:?} then {:?}",
+                pair[0].key(),
+                pair[1].key()
+            );
+        }
+
+        // Excitations move electrons between shells, never add or remove any.
+        let total = |configuration: &EnumeratedConfiguration| {
+            configuration
+                .occupations
+                .iter()
+                .map(|entry| u16::from(entry.electrons))
+                .sum::<u16>()
+        };
+        let expected = total(&occupations.configurations[0]);
+        assert!(
+            occupations
+                .configurations
+                .iter()
+                .all(|configuration| total(configuration) == expected)
+        );
+    }
+}
+
+/// Per-reference record counts for `e1_cc1as1`, each from a single-reference
+/// run of the registered `rcsfgenerate` binary.  They exceed the merged
+/// 452,373 of [`REGISTERED_BLOCK_COUNTS`] by the 5,839 records whose
+/// occupations both references reach.
+#[test]
+fn registered_rcsfgenerate_references_expand_individually() {
+    let request =
+        ExcitationRequest::from_transcript(include_str!("fixtures/e1_cc1as1.rcsfgenerate"))
+            .unwrap();
+    let mut counts = Vec::new();
+    for reference in request.references.iter().cloned() {
+        let single = ExcitationRequest {
+            references: vec![reference],
+            ..request.clone()
+        };
+        let occupations = enumerate_occupations(&single).unwrap();
+        counts.push(
+            occupations
+                .configurations
+                .iter()
+                .map(|configuration| {
+                    generate_csfs(&GenerationRequest {
+                        core_subshells: occupations.core_subshells.clone(),
+                        configuration: configuration.occupations.clone(),
+                        min_two_j: single.min_two_j,
+                        max_two_j: single.max_two_j,
+                        max_records: 200_000,
+                    })
+                    .unwrap()
+                    .records
+                    .len()
+                })
+                .sum::<usize>(),
+        );
+    }
+    assert_eq!(counts, [198_911, 259_301]);
 }
 
 fn closed_configuration(count: usize) -> GenerationRequest {

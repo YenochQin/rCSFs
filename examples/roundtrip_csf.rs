@@ -1,8 +1,8 @@
 use _rcsfs::complete_csf::CompleteCsfFile;
 use anyhow::{Context, Result, ensure};
 use std::env;
-use std::fs::File;
-use std::io::{BufReader, Read};
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read};
 use std::path::{Path, PathBuf};
 
 fn main() -> Result<()> {
@@ -11,9 +11,20 @@ fn main() -> Result<()> {
     let output = PathBuf::from(args.next().context("usage: roundtrip_csf INPUT OUTPUT")?);
     ensure!(args.next().is_none(), "usage: roundtrip_csf INPUT OUTPUT");
 
-    let parsed = CompleteCsfFile::parse_path(&input)?;
-    parsed.write_path(&output)?;
-    let identical = files_equal(&input, &output)?;
+    roundtrip(&input, &output)
+}
+
+pub fn roundtrip(input: &Path, output: &Path) -> Result<()> {
+    let parsed = CompleteCsfFile::parse_path(input)?;
+    // Atomic creation refuses existing files, including symlink/hard-link aliases
+    // of the input, before any bytes can be overwritten.
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .with_context(|| format!("output must be a new file: {}", output.display()))?;
+    parsed.write_to(BufWriter::new(file))?;
+    let identical = files_equal(input, output)?;
     println!(
         "records={} blocks={} occupied_entries={} coupling_entries={} allocated_bytes={} byte_identical={identical}",
         parsed.records.len(),

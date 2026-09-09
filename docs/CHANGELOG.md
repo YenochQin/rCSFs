@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 完整整数 CSF 解析器逐条验证规范格式，拒绝会被静默改写的占据数、J 值、
+  字段空白和未使用列；同时拒绝 CRLF 和末行缺少 LF，保证解析/写出无损。
+- `roundtrip_csf` 示例仅创建新输出文件，拒绝覆盖已有文件或输入文件的链接。
+- 完整 CSF 解析回归测试迁至 `tests/complete_csf_test.rs`，共享稳定 fixture。
+
 ### ✨ 新功能
 
 - `read_csfs()` 新增 `strict=True`；默认拒绝末尾不足三行的 CSF，显式设置

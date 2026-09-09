@@ -6,9 +6,10 @@ The implementation runs entirely in Rust and returns `CompleteCsfFile` directly;
 it does not call GRASP or construct intermediate CSF text.
 
 This interface covers the subshell-state and coupling enumeration performed by
-`rcsfgenerate90/GEN`. Reference-configuration excitation rules, splitting an `nl`
-occupation between its two relativistic subshells, multiple-reference merging,
-and expansion of an existing list remain to be implemented. Python bindings,
+`rcsfgenerate90/GEN`. The occupation stage above it — reference-configuration
+excitation rules, splitting an `nl` occupation between its two relativistic
+subshells, and multiple-reference merging — is `enumerate_occupations`.
+Expansion of an existing list remains to be implemented. Python bindings,
 parallel execution and descriptor derivation belong to later stages.
 
 ## Run the development example
@@ -115,10 +116,13 @@ mirror, mixed configurations with seniority, suppressed coupling fields, and
 the 20-subshell limit (121 configurations passed with GNU Fortran 16.2.0).
 It compares the three record lines in exact order after
 stable grouping by total J and the trailing-space trimming done by `rcsfblock`.
-It does not compare the full `rcsfgenerate` wrapper, excitation enumeration,
-header generation by `fivefirst`, or multi-reference merging. Normal integration
+It does not compare the full `rcsfgenerate` wrapper or header generation by
+`fivefirst`. Normal integration
 tests separately check generated headers through the strict codec round trip.
 
-This is a substage differential check. It does not complete phase C acceptance
-against the two registered large calculation outputs; those still require their
-original generation inputs and the occupation-enumeration stage.
+This is a substage differential check. Occupation enumeration is covered
+separately: the two registered transcripts in `tests/fixtures/` reproduce the
+per-symmetry-block record counts of the registered baselines exactly (452,373
+records in 7 even blocks for `e1_cc1as1`, 89,786 in 2 odd blocks for
+`o1_cc1as1`). Phase C acceptance additionally requires the existing-list
+expansion mode.

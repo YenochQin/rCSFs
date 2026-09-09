@@ -286,7 +286,7 @@ uv run cargo run --release --example generate_csfs -- \
 
 示例生成闭核 `1s` 加 `2p_{3/2}^2` 的两个合法 CSF。TOML 请求明确指定每个相对论子壳层的占据、总 `2J` 范围和记录数上限；输出路径必须尚不存在。
 
-Rust 接口为 `csf_generation::generate_csfs(&GenerationRequest)`，直接返回整数记录，保留原版态表顺序、seniority 标签与耦合输出规则。目前实现的是固定占据的 `GEN` 阶段；激发枚举、非相对论占据拆分、多参考合并与 Python 生成入口仍待实现。用法、限制与 Fortran 对照测试见 [生成指南](docs/CSF_GENERATION.md)。
+Rust 接口为 `csf_generation::generate_csfs(&GenerationRequest)`，直接返回整数记录，保留原版态表顺序、seniority 标签与耦合输出规则。其上层的 `csf_generation::enumerate_occupations(&ExcitationRequest)` 解析 `rcsfgenerate` 交互输入记录，完成激发枚举、参考宇称筛选、非相对论占据拆分与多参考合并；已有列表扩展模式与 Python 生成入口仍待实现。用法、限制与 Fortran 对照测试见 [生成指南](docs/CSF_GENERATION.md)。
 
 ## Python 公共 API
 

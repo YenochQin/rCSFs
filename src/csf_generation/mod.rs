@@ -5,7 +5,13 @@
 //! splitting, multiple references and existing-list expansion are separate stages
 //! and are not inferred by this interface.
 
+mod occupations;
 mod states;
+
+pub use occupations::{
+    EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, OccupationMode, Orbital,
+    ReferenceConfiguration, ReferenceSubshell, enumerate_occupations,
+};
 
 use anyhow::{Context, Result, ensure};
 use std::collections::HashSet;

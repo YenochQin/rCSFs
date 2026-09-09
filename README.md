@@ -316,9 +316,12 @@ core. It accepts a TOML request with explicit subshell occupations, an inclusive
 
 The Rust interface is `csf_generation::generate_csfs(&GenerationRequest)`.
 It returns integer records directly, preserving GRASP's state-table order,
-seniority labels and coupling formatting. This implements the fixed-occupation
-`GEN` stage; excitation enumeration, nonrelativistic occupation splitting,
-multiple-reference merging and Python generation bindings remain planned.
+seniority labels and coupling formatting. Above it,
+`csf_generation::enumerate_occupations(&ExcitationRequest)` reads an
+`rcsfgenerate` input transcript and performs excitation enumeration, the
+reference-parity filter, nonrelativistic occupation splitting and
+multiple-reference merging. Expansion of an existing list and Python
+generation bindings remain planned.
 See [the generation guide](docs/CSF_GENERATION.md) for usage, limits and the
 Fortran differential test.
 

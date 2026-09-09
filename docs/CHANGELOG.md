@@ -10,8 +10,13 @@
 
 - 新增 `csf_generation::generate_csfs`，从固定相对论占据组态直接枚举整数 CSF，
   包含原版态表、seniority、角动量耦合和按 J 分块的顺序。
-- 新增 `generate_csfs` TOML 开发示例、记录上限和 Fortran `GEN` 差分测试；
-  激发枚举、多参考合并及 Python 生成接口尚未实现。
+- 新增 `csf_generation::enumerate_occupations`，对应原版 `BLANDA`：解析
+  `rcsfgenerate` 交互输入记录、按 `slug.f90` 的上下界枚举非相对论占据、施加
+  `blanda.f90` 的参考宇称判据、拆分相对论分量，并按 `TEST/LIKA` 降序归并多个
+  参考组态。已有列表扩展模式及 Python 生成接口尚未实现。
+- 新增 `generate_csfs` TOML 开发示例、记录上限和 Fortran `GEN` 差分测试。
+- 登记 `e1_cc1as1`、`o1_cc1as1` 两份交互输入记录，其逐 J 块记录数与原版
+  `rcsfgenerate` 输出完全一致（452,373 / 89,786 条），并写入回归测试。
 - 严格 CSF writer 拒绝写出空列表，避免生成无法由严格 parser 读取的文件。
 
 ### 修复

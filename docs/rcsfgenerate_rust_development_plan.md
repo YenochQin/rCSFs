@@ -33,16 +33,18 @@ CSFs 文件目录：`/Users/yiqin/Projects/GraspKit-Workspace/temp`目录下的 
 |---|---|
 | CSF 基准文件目录 | 与文档首行一致 |
 | 完整 CSF 文件路径 | `/Users/yiqin/Projects/GraspKit-Workspace/temp/e1_cc1as1.c`（整数 J）；`/Users/yiqin/Projects/GraspKit-Workspace/temp/o1_cc1as1.c`（半整数 J） |
-| 对应生成输入路径 | `<待填写：交互输入记录、参考组态、激发限制等>` |
+| 对应生成输入路径 | [`tests/fixtures/e1_cc1as1.rcsfgenerate`](../tests/fixtures/e1_cc1as1.rcsfgenerate)；[`tests/fixtures/o1_cc1as1.rcsfgenerate`](../tests/fixtures/o1_cc1as1.rcsfgenerate) |
 | 扩展模式的初始列表路径 | `<如适用，待填写>` |
-| 原版 GRASP 提交号 | `<待填写>` |
-| 原版可执行文件及 SHA-256 | `<待填写>` |
-| 编译器、编译选项、依赖版本 | `<待填写>` |
-| 服务器 CPU、核数、内存、存储 | `<待填写>` |
-| 原版运行命令与工作目录 | `<待填写>` |
-| 基准输入和输出 SHA-256 | `e1_cc1as1.c`: `dca7fa4ff8853820729e1374b7dc896bfb351213cbec2882bc32e27ea87b29c2`；`o1_cc1as1.c`: `a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4` |
+| 原版 GRASP 提交号 | `9006157730a82ac839f2b4ff4e938bcba63a539e`（workspace 内 `grasp/`） |
+| 原版可执行文件及 SHA-256 | `grasp/build-debug/bin/rcsfgenerate`: `a3fcb36d838057485aafdd665f73f898e4ae206d7410062e74d81bc5ea610554` |
+| 编译器、编译选项、依赖版本 | GNU Fortran (Homebrew GCC 16.2.0) 16.2.0；`CMAKE_BUILD_TYPE=Debug`，`CMAKE_Fortran_FLAGS=-fno-automatic -fallow-argument-mismatch` |
+| 服务器 CPU、核数、内存、存储 | Apple M4（arm64），10 核，16 GiB；macOS 26.6.2。`rcsfgenerate` 为串行程序 |
+| 原版运行命令与工作目录 | 在空临时目录中 `rcsfgenerate < in.txt`，其中 `in.txt` 为登记 fixture 去掉首行 `rcsfgenerate<< EOF` 和末行 `EOF` 后的内容；输出取该目录下的 `rcsf.out` |
+| 基准输入和输出 SHA-256 | `e1_cc1as1.c`: `5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011`；`o1_cc1as1.c`: `a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4` |
 
-只有输出文件时，可以验证解析、整数编码和文本还原，不能证明生成算法完整。生成等价性必须配有可复现的原始输入。真实大算例之外，应登记可快速重跑的小算例用于逐步定位差异。
+只有输出文件时，可以验证解析、整数编码和文本还原，不能证明生成算法完整。生成等价性必须配有可复现的原始输入。当前已登记两份交互输入记录，两者用上表的可执行文件重跑后与对应基准文件逐字节相同；真实大算例之外，应继续登记可快速重跑的小算例用于逐步定位差异。
+
+登记的基准文件必须是 `rcsfgenerate` 的直接输出。若某个算例在后续流程中被 `rcsfzerofirst`、`rcsfinteract` 等程序缩减过 CSF 数量，则不能作为生成等价性的基准——`e1_cc1as1.c` 曾因此比同输入的原版输出少一半记录。
 
 基准覆盖至少包括：单 J、大量开放子壳层、同占据多耦合态、seniority 区分、多参考重叠、多个 J/P 块，以及后续纳入支持范围的已有列表扩展模式。具体算例由服务器数据选定，不凭文件名推断覆盖情况。
 
@@ -139,7 +141,11 @@ CSFs 文件目录：`/Users/yiqin/Projects/GraspKit-Workspace/temp`目录下的 
 
 验收：支持范围内 Rust 串行结果与原版逐条一致；发生差异时能定位到占据、态组合或耦合分支。
 
-阶段 C 子步骤进度：新增 `csf_generation::generate_csfs`，从一个明确给定的相对论占据组态枚举原版 `GEN` 的子壳层态和耦合，直接构造整数记录并按总 `2J` 分块。已迁移所有有定义的 `JKVANT/SENIOR` 表项及粒子/空穴对称使用规则，保留 `kopp1/kopp2` 的标签和省略规则；超出表项范围或记录上限明确报错。提供 TOML 开发示例与针对未修改 Fortran 源码的可重跑对照测试。详细范围见 [CSF_GENERATION.md](CSF_GENERATION.md)。占据/激发枚举、非相对论占据拆分、多参考合并、已有列表扩展尚未实现，阶段 C 的完整验收仍未完成。
+阶段 C 子步骤进度：新增 `csf_generation::generate_csfs`，从一个明确给定的相对论占据组态枚举原版 `GEN` 的子壳层态和耦合，直接构造整数记录并按总 `2J` 分块。已迁移所有有定义的 `JKVANT/SENIOR` 表项及粒子/空穴对称使用规则，保留 `kopp1/kopp2` 的标签和省略规则；超出表项范围或记录上限明确报错。提供 TOML 开发示例与针对未修改 Fortran 源码的可重跑对照测试。详细范围见 [CSF_GENERATION.md](CSF_GENERATION.md)。
+
+在此之上新增 `csf_generation::enumerate_occupations`，对应原版 `BLANDA`：解析 `rcsfgenerate` 交互输入记录、按 `slug.f90` 的 `varmax/varupp/varned` 上下界枚举非相对论占据、施加 `blanda.f90` 的参考宇称判据、拆分为相对论分量，并按 `TEST/LIKA` 的降序归并多个参考组态。已登记的 `e1_cc1as1` 和 `o1_cc1as1` 交互输入记录保存在 `tests/fixtures/`，其逐 J 块记录数与上表可执行文件的输出完全一致（e1 为 Even 的 7 个块共 452,373 条，o1 为 Odd 的 2 个块共 89,786 条），并作为回归基准写入测试。
+
+以下仍未实现，阶段 C 的完整验收尚未完成：已有列表扩展模式、Python 生成接口。两处与原版的已知分歧尚未处理，当前登记算例未覆盖：`slug.f90` 对 `l >= 5` 将占据上限压到 4，而 `Orbital::capacity()` 返回 `2 + 4l`；`matain.f90` 仅在 `org(i,j) == 0` 时允许 `d`（双激发）选择符，而当前实现允许任意壳层使用。此外 `matcin.f90` 将 `lima` 硬编码为 `.FALSE.`，`lim(15)` 的 n 壳层电子数下限在原版中是死代码，Rust 侧不实现是正确的。
 
 ### 阶段 D：提前去重与全内存结果组织
 

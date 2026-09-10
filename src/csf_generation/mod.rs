@@ -14,6 +14,7 @@ pub use occupations::{
 };
 
 use anyhow::{Context, Result, ensure};
+use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
@@ -241,6 +242,48 @@ pub fn generate_csfs(request: &GenerationRequest) -> Result<CompleteCsfFile> {
         generator.select_states(0, target)?;
     }
     Ok(output)
+}
+
+/// Generate independent occupation configurations in parallel.
+///
+/// Rayon collects indexed parallel iterators in their original input order,
+/// so callers can apply the same ordering and block merge logic as the
+/// serial generator. Each task receives the global record limit as a local
+/// safety bound; the combined result is checked before returning.
+pub fn generate_csfs_parallel(
+    requests: &[GenerationRequest],
+    max_records: usize,
+    threads: Option<usize>,
+) -> Result<Vec<CompleteCsfFile>> {
+    ensure!(max_records > 0, "max_records must be positive");
+    let run = || {
+        requests
+            .par_iter()
+            .map(|request| {
+                let mut request = request.clone();
+                request.max_records = request.max_records.min(max_records);
+                generate_csfs(&request)
+            })
+            .collect::<Result<Vec<_>>>()
+    };
+    let results = match threads {
+        Some(count) => rayon::ThreadPoolBuilder::new()
+            .num_threads(count)
+            .build()
+            .context("failed to build rayon thread pool")?
+            .install(run)?,
+        None => run()?,
+    };
+    let total = results.iter().try_fold(0usize, |total, file| {
+        total
+            .checked_add(file.records.len())
+            .context("record count overflow")
+    })?;
+    ensure!(
+        total <= max_records,
+        "generated records exceed global limit {max_records}"
+    );
+    Ok(results)
 }
 
 fn header_orbitals(labels: &[String]) -> String {

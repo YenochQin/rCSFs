@@ -4,19 +4,23 @@ mod example;
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static DIRECTORY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "rcsfs-roundtrip-{}-{}",
+            "rcsfs-roundtrip-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            DIRECTORY_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
         Self(path)

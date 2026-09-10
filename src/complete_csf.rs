@@ -112,6 +112,31 @@ pub struct CompleteCsfFile {
 }
 
 impl CompleteCsfFile {
+    /// Derive the legacy dense descriptor directly from an integer CSF record.
+    /// Each peel subshell contributes `[occupation, 2J_subshell,
+    /// 2J_cumulative]`; unoccupied subshells remain zero.
+    pub fn descriptor_for(&self, record: &CsfRecord) -> Result<Vec<i32>> {
+        let mut descriptor = vec![0i32; self.subshells.len() * 3];
+        let occupied = self.occupied(record)?;
+        let couplings = self.couplings(record)?;
+        for shell in occupied {
+            let index = usize::from(shell.subshell_index);
+            ensure!(index < self.subshells.len(), "subshell index out of range");
+            let offset = index * 3;
+            descriptor[offset] = i32::from(shell.occupation);
+            if let Some(state) = shell.state {
+                descriptor[offset + 1] = i32::from(state.two_j);
+            }
+            let boundary = u16::try_from(index + 2)?;
+            if let Some(coupling) = couplings.iter().find(|value| value.boundary == boundary) {
+                descriptor[offset + 2] = i32::from(coupling.two_j);
+            } else if index + 1 == occupied.len() {
+                descriptor[offset + 2] = i32::from(record.total_two_j);
+            }
+        }
+        Ok(descriptor)
+    }
+
     pub fn parse_path(path: &Path) -> Result<Self> {
         let file = File::open(path)
             .with_context(|| format!("failed to open CSF file {}", path.display()))?;
@@ -246,13 +271,22 @@ impl CompleteCsfFile {
             let start = usize::try_from(block.record_start)?;
             let len = usize::try_from(block.record_len)?;
             for record in &self.records[start..start + len] {
-                let (line1, line2, line3) = self.format_record(record)?;
-                writeln!(writer, "{line1}")?;
-                writeln!(writer, "{line2}")?;
-                writeln!(writer, "{line3}")?;
+                self.write_record_to(record, &mut writer)?;
             }
         }
         writer.flush()?;
+        Ok(())
+    }
+
+    /// Write one record's three lines, without a header, block separator or flush.
+    ///
+    /// The record must refer to this file's arenas. This permits ordered export
+    /// of retained generation chunks without copying their integer payloads.
+    pub fn write_record_to(&self, record: &CsfRecord, mut writer: impl Write) -> Result<()> {
+        let (line1, line2, line3) = self.format_record(record)?;
+        writeln!(writer, "{line1}")?;
+        writeln!(writer, "{line2}")?;
+        writeln!(writer, "{line3}")?;
         Ok(())
     }
 

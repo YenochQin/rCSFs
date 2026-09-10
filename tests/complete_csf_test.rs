@@ -162,3 +162,24 @@ fn rejects_noncanonical_line_endings() {
         assert!(CompleteCsfFile::parse_reader(Cursor::new(input)).is_err());
     }
 }
+
+#[test]
+fn individual_records_export_without_headers_or_block_separators() {
+    let parsed = CompleteCsfFile::parse_reader(Cursor::new(CSF)).unwrap();
+    let expected = CSF
+        .lines()
+        .skip(5)
+        .filter(|line| *line != " *")
+        .collect::<Vec<_>>();
+    for (record, lines) in parsed.records.iter().zip(expected.chunks_exact(3)) {
+        let mut output = Vec::new();
+        parsed.write_record_to(record, &mut output).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            format!("{}\n", lines.join("\n"))
+        );
+    }
+    let mut record = parsed.records[0].clone();
+    record.total_two_j = u16::MAX;
+    assert!(parsed.write_record_to(&record, Vec::new()).is_err());
+}

@@ -1,0 +1,1079 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "cpu_count": 10,
+  "cache_policy": "one untabulated warmup per variant/case; no OS cache purge; output verification outside timed interval; no fsync",
+  "variants": {
+    "fortran-debug": {
+      "kind": "fortran",
+      "sha256": "a3fcb36d838057485aafdd665f73f898e4ae206d7410062e74d81bc5ea610554"
+    },
+    "fortran-release": {
+      "kind": "fortran",
+      "sha256": "8b897f86a5e8b498d707ab2b13422d659a662c9779ebd3dd2e2223e20f3cad76"
+    },
+    "fortran-profile": {
+      "kind": "fortran",
+      "sha256": "c7df507b00c0d8218db89ae9b2eba1ad5ac6932dac62b4abf4c4f56bc4ea4d28"
+    },
+    "rust-release": {
+      "kind": "rust",
+      "sha256": "bea355fcb205812dc8dd755690e933ad1e2a3736af7987f54d247bf7f92f9a06"
+    }
+  },
+  "cases": {
+    "e1_cc1as1": {
+      "input_sha256": "347ba8dd172fa1acf34fdc1400821cf4cbf99f01719fbc113dcd5995fb5aebb2",
+      "expected_output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+      "variants": {
+        "fortran-debug": {
+          "warmup": {
+            "wall_seconds": 3.9006285829964327,
+            "peak_rss_bytes": 11665408,
+            "block_input_operations": 0,
+            "block_output_operations": 0,
+            "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+            "output_bytes": 108555592,
+            "surviving_files": {
+              "clist.new": 60659939,
+              "input.txt": 98,
+              "rcsf.log": 1843,
+              "rcsf.out": 108555592,
+              "rcsfgenerate.log": 213,
+              "resources.txt": 777,
+              "stdout.txt": 4593
+            }
+          },
+          "runs": [
+            {
+              "wall_seconds": 3.924529292009538,
+              "peak_rss_bytes": 11665408,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "surviving_files": {
+                "clist.new": 60659939,
+                "input.txt": 98,
+                "rcsf.log": 1843,
+                "rcsf.out": 108555592,
+                "rcsfgenerate.log": 213,
+                "resources.txt": 777,
+                "stdout.txt": 4593
+              }
+            },
+            {
+              "wall_seconds": 3.987578125001164,
+              "peak_rss_bytes": 11583488,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "surviving_files": {
+                "clist.new": 60659939,
+                "input.txt": 98,
+                "rcsf.log": 1843,
+                "rcsf.out": 108555592,
+                "rcsfgenerate.log": 213,
+                "resources.txt": 777,
+                "stdout.txt": 4593
+              }
+            },
+            {
+              "wall_seconds": 3.947836166989873,
+              "peak_rss_bytes": 11665408,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "surviving_files": {
+                "clist.new": 60659939,
+                "input.txt": 98,
+                "rcsf.log": 1843,
+                "rcsf.out": 108555592,
+                "rcsfgenerate.log": 213,
+                "resources.txt": 777,
+                "stdout.txt": 4593
+              }
+            }
+          ],
+          "median_wall_seconds": 3.947836166989873,
+          "median_peak_rss_bytes": 11665408
+        },
+        "fortran-release": {
+          "warmup": {
+            "wall_seconds": 3.111128374992404,
+            "peak_rss_bytes": 2359296,
+            "block_input_operations": 0,
+            "block_output_operations": 0,
+            "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+            "output_bytes": 108555592,
+            "surviving_files": {
+              "clist.new": 60659939,
+              "input.txt": 98,
+              "rcsf.log": 1843,
+              "rcsf.out": 108555592,
+              "rcsfgenerate.log": 213,
+              "resources.txt": 777,
+              "stdout.txt": 4593
+            }
+          },
+          "runs": [
+            {
+              "wall_seconds": 3.141544874990359,
+              "peak_rss_bytes": 2359296,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "surviving_files": {
+                "clist.new": 60659939,
+                "input.txt": 98,
+                "rcsf.log": 1843,
+                "rcsf.out": 108555592,
+                "rcsfgenerate.log": 213,
+                "resources.txt": 777,
+                "stdout.txt": 4593
+              }
+            },
+            {
+              "wall_seconds": 3.1259652500011725,
+              "peak_rss_bytes": 2359296,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "surviving_files": {
+                "clist.new": 60659939,
+                "input.txt": 98,
+                "rcsf.log": 1843,
+                "rcsf.out": 108555592,
+                "rcsfgenerate.log": 213,
+                "resources.txt": 777,
+                "stdout.txt": 4593
+              }
+            },
+            {
+              "wall_seconds": 3.1333299999969313,
+              "peak_rss_bytes": 2359296,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "surviving_files": {
+                "clist.new": 60659939,
+                "input.txt": 98,
+                "rcsf.log": 1843,
+                "rcsf.out": 108555592,
+                "rcsfgenerate.log": 213,
+                "resources.txt": 777,
+                "stdout.txt": 4593
+              }
+            }
+          ],
+          "median_wall_seconds": 3.1333299999969313,
+          "median_peak_rss_bytes": 2359296
+        },
+        "fortran-profile": {
+          "warmup": {
+            "wall_seconds": 3.2793080839910544,
+            "peak_rss_bytes": 2375680,
+            "block_input_operations": 0,
+            "block_output_operations": 0,
+            "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+            "output_bytes": 108555592,
+            "profile": {
+              "section_1": {
+                "seconds": 0.000265,
+                "calls": 1,
+                "record_write_bytes": 0,
+                "record_read_bytes": 0
+              },
+              "section_2": {
+                "seconds": 0.284052,
+                "calls": 2,
+                "record_write_bytes": 0,
+                "record_read_bytes": 0
+              },
+              "section_3": {
+                "seconds": 0.280594,
+                "calls": 1474,
+                "record_write_bytes": 0,
+                "record_read_bytes": 0
+              },
+              "section_4": {
+                "seconds": 0.269726,
+                "calls": 458212,
+                "record_write_bytes": 109973459,
+                "record_read_bytes": 0
+              },
+              "section_5": {
+                "seconds": 0.99054,
+                "calls": 2,
+                "record_write_bytes": 217184154,
+                "record_read_bytes": 157905597
+              },
+              "section_6": {
+                "seconds": 1.99589,
+                "calls": 1,
+                "record_write_bytes": 217110858,
+                "record_read_bytes": 217147506
+              },
+              "section_7": {
+                "seconds": 0.0,
+                "calls": 0,
+                "record_write_bytes": 0,
+                "record_read_bytes": 0
+              }
+            },
+            "surviving_files": {
+              "clist.new": 60659939,
+              "input.txt": 98,
+              "profile.toml": 734,
+              "rcsf.log": 1843,
+              "rcsf.out": 108555592,
+              "rcsfgenerate.log": 213,
+              "resources.txt": 777,
+              "stdout.txt": 4593
+            }
+          },
+          "runs": [
+            {
+              "wall_seconds": 3.2674698749906383,
+              "peak_rss_bytes": 2375680,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "profile": {
+                "section_1": {
+                  "seconds": 0.000182,
+                  "calls": 1,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_2": {
+                  "seconds": 0.326063,
+                  "calls": 2,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_3": {
+                  "seconds": 0.322288,
+                  "calls": 1474,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_4": {
+                  "seconds": 0.310617,
+                  "calls": 458212,
+                  "record_write_bytes": 109973459,
+                  "record_read_bytes": 0
+                },
+                "section_5": {
+                  "seconds": 0.981909,
+                  "calls": 2,
+                  "record_write_bytes": 217184154,
+                  "record_read_bytes": 157905597
+                },
+                "section_6": {
+                  "seconds": 1.951234,
+                  "calls": 1,
+                  "record_write_bytes": 217110858,
+                  "record_read_bytes": 217147506
+                },
+                "section_7": {
+                  "seconds": 0.0,
+                  "calls": 0,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                }
+              },
+              "surviving_files": {
+                "clist.new": 60659939,
+                "input.txt": 98,
+                "profile.toml": 734,
+                "rcsf.log": 1843,
+                "rcsf.out": 108555592,
+                "rcsfgenerate.log": 213,
+                "resources.txt": 777,
+                "stdout.txt": 4593
+              }
+            },
+            {
+              "wall_seconds": 3.2477249169896822,
+              "peak_rss_bytes": 2375680,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "profile": {
+                "section_1": {
+                  "seconds": 0.000198,
+                  "calls": 1,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_2": {
+                  "seconds": 0.27666,
+                  "calls": 2,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_3": {
+                  "seconds": 0.273524,
+                  "calls": 1474,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_4": {
+                  "seconds": 0.262935,
+                  "calls": 458212,
+                  "record_write_bytes": 109973459,
+                  "record_read_bytes": 0
+                },
+                "section_5": {
+                  "seconds": 0.959693,
+                  "calls": 2,
+                  "record_write_bytes": 217184154,
+                  "record_read_bytes": 157905597
+                },
+                "section_6": {
+                  "seconds": 2.004443,
+                  "calls": 1,
+                  "record_write_bytes": 217110858,
+                  "record_read_bytes": 217147506
+                },
+                "section_7": {
+                  "seconds": 0.0,
+                  "calls": 0,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                }
+              },
+              "surviving_files": {
+                "clist.new": 60659939,
+                "input.txt": 98,
+                "profile.toml": 734,
+                "rcsf.log": 1843,
+                "rcsf.out": 108555592,
+                "rcsfgenerate.log": 213,
+                "resources.txt": 777,
+                "stdout.txt": 4593
+              }
+            },
+            {
+              "wall_seconds": 3.3654799590003677,
+              "peak_rss_bytes": 2375680,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "profile": {
+                "section_1": {
+                  "seconds": 0.000194,
+                  "calls": 1,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_2": {
+                  "seconds": 0.287116,
+                  "calls": 2,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_3": {
+                  "seconds": 0.283881,
+                  "calls": 1474,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_4": {
+                  "seconds": 0.27305,
+                  "calls": 458212,
+                  "record_write_bytes": 109973459,
+                  "record_read_bytes": 0
+                },
+                "section_5": {
+                  "seconds": 0.982101,
+                  "calls": 2,
+                  "record_write_bytes": 217184154,
+                  "record_read_bytes": 157905597
+                },
+                "section_6": {
+                  "seconds": 2.086992,
+                  "calls": 1,
+                  "record_write_bytes": 217110858,
+                  "record_read_bytes": 217147506
+                },
+                "section_7": {
+                  "seconds": 0.0,
+                  "calls": 0,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                }
+              },
+              "surviving_files": {
+                "clist.new": 60659939,
+                "input.txt": 98,
+                "profile.toml": 734,
+                "rcsf.log": 1843,
+                "rcsf.out": 108555592,
+                "rcsfgenerate.log": 213,
+                "resources.txt": 777,
+                "stdout.txt": 4593
+              }
+            }
+          ],
+          "median_wall_seconds": 3.2674698749906383,
+          "median_peak_rss_bytes": 2375680
+        },
+        "rust-release": {
+          "warmup": {
+            "wall_seconds": 0.3422364579892019,
+            "peak_rss_bytes": 72450048,
+            "block_input_operations": 0,
+            "block_output_operations": 0,
+            "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+            "output_bytes": 108555592,
+            "stages": {
+              "input_seconds": 0.000239125,
+              "occupation_seconds": 0.000873417,
+              "generation_seconds": 0.023624625,
+              "organization_seconds": 0.000538375,
+              "output_seconds": 0.306499,
+              "total_seconds": 0.33177475,
+              "unique_occupations": 1374,
+              "records": 452373,
+              "blocks": 7,
+              "output_bytes": 108555592,
+              "integer_chunk_capacity_bytes": 70102420
+            },
+            "surviving_files": {
+              "input.txt": 98,
+              "rcsf.out": 108555592,
+              "resources.txt": 777,
+              "stdout.txt": 305
+            }
+          },
+          "runs": [
+            {
+              "wall_seconds": 0.35127808299148455,
+              "peak_rss_bytes": 72646656,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "stages": {
+                "input_seconds": 2.7416e-05,
+                "occupation_seconds": 0.000846917,
+                "generation_seconds": 0.02297025,
+                "organization_seconds": 0.000517875,
+                "output_seconds": 0.318733083,
+                "total_seconds": 0.34309575,
+                "unique_occupations": 1374,
+                "records": 452373,
+                "blocks": 7,
+                "output_bytes": 108555592,
+                "integer_chunk_capacity_bytes": 70102420
+              },
+              "surviving_files": {
+                "input.txt": 98,
+                "rcsf.out": 108555592,
+                "resources.txt": 777,
+                "stdout.txt": 305
+              }
+            },
+            {
+              "wall_seconds": 0.3420827500085579,
+              "peak_rss_bytes": 72564736,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "stages": {
+                "input_seconds": 2.8833e-05,
+                "occupation_seconds": 0.000896792,
+                "generation_seconds": 0.023241375,
+                "organization_seconds": 0.000507625,
+                "output_seconds": 0.308816875,
+                "total_seconds": 0.33349425,
+                "unique_occupations": 1374,
+                "records": 452373,
+                "blocks": 7,
+                "output_bytes": 108555592,
+                "integer_chunk_capacity_bytes": 70102420
+              },
+              "surviving_files": {
+                "input.txt": 98,
+                "rcsf.out": 108555592,
+                "resources.txt": 777,
+                "stdout.txt": 305
+              }
+            },
+            {
+              "wall_seconds": 0.3379271659941878,
+              "peak_rss_bytes": 72548352,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+              "output_bytes": 108555592,
+              "stages": {
+                "input_seconds": 3.1334e-05,
+                "occupation_seconds": 0.000878917,
+                "generation_seconds": 0.023027125,
+                "organization_seconds": 0.000572125,
+                "output_seconds": 0.304911083,
+                "total_seconds": 0.329420834,
+                "unique_occupations": 1374,
+                "records": 452373,
+                "blocks": 7,
+                "output_bytes": 108555592,
+                "integer_chunk_capacity_bytes": 70102420
+              },
+              "surviving_files": {
+                "input.txt": 98,
+                "rcsf.out": 108555592,
+                "resources.txt": 777,
+                "stdout.txt": 305
+              }
+            }
+          ],
+          "median_wall_seconds": 0.3420827500085579,
+          "median_peak_rss_bytes": 72564736
+        }
+      }
+    },
+    "o1_cc1as1": {
+      "input_sha256": "a172cfff428633e125f77a7a19a5ad94ff489b6ccbea4d0b7c01f04c64c2a1d2",
+      "expected_output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+      "variants": {
+        "fortran-debug": {
+          "warmup": {
+            "wall_seconds": 1.12506150000263,
+            "peak_rss_bytes": 11583488,
+            "block_input_operations": 0,
+            "block_output_operations": 0,
+            "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+            "output_bytes": 24002854,
+            "surviving_files": {
+              "clist.new": 11019685,
+              "input.txt": 116,
+              "rcsf.log": 1927,
+              "rcsf.out": 24002854,
+              "rcsfgenerate.log": 232,
+              "resources.txt": 777,
+              "stdout.txt": 4465
+            }
+          },
+          "runs": [
+            {
+              "wall_seconds": 1.0262709590024315,
+              "peak_rss_bytes": 11583488,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "surviving_files": {
+                "clist.new": 11019685,
+                "input.txt": 116,
+                "rcsf.log": 1927,
+                "rcsf.out": 24002854,
+                "rcsfgenerate.log": 232,
+                "resources.txt": 777,
+                "stdout.txt": 4465
+              }
+            },
+            {
+              "wall_seconds": 1.0278874159994302,
+              "peak_rss_bytes": 11550720,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "surviving_files": {
+                "clist.new": 11019685,
+                "input.txt": 116,
+                "rcsf.log": 1927,
+                "rcsf.out": 24002854,
+                "rcsfgenerate.log": 232,
+                "resources.txt": 777,
+                "stdout.txt": 4465
+              }
+            },
+            {
+              "wall_seconds": 1.02239537499554,
+              "peak_rss_bytes": 11583488,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "surviving_files": {
+                "clist.new": 11019685,
+                "input.txt": 116,
+                "rcsf.log": 1927,
+                "rcsf.out": 24002854,
+                "rcsfgenerate.log": 232,
+                "resources.txt": 777,
+                "stdout.txt": 4465
+              }
+            }
+          ],
+          "median_wall_seconds": 1.0262709590024315,
+          "median_peak_rss_bytes": 11583488
+        },
+        "fortran-release": {
+          "warmup": {
+            "wall_seconds": 0.7919925409951247,
+            "peak_rss_bytes": 2342912,
+            "block_input_operations": 0,
+            "block_output_operations": 0,
+            "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+            "output_bytes": 24002854,
+            "surviving_files": {
+              "clist.new": 11019685,
+              "input.txt": 116,
+              "rcsf.log": 1927,
+              "rcsf.out": 24002854,
+              "rcsfgenerate.log": 232,
+              "resources.txt": 777,
+              "stdout.txt": 4465
+            }
+          },
+          "runs": [
+            {
+              "wall_seconds": 0.7735451659973478,
+              "peak_rss_bytes": 2342912,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "surviving_files": {
+                "clist.new": 11019685,
+                "input.txt": 116,
+                "rcsf.log": 1927,
+                "rcsf.out": 24002854,
+                "rcsfgenerate.log": 232,
+                "resources.txt": 777,
+                "stdout.txt": 4465
+              }
+            },
+            {
+              "wall_seconds": 0.7911534589948133,
+              "peak_rss_bytes": 2342912,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "surviving_files": {
+                "clist.new": 11019685,
+                "input.txt": 116,
+                "rcsf.log": 1927,
+                "rcsf.out": 24002854,
+                "rcsfgenerate.log": 232,
+                "resources.txt": 777,
+                "stdout.txt": 4465
+              }
+            },
+            {
+              "wall_seconds": 0.7695203329931246,
+              "peak_rss_bytes": 2342912,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "surviving_files": {
+                "clist.new": 11019685,
+                "input.txt": 116,
+                "rcsf.log": 1927,
+                "rcsf.out": 24002854,
+                "rcsfgenerate.log": 232,
+                "resources.txt": 777,
+                "stdout.txt": 4465
+              }
+            }
+          ],
+          "median_wall_seconds": 0.7735451659973478,
+          "median_peak_rss_bytes": 2342912
+        },
+        "fortran-profile": {
+          "warmup": {
+            "wall_seconds": 0.7944072909886017,
+            "peak_rss_bytes": 2359296,
+            "block_input_operations": 0,
+            "block_output_operations": 0,
+            "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+            "output_bytes": 24002854,
+            "profile": {
+              "section_1": {
+                "seconds": 0.00018,
+                "calls": 1,
+                "record_write_bytes": 0,
+                "record_read_bytes": 0
+              },
+              "section_2": {
+                "seconds": 0.071433,
+                "calls": 2,
+                "record_write_bytes": 0,
+                "record_read_bytes": 0
+              },
+              "section_3": {
+                "seconds": 0.067718,
+                "calls": 1878,
+                "record_write_bytes": 0,
+                "record_read_bytes": 0
+              },
+              "section_4": {
+                "seconds": 0.065288,
+                "calls": 103194,
+                "record_write_bytes": 27571536,
+                "record_read_bytes": 0
+              },
+              "section_5": {
+                "seconds": 0.225744,
+                "calls": 2,
+                "record_write_bytes": 48011348,
+                "record_read_bytes": 40557525
+              },
+              "section_6": {
+                "seconds": 0.491175,
+                "calls": 1,
+                "record_write_bytes": 48005372,
+                "record_read_bytes": 48008360
+              },
+              "section_7": {
+                "seconds": 0.0,
+                "calls": 0,
+                "record_write_bytes": 0,
+                "record_read_bytes": 0
+              }
+            },
+            "surviving_files": {
+              "clist.new": 11019685,
+              "input.txt": 116,
+              "profile.toml": 729,
+              "rcsf.log": 1927,
+              "rcsf.out": 24002854,
+              "rcsfgenerate.log": 232,
+              "resources.txt": 777,
+              "stdout.txt": 4465
+            }
+          },
+          "runs": [
+            {
+              "wall_seconds": 0.7896350000082748,
+              "peak_rss_bytes": 2359296,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "profile": {
+                "section_1": {
+                  "seconds": 0.000171,
+                  "calls": 1,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_2": {
+                  "seconds": 0.065821,
+                  "calls": 2,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_3": {
+                  "seconds": 0.062121,
+                  "calls": 1878,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_4": {
+                  "seconds": 0.059732,
+                  "calls": 103194,
+                  "record_write_bytes": 27571536,
+                  "record_read_bytes": 0
+                },
+                "section_5": {
+                  "seconds": 0.223337,
+                  "calls": 2,
+                  "record_write_bytes": 48011348,
+                  "record_read_bytes": 40557525
+                },
+                "section_6": {
+                  "seconds": 0.494624,
+                  "calls": 1,
+                  "record_write_bytes": 48005372,
+                  "record_read_bytes": 48008360
+                },
+                "section_7": {
+                  "seconds": 0.0,
+                  "calls": 0,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                }
+              },
+              "surviving_files": {
+                "clist.new": 11019685,
+                "input.txt": 116,
+                "profile.toml": 729,
+                "rcsf.log": 1927,
+                "rcsf.out": 24002854,
+                "rcsfgenerate.log": 232,
+                "resources.txt": 777,
+                "stdout.txt": 4465
+              }
+            },
+            {
+              "wall_seconds": 0.7893711669894401,
+              "peak_rss_bytes": 2359296,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "profile": {
+                "section_1": {
+                  "seconds": 0.00018,
+                  "calls": 1,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_2": {
+                  "seconds": 0.066853,
+                  "calls": 2,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_3": {
+                  "seconds": 0.063042,
+                  "calls": 1878,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_4": {
+                  "seconds": 0.060501,
+                  "calls": 103194,
+                  "record_write_bytes": 27571536,
+                  "record_read_bytes": 0
+                },
+                "section_5": {
+                  "seconds": 0.224844,
+                  "calls": 2,
+                  "record_write_bytes": 48011348,
+                  "record_read_bytes": 40557525
+                },
+                "section_6": {
+                  "seconds": 0.491853,
+                  "calls": 1,
+                  "record_write_bytes": 48005372,
+                  "record_read_bytes": 48008360
+                },
+                "section_7": {
+                  "seconds": 0.0,
+                  "calls": 0,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                }
+              },
+              "surviving_files": {
+                "clist.new": 11019685,
+                "input.txt": 116,
+                "profile.toml": 729,
+                "rcsf.log": 1927,
+                "rcsf.out": 24002854,
+                "rcsfgenerate.log": 232,
+                "resources.txt": 777,
+                "stdout.txt": 4465
+              }
+            },
+            {
+              "wall_seconds": 0.8082288330042502,
+              "peak_rss_bytes": 2359296,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "profile": {
+                "section_1": {
+                  "seconds": 0.000189,
+                  "calls": 1,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_2": {
+                  "seconds": 0.066681,
+                  "calls": 2,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_3": {
+                  "seconds": 0.062878,
+                  "calls": 1878,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                },
+                "section_4": {
+                  "seconds": 0.060451,
+                  "calls": 103194,
+                  "record_write_bytes": 27571536,
+                  "record_read_bytes": 0
+                },
+                "section_5": {
+                  "seconds": 0.230306,
+                  "calls": 2,
+                  "record_write_bytes": 48011348,
+                  "record_read_bytes": 40557525
+                },
+                "section_6": {
+                  "seconds": 0.505168,
+                  "calls": 1,
+                  "record_write_bytes": 48005372,
+                  "record_read_bytes": 48008360
+                },
+                "section_7": {
+                  "seconds": 0.0,
+                  "calls": 0,
+                  "record_write_bytes": 0,
+                  "record_read_bytes": 0
+                }
+              },
+              "surviving_files": {
+                "clist.new": 11019685,
+                "input.txt": 116,
+                "profile.toml": 729,
+                "rcsf.log": 1927,
+                "rcsf.out": 24002854,
+                "rcsfgenerate.log": 232,
+                "resources.txt": 777,
+                "stdout.txt": 4465
+              }
+            }
+          ],
+          "median_wall_seconds": 0.7896350000082748,
+          "median_peak_rss_bytes": 2359296
+        },
+        "rust-release": {
+          "warmup": {
+            "wall_seconds": 0.08514820800337475,
+            "peak_rss_bytes": 26165248,
+            "block_input_operations": 0,
+            "block_output_operations": 0,
+            "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+            "output_bytes": 24002854,
+            "stages": {
+              "input_seconds": 2.8958e-05,
+              "occupation_seconds": 0.001095875,
+              "generation_seconds": 0.010007916,
+              "organization_seconds": 0.000669959,
+              "output_seconds": 0.0656275,
+              "total_seconds": 0.077430333,
+              "unique_occupations": 1614,
+              "records": 89786,
+              "blocks": 2,
+              "output_bytes": 24002854,
+              "integer_chunk_capacity_bytes": 15638467
+            },
+            "surviving_files": {
+              "input.txt": 116,
+              "rcsf.out": 24002854,
+              "resources.txt": 777,
+              "stdout.txt": 303
+            }
+          },
+          "runs": [
+            {
+              "wall_seconds": 0.08154970800387673,
+              "peak_rss_bytes": 26099712,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "stages": {
+                "input_seconds": 2.9833e-05,
+                "occupation_seconds": 0.001058042,
+                "generation_seconds": 0.008458042,
+                "organization_seconds": 0.000611416,
+                "output_seconds": 0.063629334,
+                "total_seconds": 0.073786958,
+                "unique_occupations": 1614,
+                "records": 89786,
+                "blocks": 2,
+                "output_bytes": 24002854,
+                "integer_chunk_capacity_bytes": 15638467
+              },
+              "surviving_files": {
+                "input.txt": 116,
+                "rcsf.out": 24002854,
+                "resources.txt": 777,
+                "stdout.txt": 303
+              }
+            },
+            {
+              "wall_seconds": 0.08288791700033471,
+              "peak_rss_bytes": 26116096,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "stages": {
+                "input_seconds": 3.15e-05,
+                "occupation_seconds": 0.001082875,
+                "generation_seconds": 0.008689292,
+                "organization_seconds": 0.000625542,
+                "output_seconds": 0.064623083,
+                "total_seconds": 0.075052667,
+                "unique_occupations": 1614,
+                "records": 89786,
+                "blocks": 2,
+                "output_bytes": 24002854,
+                "integer_chunk_capacity_bytes": 15638467
+              },
+              "surviving_files": {
+                "input.txt": 116,
+                "rcsf.out": 24002854,
+                "resources.txt": 777,
+                "stdout.txt": 303
+              }
+            },
+            {
+              "wall_seconds": 0.08232170800329186,
+              "peak_rss_bytes": 26066944,
+              "block_input_operations": 0,
+              "block_output_operations": 0,
+              "output_sha256": "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+              "output_bytes": 24002854,
+              "stages": {
+                "input_seconds": 2.7458e-05,
+                "occupation_seconds": 0.001095791,
+                "generation_seconds": 0.008556667,
+                "organization_seconds": 0.000663417,
+                "output_seconds": 0.064441625,
+                "total_seconds": 0.074785125,
+                "unique_occupations": 1614,
+                "records": 89786,
+                "blocks": 2,
+                "output_bytes": 24002854,
+                "integer_chunk_capacity_bytes": 15638467
+              },
+              "surviving_files": {
+                "input.txt": 116,
+                "rcsf.out": 24002854,
+                "resources.txt": 777,
+                "stdout.txt": 303
+              }
+            }
+          ],
+          "median_wall_seconds": 0.08232170800329186,
+          "median_peak_rss_bytes": 26099712
+        }
+      }
+    }
+  },
+  "hardware": {
+    "cpu": "Apple M4",
+    "physical_memory_bytes": 17179869184,
+    "model": "Mac16,12"
+  },
+  "compiler_settings": {
+    "fortran": "GNU Fortran 16.2.0, -fno-automatic -fallow-argument-mismatch; registered Debug uses -g; isolated Release uses -O3",
+    "rust": "rustc 1.92.0, Cargo release opt-level=3, lto=true, codegen-units=1",
+    "grasp_commit": "9006157730a82ac839f2b4ff4e938bcba63a539e"
+  }
+}

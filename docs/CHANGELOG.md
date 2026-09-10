@@ -6,7 +6,22 @@
 
 ## [Unreleased]
 
+### CLI 生成与并行阶段进展（2026-09-10）
+
+- 新增 `generate_transcript_csfs` CLI：直接读取 `rcsfgenerate` transcript，执行
+  占据枚举、并行 CSF 生成和确定性 J/宇称块合并。
+- CLI 支持可选 CSV 描述符输出及 `--normalize` 归一化；描述符从完整整数记录派生。
+- 新增 `generate_csfs_parallel`，支持 Rayon 线程数配置并保持任务顺序。
+- `e1_cc1as1` 已通过 1/2 线程逐字节回归，`o1_cc1as1` 已通过 1/2/4 线程逐字节回归。
+- 修复 roundtrip 测试并行运行时临时目录名称碰撞。
+- transcript 描述符 CSV 现在伴随版本化 TOML sidecar，记录编码、归一化状态、记录数和轨道顺序。
+
 ### CSF 串行生成开发接口
+
+- 新增串行全内存测量示例 `benchmark_generation` 与可重跑的隔离 Fortran
+  计时脚本；登记完整输出逐字节校验、阶段耗时、RSS 和记录体逻辑 I/O。
+- 新增 `CompleteCsfFile::write_record_to`，可从整数 chunk 逐条导出三行文本，
+  不写文件头/块分隔符，也不逐条 flush。
 
 - 新增 `csf_generation::generate_csfs`，从固定相对论占据组态直接枚举整数 CSF，
   包含原版态表、seniority、角动量耦合和按 J 分块的顺序。

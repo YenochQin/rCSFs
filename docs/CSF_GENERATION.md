@@ -126,3 +126,105 @@ per-symmetry-block record counts of the registered baselines exactly (452,373
 records in 7 even blocks for `e1_cc1as1`, 89,786 in 2 odd blocks for
 `o1_cc1as1`). Phase C acceptance additionally requires the existing-list
 expansion mode.
+
+## Registered full-output regression
+
+The transcript parser currently accepts only default orbital order (`*`) and
+one list terminated by `n`. Nondefault order, continuation (`y`), missing
+termination and extra input after termination fail explicitly. Core rewrites and negative excitation counts are implemented. Existing-list
+expansion remains unfinished.
+
+Run the record-level differential test against the external registered files:
+
+```bash
+RCSFS_BASELINE_DIR=/path/to/baselines uv run cargo test --test csf_generation_test \
+  registered_inputs_match_every_baseline_record_in_order -- --ignored --nocapture
+```
+
+On 2026-09-10 both files passed: 452,373 even and 89,786 odd records. The test
+compares every occupied subshell identity, population, state (including seniority),
+coupling, total J and parity in order and checks block boundaries. Failures identify
+the file, occupation task and record. Missing files fail rather than silently skip.
+This is semantic record equality; full generated headers and byte-level text
+formatting are not checked by this test.
+
+## Transcript input normalization
+
+`ExcitationRequest::from_transcript` normalizes user core 5 to low-level core 4
+plus closed `4d/5s/5p`, and user core 6 to low-level core 5 plus closed
+`4f/5d/6s/6p`. Explicit closed shells are included in the returned core metadata.
+Directly constructed requests use the low-level core selector. Closed shells
+must be full; changes in the closed set across references are unsupported.
+
+The active-limit patches follow `rcsfexcitation`, including its nonphysical
+`3f` sentinel for core 6; the sentinel never becomes a subshell. One upstream
+edge case is deliberately preserved: core 6 with active `7s` becomes `3f,7s`,
+and the wrapper's last-l rule omits closed `4f`, reducing the core by 14 electrons.
+Core 6 with `7s,6d` or `7s,6g` retains it. This compatibility behavior is tested;
+it is not a correction to the original physics input. Other active lists must
+end with their highest l symmetry.
+
+Negative excitation counts become positive limits and insert zero-population
+`d` entries only for missing active reference shells. Explicit zero-population
+selectors remain unchanged. Nonempty `d` shells fail. Excitation limits must fit
+`u8`, including after taking the absolute value. Active shells with l >= 5 use
+Fortran's four-electron enumeration cap, independently of physical capacity.
+
+The parser also accepts the actual log's comments and whitespace-separated J
+range. To reproduce the wrapper-level comparison with the registered executable:
+
+```bash
+GRASP_RCSFGENERATE=/path/to/grasp/build-debug/bin/rcsfgenerate \
+  uv run cargo test --test csf_generation_test \
+  input_rewrites_match_unmodified_rcsfgenerate -- --ignored --nocapture
+```
+
+All 18 cases passed on 2026-09-10, covering cores 0–6, active-limit patches,
+negative/positive/zero excitation counts, explicit zero selectors, and multiple
+references. The test runs each original calculation in its own temporary directory,
+checks core labels and every three-line record in order, and replays the generated
+log. The two registered full baselines also continue to pass record-level equality.
+
+## Serial performance baseline
+
+`examples/benchmark_generation.rs` composes the existing serial stages for
+measurement. It retains integer chunks per occupation and exports their blocks
+in final order through `CompleteCsfFile::write_record_to`, without copying
+record payloads or writing intermediate CSF files. It requires an explicit global
+record limit; it does not yet implement a process memory budget or a public
+transcript-generation API.
+
+Both registered full outputs, including their headers, match byte for byte.
+The [2026-09-10 baseline report](benchmarks/rcsfgenerate_serial_20260910.md)
+contains reproducible commands, per-stage timings, RSS, logical record I/O,
+raw measurements and limitations. The measurement harness compares unmodified
+Fortran binaries separately from an instrumented copy built outside the GRASP
+checkout. No parallel implementation is included in these results.
+
+## Deterministic parallel batch generation
+
+`generate_csfs_parallel` expands independent occupation tasks with Rayon and
+collects indexed results in input order. An optional thread count creates an
+isolated pool; omitting it uses Rayon defaults. The API applies a global record
+limit and rejects batches whose combined output exceeds it. The
+`benchmark_generation` example accepts `RCSFS_THREADS` to exercise this path.
+Per-task generation and final block organization remain unchanged, enabling
+byte-for-byte serial/parallel comparisons.
+
+## Transcript CLI
+
+The `generate_transcript_csfs` example is the supported command-line path for
+transcript inputs:
+
+```bash
+RCSFS_THREADS=4 uv run cargo run --release --example generate_transcript_csfs -- \
+  input.rcsfgenerate output.c 500000 descriptors.csv --normalize
+```
+
+The transcript is parsed and expanded in memory; `output.c` is written in
+deterministic J/parity block order. The optional CSV contains one dense
+descriptor row per CSF, and `--normalize` applies the existing normalization
+rules. Both output paths must be new files. When a descriptor CSV is requested,
+the CLI also writes a same-stem `descriptors.toml` sidecar with
+`format_version`, `encoding`, `normalized`, `record_count`, and the ordered
+`subshells` list. The sidecar is versioned and must also be a new file.

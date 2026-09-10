@@ -1,7 +1,7 @@
 use _rcsfs::complete_csf::{CompleteCsfFile, Parity};
 use _rcsfs::csf_generation::{
     EnumeratedConfiguration, ExcitationRequest, GenerationRequest, Subshell, SubshellOccupation,
-    enumerate_occupations, generate_csfs,
+    enumerate_occupations, generate_csfs, generate_csfs_parallel,
 };
 use std::collections::BTreeMap;
 use std::io::Cursor;
@@ -20,6 +20,46 @@ fn request(entries: &[(&str, u8)], min_two_j: u16, max_two_j: u16) -> Generation
         max_two_j,
         max_records: 100_000,
     }
+}
+
+#[test]
+fn parallel_generation_preserves_task_order_and_records() {
+    let requests = vec![
+        closed_configuration(2),
+        closed_configuration(3),
+        closed_configuration(4),
+    ];
+    let serial = requests
+        .iter()
+        .map(|request| generate_csfs(request).unwrap())
+        .collect::<Vec<_>>();
+    let parallel = generate_csfs_parallel(&requests, 10_000, Some(2)).unwrap();
+    assert_eq!(parallel.len(), serial.len());
+    for (left, right) in parallel.iter().zip(serial.iter()) {
+        assert_eq!(left.records, right.records);
+        assert_eq!(left.blocks, right.blocks);
+    }
+}
+
+#[test]
+fn complete_integer_record_derives_dense_descriptor() {
+    let generated = generate_csfs(&request(&[("2p", 1)], 1, 5)).unwrap();
+    let descriptor = generated.descriptor_for(&generated.records[0]).unwrap();
+    assert_eq!(descriptor, [1, 3, 3]);
+}
+
+#[test]
+fn complete_integer_descriptor_matches_normalization_contract() {
+    let generated = generate_csfs(&request(&[("2p", 1)], 1, 5)).unwrap();
+    let descriptor = generated.descriptor_for(&generated.records[0]).unwrap();
+    let normalized = _rcsfs::descriptor_normalization::normalize_descriptor_per_csf(
+        &descriptor,
+        &generated.subshells,
+        generated.records[0].total_two_j as i32,
+    )
+    .unwrap();
+    assert_eq!(normalized.len(), descriptor.len());
+    assert!(normalized.iter().all(|value| value.is_finite()));
 }
 
 fn roundtrip(request: &GenerationRequest) -> CompleteCsfFile {
@@ -485,4 +525,380 @@ fn generated_records_match_unmodified_fortran_gen() {
         cases.len()
     );
     fs::remove_dir_all(work).unwrap();
+}
+
+#[test]
+fn transcript_rejects_unimplemented_branches_and_trailing_lists() {
+    let input = include_str!("fixtures/o1_cc1as1.rcsfgenerate");
+    for selector in ["r", "s", "u", "e"] {
+        let changed = input.replace("* ! Orbital order", &format!("{selector} ! Orbital order"));
+        assert!(
+            ExcitationRequest::from_transcript(&changed)
+                .unwrap_err()
+                .to_string()
+                .contains("orbital order")
+        );
+    }
+    for answer in ["y", "Y"] {
+        let changed = input.replace("\nn\n", &format!("\n{answer}\n"));
+        assert!(
+            ExcitationRequest::from_transcript(&changed)
+                .unwrap_err()
+                .to_string()
+                .contains("multiple lists")
+        );
+    }
+    assert!(
+        ExcitationRequest::from_transcript(&input.replace("\nn\nEOF", "\nn\nextra\nEOF")).is_err()
+    );
+    assert!(ExcitationRequest::from_transcript(&input.replace("\nn\nEOF", "")).is_err());
+}
+
+#[test]
+fn transcript_expansion_mode_is_rejected_explicitly() {
+    let input = include_str!("fixtures/o1_cc1as1.rcsfgenerate");
+    let changed = input.replace("* ! Orbital order", "e ! Orbital order");
+    let error = ExcitationRequest::from_transcript(&changed).unwrap_err();
+    assert!(error.to_string().contains("orbital order"));
+}
+
+/// External, complete direct outputs; never substitute truncated fixtures.
+#[test]
+#[ignore = "requires RCSFS_BASELINE_DIR containing the registered full CSF files"]
+fn registered_inputs_match_every_baseline_record_in_order() {
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("RCSFS_BASELINE_DIR")
+            .expect("set RCSFS_BASELINE_DIR to the registered baseline directory"),
+    );
+    for ((input, _, expected_counts), name) in REGISTERED_BLOCK_COUNTS
+        .into_iter()
+        .zip(["e1_cc1as1.c", "o1_cc1as1.c"])
+    {
+        let baseline = CompleteCsfFile::parse_path(&directory.join(name)).unwrap();
+        assert_eq!(
+            baseline
+                .blocks
+                .iter()
+                .map(|block| (block.total_two_j, block.record_len as usize))
+                .collect::<Vec<_>>(),
+            expected_counts,
+            "{name}: baseline must be the full direct rcsfgenerate output"
+        );
+        let request = ExcitationRequest::from_transcript(input).unwrap();
+        let occupations = enumerate_occupations(&request).unwrap();
+        let mut positions = BTreeMap::new();
+        for block in &baseline.blocks {
+            positions.insert(block.total_two_j, block.record_start as usize);
+        }
+        for (task, configuration) in occupations.configurations.iter().enumerate() {
+            let generated = generate_csfs(&GenerationRequest {
+                core_subshells: occupations.core_subshells.clone(),
+                configuration: configuration.occupations.clone(),
+                min_two_j: request.min_two_j,
+                max_two_j: request.max_two_j,
+                max_records: 200_000,
+            })
+            .unwrap();
+            for record in &generated.records {
+                let position = positions.get_mut(&record.total_two_j).unwrap();
+                let expected = &baseline.records[*position];
+                let context = format!(
+                    "{name}: task {task}, record {}, 2J={}",
+                    *position, record.total_two_j
+                );
+                assert_eq!(
+                    (record.total_two_j, record.parity),
+                    (expected.total_two_j, expected.parity),
+                    "{context}"
+                );
+                let occupied = |file: &CompleteCsfFile, record| {
+                    file.occupied(record)
+                        .unwrap()
+                        .iter()
+                        .map(|shell| {
+                            (
+                                file.subshells[usize::from(shell.subshell_index)].clone(),
+                                shell.occupation,
+                                shell.state,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(
+                    occupied(&generated, record),
+                    occupied(&baseline, expected),
+                    "{context}: occupation/state"
+                );
+                assert_eq!(
+                    generated.couplings(record).unwrap(),
+                    baseline.couplings(expected).unwrap(),
+                    "{context}: coupling chain"
+                );
+                *position += 1;
+            }
+        }
+        for block in &baseline.blocks {
+            assert_eq!(
+                positions[&block.total_two_j],
+                (block.record_start + block.record_len) as usize,
+                "{name}: incomplete block"
+            );
+        }
+        eprintln!("{name}: {} records match in order", baseline.records.len());
+    }
+}
+
+fn excitation_transcript(core: u8, reference: &str, active: &str, excitations: i16) -> String {
+    format!(
+        "* ! Orbital order\n{core} ! Selected core\n{reference}\n*\n{active}\n0,12 ! Lower and higher 2*J\n{excitations} ! Number of excitations\nn\n"
+    )
+}
+
+#[test]
+fn normalized_inputs_preserve_closed_cores_and_pair_only_missing_shells() {
+    use _rcsfs::csf_generation::{OccupationMode, Orbital};
+    for (core, reference, active, electrons) in [
+        (5, "4f(2,*)", "4f", 54u16),
+        (6, "5f(2,*)", "5f", 86),
+        (6, "5g(2,*)", "5g", 86),
+    ] {
+        let request =
+            ExcitationRequest::from_transcript(&excitation_transcript(core, reference, active, 0))
+                .unwrap();
+        assert_eq!(request.core, core - 1);
+        let occupations = enumerate_occupations(&request).unwrap();
+        assert_eq!(
+            occupations
+                .core_subshells
+                .iter()
+                .map(|shell| u16::from(shell.capacity()))
+                .sum::<u16>(),
+            electrons
+        );
+        assert!(
+            !occupations
+                .active_subshells
+                .iter()
+                .any(|shell| occupations.core_subshells.contains(shell))
+        );
+    }
+    assert!("3f".parse::<Orbital>().is_err());
+    let request = ExcitationRequest::from_transcript(&excitation_transcript(
+        0,
+        "1s(2,*)2s(0,*)",
+        "2s,2p",
+        -2,
+    ))
+    .unwrap();
+    assert_eq!(request.max_excitations, 2);
+    let mode = |label: &str| {
+        request.references[0]
+            .shells
+            .iter()
+            .find(|shell| shell.orbital == label.parse().unwrap())
+            .unwrap()
+            .mode
+    };
+    assert_eq!(mode("2s"), OccupationMode::Active);
+    assert_eq!(mode("2p"), OccupationMode::Double);
+    let occupations = enumerate_occupations(&request).unwrap();
+    assert!(occupations.configurations.iter().any(|configuration| {
+        configuration
+            .occupations
+            .iter()
+            .any(|shell| shell.subshell.to_string() == "2s" && shell.electrons == 1)
+    }));
+    for configuration in &occupations.configurations {
+        let p_electrons: u8 = configuration
+            .occupations
+            .iter()
+            .filter(|shell| shell.subshell.l() == 1)
+            .map(|shell| shell.electrons)
+            .sum();
+        assert!(p_electrons.is_multiple_of(2));
+    }
+    for reference in ["1s(2,d)", "1s(1,c)"] {
+        let request =
+            ExcitationRequest::from_transcript(&excitation_transcript(0, reference, "2s", 2))
+                .unwrap();
+        assert!(enumerate_occupations(&request).is_err());
+    }
+    assert!(
+        ExcitationRequest::from_transcript(&excitation_transcript(0, "1s(2,*)", "2s", i16::MIN))
+            .is_err()
+    );
+}
+
+/// Live wrapper-level oracle, in separate directories to isolate fixed filenames.
+#[test]
+#[ignore = "requires GRASP_RCSFGENERATE pointing to the registered executable"]
+fn input_rewrites_match_unmodified_rcsfgenerate() {
+    use std::{
+        fs,
+        process::{Command, Stdio},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    };
+    let executable =
+        fs::canonicalize(std::env::var_os("GRASP_RCSFGENERATE").expect("set GRASP_RCSFGENERATE"))
+            .unwrap();
+    let directory = std::env::temp_dir().join(format!(
+        "rcsfs-wrapper-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let cases = [
+        (0, "1s(2,*)", "2s,2p", -2),
+        (0, "1s(2,*)2s(0,*)", "2s,2p", -2),
+        (0, "1s(2,*)", "2s,2p", -1),
+        (0, "1s(2,*)", "2s,2p", 2),
+        (1, "2s(2,*)", "3s,3p", -2),
+        (2, "3s(2,*)", "4s,4p", -2),
+        (3, "3d(2,*)", "4s,4p,4d", -2),
+        (4, "4d(2,*)", "5s,5p,5d", -2),
+        (5, "4f(2,*)", "4f", 0),
+        (5, "4f(2,*)", "5s,5p,5d,5f", -2),
+        (5, "4f(2,*)\n5d(2,*)", "5s,5p,5d,5f", 0),
+        (6, "5f(2,*)", "5f", 0),
+        (6, "5g(2,*)", "5g", 0),
+        (6, "5f(2,*)", "5f,5g", -2),
+        (6, "7s(2,*)", "7s,6d", -2),
+        (6, "7s(2,*)", "7s", 0),
+        (6, "7s(2,*)", "7s,6g", -2),
+        (6, "5f(2,*)", "6s,5f", -2),
+    ];
+    for (case, (core, reference, active, excitations)) in cases.into_iter().enumerate() {
+        let work = directory.join(case.to_string());
+        fs::create_dir(&work).unwrap();
+        let transcript = excitation_transcript(core, reference, active, excitations);
+        let raw = transcript
+            .lines()
+            .map(|line| line.split('!').next().unwrap().trim())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        fs::write(work.join("input"), raw).unwrap();
+        let mut child = Command::new(&executable)
+            .current_dir(&work)
+            .stdin(fs::File::open(work.join("input")).unwrap())
+            .stdout(fs::File::create(work.join("stdout")).unwrap())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "case {case}: {work:?}");
+                break;
+            }
+            if start.elapsed() > Duration::from_secs(20) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("Fortran timeout in {work:?}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let baseline = CompleteCsfFile::parse_path(&work.join("rcsf.out")).unwrap();
+        let request = ExcitationRequest::from_transcript(&transcript).unwrap();
+        // The actual Fortran log already contains patched active limits.
+        let logged = fs::read_to_string(work.join("rcsfgenerate.log")).unwrap();
+        assert_eq!(
+            request,
+            ExcitationRequest::from_transcript(&logged).unwrap(),
+            "case {case}: log replay"
+        );
+        let occupations = enumerate_occupations(&request).unwrap();
+        assert_eq!(
+            occupations
+                .core_subshells
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            baseline.header_lines[1]
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            "case {case}: closed core"
+        );
+        let mut actual = BTreeMap::<u16, Vec<String>>::new();
+        for configuration in &occupations.configurations {
+            let generated = generate_csfs(&GenerationRequest {
+                core_subshells: occupations.core_subshells.clone(),
+                configuration: configuration.occupations.clone(),
+                min_two_j: request.min_two_j,
+                max_two_j: request.max_two_j,
+                max_records: 200_000,
+            })
+            .unwrap();
+            if generated.records.is_empty() {
+                continue;
+            }
+            let mut text = Vec::new();
+            generated.write_to(&mut text).unwrap();
+            let text = String::from_utf8(text).unwrap();
+            let mut lines = text.lines().skip(5).filter(|line| !line.starts_with(" *"));
+            for record in &generated.records {
+                let record_lines = (0..3)
+                    .map(|_| lines.next().unwrap())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                actual
+                    .entry(record.total_two_j)
+                    .or_default()
+                    .push(record_lines);
+            }
+        }
+        let expected_text = fs::read_to_string(work.join("rcsf.out")).unwrap();
+        let expected_lines = expected_text
+            .lines()
+            .skip(5)
+            .filter(|line| !line.starts_with(" *"))
+            .collect::<Vec<_>>();
+        let expected = expected_lines
+            .chunks_exact(3)
+            .map(|lines| lines.join("\n"))
+            .collect::<Vec<_>>();
+        let actual = actual.into_values().flatten().collect::<Vec<_>>();
+        assert_eq!(
+            actual.len(),
+            baseline.records.len(),
+            "case {case}: count; {work:?}"
+        );
+        for (index, (a, b)) in actual.iter().zip(&expected).enumerate() {
+            assert_eq!(a, b, "case {case}: record {index}; {work:?}");
+        }
+        eprintln!(
+            "case {case}: core={core}, active={active}, excitations={excitations}: {} records match",
+            actual.len()
+        );
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn high_l_excitation_occupations_follow_fortran_four_electron_limit() {
+    let request = ExcitationRequest::from_transcript(&excitation_transcript(
+        0,
+        "1s(2,*)2s(2,*)3s(2,*)",
+        "6h",
+        6,
+    ))
+    .unwrap();
+    let result = enumerate_occupations(&request).unwrap();
+    let populations = result
+        .configurations
+        .iter()
+        .map(|configuration| {
+            configuration
+                .occupations
+                .iter()
+                .filter(|shell| shell.subshell.l() == 5)
+                .map(|shell| shell.electrons)
+                .sum::<u8>()
+        })
+        .collect::<Vec<_>>();
+    assert!(populations.contains(&4));
+    assert!(populations.iter().all(|&count| count <= 4));
 }

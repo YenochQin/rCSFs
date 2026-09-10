@@ -178,7 +178,10 @@ impl ReferenceConfiguration {
 /// The complete input needed for the new-list path of `rcsfgenerate`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExcitationRequest {
+    /// Low-level jjgen core selector, after transcript normalization.
     pub core: u8,
+    /// Highest active n per l. Transcript normalization may include the
+    /// wrapper's 3f sentinel (n == l); it never becomes a physical subshell.
     pub active_orbitals: Vec<Orbital>,
     pub references: Vec<ReferenceConfiguration>,
     pub min_two_j: u16,
@@ -193,9 +196,17 @@ impl ExcitationRequest {
             .iter()
             .position(|line| line.contains("Orbital order"))
             .context("missing orbital-order line")?;
+        let selector = lines[order].split('!').next().unwrap_or_default().trim();
+        ensure!(
+            selector == "*",
+            "orbital order {selector:?} is not supported; only * is implemented"
+        );
         let core = lines
             .get(order + 1)
             .context("missing core selector")?
+            .split('!')
+            .next()
+            .unwrap_or_default()
             .trim()
             .parse::<u8>()?;
         ensure!(core <= 6, "core selector must be 0..=6");
@@ -207,7 +218,14 @@ impl ExcitationRequest {
             if line.is_empty() || line == "*" {
                 break;
             }
-            references.push(ReferenceConfiguration::from_spectroscopic(line)?);
+            let prefix = match core {
+                5 => "4d(10,c)5s(2,c)5p(6,c)",
+                6 => "4f(14,c)5d(10,c)6s(2,c)6p(6,c)",
+                _ => "",
+            };
+            references.push(ReferenceConfiguration::from_spectroscopic(&format!(
+                "{prefix}{line}"
+            ))?);
         }
         ensure!(
             !references.is_empty(),
@@ -217,10 +235,53 @@ impl ExcitationRequest {
             .get(index)
             .context("missing active-orbital line")?
             .trim();
-        let active_orbitals = active_line
+        let active_line = match (core, active_line) {
+            (5, "4f") => "5s,4f",
+            (6, "5f") => "6s,5f",
+            (6, "5f,5g") => "6s,5f,5g",
+            (6, "5g") => "6s,5g",
+            _ => active_line,
+        };
+        // The wrapper inserts the nonphysical limit 3f to include closed 4f
+        // in the input walk, without opening any correlation f orbitals.
+        // Store this sentinel only for the core-6 rewrite; Orbital::new stays strict.
+        let mut active_orbitals = active_line
             .split(',')
-            .map(|value| value.trim().parse())
+            .map(|value| {
+                if core == 6 && value.trim() == "3f" {
+                    Ok(Orbital { n: 3, l: 3 })
+                } else {
+                    value.trim().parse()
+                }
+            })
             .collect::<Result<Vec<Orbital>>>()?;
+        if core == 6 && !active_orbitals.iter().any(|orbital| orbital.l == 3) {
+            let index = active_orbitals
+                .iter()
+                .position(|orbital| orbital.l == 2)
+                .map_or(0, |index| index + 1);
+            active_orbitals.insert(index, Orbital { n: 3, l: 3 });
+        }
+        let last_l = active_orbitals.last().map_or(0, |orbital| orbital.l);
+        ensure!(
+            active_orbitals
+                .iter()
+                .all(|orbital| orbital.l <= last_l
+                    || (core == 6 && *orbital == Orbital { n: 3, l: 3 })),
+            "active orbital limits must end with their highest l symmetry"
+        );
+        // rcsfexcitation uses the LAST listed l, raised to the predefined
+        // core's lmax, rather than the maximum listed l. Its inserted 3f can
+        // therefore be ignored (e.g. core 6 with 7s); in that case it also
+        // omits the injected closed 4f. Preserve this upstream behavior.
+        if core == 6 && active_orbitals.last().is_some_and(|orbital| orbital.l < 3) {
+            active_orbitals.retain(|orbital| !(orbital.n == 3 && orbital.l == 3));
+            for reference in &mut references {
+                reference
+                    .shells
+                    .retain(|shell| shell.orbital != Orbital { n: 4, l: 3 });
+            }
+        }
         ensure!(
             !active_orbitals.is_empty(),
             "active orbital list cannot be empty"
@@ -229,7 +290,11 @@ impl ExcitationRequest {
         let j_range = lines
             .get(index)
             .context("missing 2J range")?
-            .split(',')
+            .split('!')
+            .next()
+            .unwrap_or_default()
+            .split(|ch: char| ch == ',' || ch.is_whitespace())
+            .filter(|value| !value.is_empty())
             .map(|value| value.trim().parse::<u16>())
             .collect::<Result<Vec<_>, _>>()?;
         ensure!(
@@ -244,17 +309,67 @@ impl ExcitationRequest {
             .unwrap_or_default()
             .trim()
             .parse::<i16>()?;
+        if max_excitations < 0 {
+            // Only missing reference shells receive d. An explicitly specified
+            // zero-population shell retains its selector, just as in the wrapper.
+            let limits = active_limits(&active_orbitals)?;
+            let max_n = active_orbitals
+                .iter()
+                .map(|orbital| orbital.n)
+                .max()
+                .unwrap();
+            let max_l = active_orbitals
+                .iter()
+                .map(|orbital| orbital.l)
+                .max()
+                .unwrap();
+            let predefined = predefined_core(if core >= 5 { core - 1 } else { core })?;
+            for reference in &mut references {
+                for orbital in slot_list(max_n, max_l) {
+                    if limits.get(&orbital.l).is_some_and(|&n| orbital.n <= n)
+                        && !predefined.contains(&orbital)
+                        && !reference
+                            .shells
+                            .iter()
+                            .any(|shell| shell.orbital == orbital)
+                    {
+                        reference.shells.push(ReferenceSubshell {
+                            orbital,
+                            electrons: 0,
+                            mode: OccupationMode::Double,
+                        });
+                    }
+                }
+            }
+        }
+        let continuation = lines
+            .get(index + 1)
+            .context("missing list continuation answer")?
+            .split('!')
+            .next()
+            .unwrap_or_default()
+            .trim();
         ensure!(
-            max_excitations >= 0,
-            "negative excitation counts are not supported yet"
+            continuation != "y" && continuation != "Y",
+            "multiple lists are not supported yet"
+        );
+        ensure!(
+            continuation == "n" || continuation == "N",
+            "unsupported list continuation answer {continuation:?}"
+        );
+        ensure!(
+            lines[index + 2..]
+                .iter()
+                .all(|line| line.trim().is_empty() || line.trim() == "EOF"),
+            "unexpected input after list termination"
         );
         Ok(Self {
-            core,
+            core: if core >= 5 { core - 1 } else { core },
             active_orbitals,
             references,
             min_two_j: j_range[0],
             max_two_j: j_range[1],
-            max_excitations: u8::try_from(max_excitations)?,
+            max_excitations: u8::try_from(max_excitations.unsigned_abs())?,
         })
     }
 }
@@ -303,9 +418,52 @@ pub fn enumerate_occupations(request: &ExcitationRequest) -> Result<EnumeratedOc
         .iter()
         .map(|orbital| orbital.l)
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(
+            predefined_core(request.core)?
+                .iter()
+                .map(|orbital| orbital.l)
+                .max()
+                .unwrap_or(0),
+        );
     let slots = slot_list(max_n, max_l);
-    let core_orbitals = predefined_core(request.core)?;
+    let mut core_orbitals = predefined_core(request.core)?;
+    for shell in &request.references[0].shells {
+        if shell.mode == OccupationMode::Closed {
+            ensure!(
+                shell.electrons == shell.orbital.capacity(),
+                "closed shell {} must be full",
+                shell.orbital.label()
+            );
+            if !core_orbitals.contains(&shell.orbital) {
+                core_orbitals.push(shell.orbital);
+            }
+        }
+    }
+    core_orbitals.sort_unstable();
+    for reference in &request.references {
+        for shell in &reference.shells {
+            ensure!(
+                shell.electrons <= shell.orbital.capacity(),
+                "occupation exceeds orbital capacity"
+            );
+            ensure!(
+                shell.mode != OccupationMode::Double || shell.electrons == 0,
+                "d selector requires an empty reference shell"
+            );
+            ensure!(
+                shell.mode != OccupationMode::Closed
+                    || (shell.electrons == shell.orbital.capacity()
+                        && core_orbitals.contains(&shell.orbital)),
+                "closed shells must be full and consistent across references"
+            );
+            ensure!(
+                slots.contains(&shell.orbital),
+                "reference shell {} is outside the orbital input range",
+                shell.orbital.label()
+            );
+        }
+    }
     let core_set = core_orbitals
         .iter()
         .copied()
@@ -360,46 +518,18 @@ fn predefined_core(core: u8) -> Result<Vec<Orbital>> {
     let mut result = Vec::new();
     for n in 1..=core {
         for l in 0..=3.min(n - 1) {
-            result.push(Orbital { n, l });
+            let excluded = match core {
+                3 => (n, l) == (3, 2),
+                4 => n == 4 && l >= 2,
+                5 => (n, l) == (4, 3) || (n == 5 && l >= 2),
+                6 => (n, l) == (5, 3) || (n == 6 && l >= 2),
+                _ => false,
+            };
+            if !excluded {
+                result.push(Orbital { n, l });
+            }
         }
     }
-    if core >= 3 {
-        result.retain(|orbital| !(orbital.n == 3 && orbital.l == 2));
-    }
-    if core >= 4 {
-        result.retain(|orbital| !(orbital.n == 4 && (orbital.l == 2 || orbital.l == 3)));
-    }
-    if core >= 5 {
-        result.retain(|orbital| !(orbital.n == 5 && (orbital.l == 2 || orbital.l == 3)));
-    }
-    if core >= 6 {
-        result.retain(|orbital| !(orbital.n == 6 && (orbital.l == 2 || orbital.l == 3)));
-    }
-    // The excitation wrapper's predefined core has the following additions.
-    if core >= 4 {
-        result.extend([
-            Orbital { n: 3, l: 2 },
-            Orbital { n: 4, l: 0 },
-            Orbital { n: 4, l: 1 },
-        ]);
-    }
-    if core >= 5 {
-        result.extend([
-            Orbital { n: 4, l: 2 },
-            Orbital { n: 5, l: 0 },
-            Orbital { n: 5, l: 1 },
-        ]);
-    }
-    if core >= 6 {
-        result.extend([
-            Orbital { n: 4, l: 3 },
-            Orbital { n: 5, l: 2 },
-            Orbital { n: 6, l: 0 },
-            Orbital { n: 6, l: 1 },
-        ]);
-    }
-    result.sort_unstable();
-    result.dedup();
     Ok(result)
 }
 
@@ -569,7 +699,11 @@ fn bounds(field: SlotField, max_excitations: u8, varupp: u8, varned: u8) -> (u8,
     match field.mode {
         OccupationMode::Inactive | OccupationMode::Closed => (field.reference, field.reference, 1),
         OccupationMode::Active | OccupationMode::Minimum(_) | OccupationMode::Double => {
-            let capacity = field.orbital.capacity();
+            let capacity = if field.orbital.l >= 5 {
+                4
+            } else {
+                field.orbital.capacity()
+            };
             let start = (i16::from(field.reference) + i16::from(max_excitations)
                 - i16::from(varupp))
             .clamp(0, i16::from(capacity)) as u8;
@@ -578,8 +712,7 @@ fn bounds(field: SlotField, max_excitations: u8, varupp: u8, varned: u8) -> (u8,
                 _ => 0,
             };
             let stop = (i16::from(field.reference) - i16::from(max_excitations) + i16::from(varned))
-                .max(i16::from(low))
-                .clamp(0, i16::from(capacity)) as u8;
+                .max(i16::from(low)) as u8;
             let start = if field.mode == OccupationMode::Double {
                 start - start % 2
             } else {

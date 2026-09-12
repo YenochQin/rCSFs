@@ -18,7 +18,6 @@ fn request(entries: &[(&str, u8)], min_two_j: u16, max_two_j: u16) -> Generation
             .collect(),
         min_two_j,
         max_two_j,
-        max_records: 100_000,
     }
 }
 
@@ -33,7 +32,7 @@ fn parallel_generation_preserves_task_order_and_records() {
         .iter()
         .map(|request| generate_csfs(request).unwrap())
         .collect::<Vec<_>>();
-    let parallel = generate_csfs_parallel(&requests, 10_000, Some(2)).unwrap();
+    let parallel = generate_csfs_parallel(&requests, Some(2)).unwrap();
     assert_eq!(parallel.len(), serial.len());
     for (left, right) in parallel.iter().zip(serial.iter()) {
         assert_eq!(left.records, right.records);
@@ -176,20 +175,6 @@ fn invalid_inputs_and_unsupported_tables_fail() {
 }
 
 #[test]
-fn record_cap_reports_failure_instead_of_returning_a_partial_space() {
-    let mut input = request(&[("2p", 2)], 0, 4);
-    input.max_records = 1;
-    assert!(
-        generate_csfs(&input)
-            .unwrap_err()
-            .to_string()
-            .contains("max_records=1")
-    );
-    input.max_records = 2;
-    assert_eq!(generate_csfs(&input).unwrap().records.len(), 2);
-}
-
-#[test]
 fn custom_coupling_order_is_preserved() {
     let result = roundtrip(&request(&[("3s", 1), ("1s", 1), ("2s", 1)], 1, 1));
     assert_eq!(result.subshells, ["3s", "1s", "2s"]);
@@ -239,7 +224,6 @@ fn registered_rcsfgenerate_inputs_reproduce_grasp_block_counts() {
                 configuration: configuration.occupations.clone(),
                 min_two_j: request.min_two_j,
                 max_two_j: request.max_two_j,
-                max_records: 200_000,
             })
             .unwrap();
             for record in &generated.records {
@@ -325,7 +309,6 @@ fn registered_rcsfgenerate_references_expand_individually() {
                         configuration: configuration.occupations.clone(),
                         min_two_j: single.min_two_j,
                         max_two_j: single.max_two_j,
-                        max_records: 200_000,
                     })
                     .unwrap()
                     .records
@@ -443,7 +426,6 @@ fn generated_records_match_unmodified_fortran_gen() {
                     }],
                     min_two_j: u16::from(electrons % 2),
                     max_two_j: 40 + u16::from(electrons % 2),
-                    max_records: 100_000,
                 });
             }
         }
@@ -596,7 +578,6 @@ fn registered_inputs_match_every_baseline_record_in_order() {
                 configuration: configuration.occupations.clone(),
                 min_two_j: request.min_two_j,
                 max_two_j: request.max_two_j,
-                max_records: 200_000,
             })
             .unwrap();
             for record in &generated.records {
@@ -829,7 +810,6 @@ fn input_rewrites_match_unmodified_rcsfgenerate() {
                 configuration: configuration.occupations.clone(),
                 min_two_j: request.min_two_j,
                 max_two_j: request.max_two_j,
-                max_records: 200_000,
             })
             .unwrap();
             if generated.records.is_empty() {
@@ -901,4 +881,21 @@ fn high_l_excitation_occupations_follow_fortran_four_electron_limit() {
         .collect::<Vec<_>>();
     assert!(populations.contains(&4));
     assert!(populations.iter().all(|&count| count <= 4));
+}
+
+#[test]
+fn parallel_state_prefixes_preserve_records_and_order() {
+    // Four d_5/2 shells each have three states: 81 combinations force splitting.
+    for max_two_j in [0, 4] {
+        let input = request(&[("3d", 3), ("4d", 3), ("5d", 3), ("6d", 3)], 0, max_two_j);
+        let serial = generate_csfs(&input).unwrap();
+        assert!(!serial.records.is_empty());
+        for threads in [1, 2, 4] {
+            for _ in 0..2 {
+                let parallel =
+                    generate_csfs_parallel(std::slice::from_ref(&input), Some(threads)).unwrap();
+                assert_eq!(parallel[0], serial);
+            }
+        }
+    }
 }

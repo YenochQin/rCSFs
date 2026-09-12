@@ -13,10 +13,14 @@ from typing import Literal, Protocol, cast
 
 from . import (
     convert_csfs,
+    generate_csfs_from_transcript,
     generate_descriptors_from_parquet,
     partition_csfs,
     read_peel_subshells,
 )
+
+#: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
+_MAX_REFERENCE_CONFIGURATIONS = 100
 
 
 class GenDescriptorsArgs(Protocol):
@@ -46,7 +50,19 @@ class ZeroFirstArgs(Protocol):
     json: bool
 
 
-type CliArgs = GenDescriptorsArgs | ZeroFirstArgs
+class CsfsGenerateArgs(Protocol):
+    """Parsed arguments for the ``csfsgenerate`` subcommand."""
+
+    command: Literal["csfsgenerate"]
+    output: Path
+
+    descriptors: Path | None
+    normalize: bool
+    threads: int | None
+    json: bool
+
+
+type CliArgs = GenDescriptorsArgs | ZeroFirstArgs | CsfsGenerateArgs
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -147,6 +163,48 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Print partition statistics as JSON.",
+    )
+
+    csfsgenerate = subparsers.add_parser(
+        "csfsgenerate",
+        help="Interactively generate a new CSF list, replicating GRASP's rcsfgenerate dialog.",
+        description=(
+            "Ask the same sequence of questions as GRASP2018's rcsfgenerate "
+            "(orbital order, core, reference configurations, active orbitals, "
+            "2J range, excitation count) and generate the resulting CSF list "
+            "with the Rust generator. Options with no equivalent question in "
+            "the original dialog (output path, descriptor export, "
+            "thread count) are plain CLI flags."
+        ),
+    )
+    _ = csfsgenerate.add_argument(
+        "output",
+        nargs="?",
+        type=Path,
+        default=Path("rcsf.out"),
+        help="Destination CSF text file (default: rcsf.out; must not already exist).",
+    )
+    _ = csfsgenerate.add_argument(
+        "--descriptors",
+        type=Path,
+        default=None,
+        help="Optional descriptor CSV output path.",
+    )
+    _ = csfsgenerate.add_argument(
+        "--normalize",
+        action="store_true",
+        help="Normalize descriptor values (only used with --descriptors).",
+    )
+    _ = csfsgenerate.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Rayon thread count for generation (default: all cores).",
+    )
+    _ = csfsgenerate.add_argument(
+        "--json",
+        action="store_true",
+        help="Print generation statistics as JSON.",
     )
 
     return parser
@@ -252,6 +310,177 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
             shutil.rmtree(root, ignore_errors=True)
 
 
+def _prompt(message: str) -> str:
+    """Sole indirection point over ``input()`` so tests can script answers."""
+    return input(message)
+
+
+def _read_order() -> str:
+    while True:
+        answer = _prompt(
+            "Default, reverse, symmetry or user specified ordering? (*/r/s/u) "
+        ).strip()
+        if answer == "*":
+            return answer
+        print(
+            f"Orbital order {answer!r} is not supported yet; only * (default) "
+            "is implemented. Answer *.",
+            file=sys.stderr,
+        )
+
+
+def _read_core() -> int:
+    print("Select core")
+    print(" 0  No core")
+    print(" 1  He (2)")
+    print(" 2  Ne (10)")
+    print(" 3  Ar (18)")
+    print(" 4  Kr (36)")
+    print(" 5  Xe (54)")
+    print(" 6  Rn (86)")
+    while True:
+        answer = _prompt("Core? (0-6) ").strip()
+        try:
+            value = int(answer)
+        except ValueError:
+            print("Enter an integer 0..=6.", file=sys.stderr)
+            continue
+        if 0 <= value <= 6:
+            return value
+        print("Core selector must be 0..=6.", file=sys.stderr)
+
+
+def _read_references() -> list[str]:
+    print(
+        f"Enter list of (maximum {_MAX_REFERENCE_CONFIGURATIONS}) configurations. "
+        "End list with a blank line or an asterisk (*)"
+    )
+    references: list[str] = []
+    while len(references) < _MAX_REFERENCE_CONFIGURATIONS:
+        line = _prompt(f"Give configuration {len(references) + 1}: ")
+        stripped = line.strip()
+        if stripped in ("", "*"):
+            break
+        if stripped.count("(") != stripped.count(","):
+            print(
+                "Each orbital must be closed (c), inactive (i), active (*) "
+                "or have a minimal occupation; redo!",
+                file=sys.stderr,
+            )
+            continue
+        references.append(stripped)
+    if not references:
+        raise SystemExit("at least one reference configuration is required")
+    return references
+
+
+def _read_active_orbitals() -> str:
+    while True:
+        line = _prompt(
+            "Give set of active orbitals, as defined by the highest principal "
+            "quantum number per l-symmetry, in a comma delimited list in "
+            "s,p,d etc order, e.g. 5s,4p,3d: "
+        ).strip()
+        tokens = [token.strip() for token in line.split(",")]
+        if tokens and all(2 <= len(token) <= 3 for token in tokens):
+            return line
+        print(
+            "Orbitals should be given in comma delimited list, redo!",
+            file=sys.stderr,
+        )
+
+
+def _read_j_range() -> tuple[int, int]:
+    while True:
+        line = _prompt("Resulting 2*J-number? lower, higher (J=1 -> 2*J=2 etc.): ")
+        parts = [part for part in line.replace(",", " ").split() if part]
+        if len(parts) == 2:
+            try:
+                return int(parts[0]), int(parts[1])
+            except ValueError:
+                pass
+        print("Enter two integers: lower,higher", file=sys.stderr)
+
+
+def _read_excitations() -> int:
+    while True:
+        line = _prompt(
+            "Number of excitations (if negative number e.g. -2, correlation "
+            "orbitals will always be doubly occupied): "
+        ).strip()
+        try:
+            return int(line)
+        except ValueError:
+            print("Enter an integer.", file=sys.stderr)
+
+
+def _read_continue() -> bool:
+    answer = _prompt("Generate more lists ? (y/n) ").strip().lower()
+    return answer == "y"
+
+
+def _print_csfsgenerate_summary(stats: Mapping[str, object]) -> None:
+    output_file = stats.get("output_file", "")
+    print(f"Generated CSFs: {output_file}")
+    record_count = stats.get("record_count")
+    if record_count is not None:
+        print(f"record_count: {record_count}")
+    block_count = stats.get("block_count")
+    if block_count is not None:
+        print(f"block_count: {block_count}")
+    descriptor_file = stats.get("descriptor_file")
+    if descriptor_file is not None:
+        print(f"descriptor_file: {descriptor_file}")
+
+
+def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
+    order = _read_order()
+    core = _read_core()
+    references = _read_references()
+    active_orbitals = _read_active_orbitals()
+    j_min, j_max = _read_j_range()
+    excitations = _read_excitations()
+    if _read_continue():
+        print(
+            "Multiple lists are not supported yet; only the first list "
+            "would be generated. Aborting.",
+            file=sys.stderr,
+        )
+        return 1
+
+    transcript = "\n".join(
+        [
+            f"{order} ! Orbital order",
+            str(core),
+            *references,
+            "",
+            active_orbitals,
+            f"{j_min},{j_max}",
+            str(excitations),
+            "n",
+        ]
+    )
+
+    stats = generate_csfs_from_transcript(
+        transcript,
+        args.output,
+        descriptor_path=args.descriptors,
+        normalize=args.normalize,
+        threads=args.threads,
+    )
+
+    if args.json:
+        json.dump(stats, sys.stdout, indent=2, sort_keys=True)
+        _ = sys.stdout.write("\n")
+    elif stats.get("success") is True:
+        _print_csfsgenerate_summary(stats)
+    else:
+        error = stats.get("error", "unknown error")
+        print(f"CSF generation failed: {error}", file=sys.stderr)
+
+    return 0 if stats.get("success") is True else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = _parse_args(parser, argv)
@@ -276,6 +505,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Descriptor generation failed: {error}", file=sys.stderr)
 
         return 0 if stats.get("success") is True else 1
+
+    if args.command == "csfsgenerate":
+        return _run_csfsgenerate(args)
 
     return _run_zero_first(args)
 

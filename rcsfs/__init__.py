@@ -57,6 +57,7 @@ from ._types import (
     ConversionStats,
     CsfBlockInfo,
     CsfDataStats,
+    CsfGenerationStats,
     CsfHeaderData,
     CsfHeaderInfo,
     DescriptorGenerationStats,
@@ -71,6 +72,9 @@ except PackageNotFoundError:
 
 from ._rcsfs import (
     convert_csfs as _convert_csfs,
+)
+from ._rcsfs import (
+    generate_csfs_from_transcript as _generate_csfs_from_transcript,
 )
 from ._rcsfs import (
     get_parquet_info as _get_parquet_info,
@@ -394,6 +398,71 @@ def partition_csfs(
 
 
 # ///////////////////////////////////////////////////////////////////////////////
+# CSF Generation Functions
+# ///////////////////////////////////////////////////////////////////////////////
+
+
+def generate_csfs_from_transcript(
+    transcript: str,
+    output_path: str | Path,
+    descriptor_path: str | Path | None = None,
+    normalize: bool = False,
+    threads: int | None = None,
+) -> CsfGenerationStats:
+    """
+    Generate CSFs from an in-memory ``rcsfgenerate.log``-format transcript.
+
+    This is the Rust-side engine behind the interactive ``rcsfs csfsgenerate``
+    CLI, which assembles the transcript from the user's answers before
+    calling this function; the transcript is never written to disk. Parsing,
+    occupation enumeration and CSF generation all happen in Rust and are
+    written directly to ``output_path``, which (like ``descriptor_path``)
+    must not already exist.
+
+    Args:
+        transcript: ``rcsfgenerate.log``-format text: an orbital-order line,
+            a core selector (0-6), one reference configuration per line
+            terminated by a blank line or ``*``, an active-orbital line, a
+            ``jmin,jmax`` line, an excitation-count line, and a final ``n``
+            (list continuation is not supported).
+        output_path: Destination CSF text file.
+
+        descriptor_path: Optional destination for a descriptor CSV; a
+            ``{stem}.toml`` sidecar is written alongside it.
+        normalize: Whether to normalize descriptor values (only used when
+            ``descriptor_path`` is set).
+        threads: Optional Rayon thread count (default: all cores).
+
+    Returns:
+        Dictionary containing generation statistics and status. On success:
+        ``output_file``, ``record_count``, ``block_count``,
+        ``unique_occupations``, and optionally ``descriptor_file``/
+        ``descriptor_count``. On failure: ``error``.
+
+    Examples:
+        >>> transcript = "\\n".join([
+        ...     "* ! Orbital order",
+        ...     "3",
+        ...     "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
+        ...     "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",
+        ...     "",
+        ...     "5s,5p,5d,4f",
+        ...     "0,12",
+        ...     "2",
+        ...     "n",
+        ... ])
+        >>> stats = generate_csfs_from_transcript(transcript, "out.c")
+    """
+    return _generate_csfs_from_transcript(
+        transcript=transcript,
+        output_path=str(output_path),
+        descriptor_path=str(descriptor_path) if descriptor_path is not None else None,
+        normalize=normalize,
+        threads=threads,
+    )
+
+
+# ///////////////////////////////////////////////////////////////////////////////
 # Public API
 # ///////////////////////////////////////////////////////////////////////////////
 
@@ -409,6 +478,8 @@ __all__ = [
     "read_peel_subshells",
     # Zero-first partition
     "partition_csfs",
+    # CSF generation
+    "generate_csfs_from_transcript",
     # Type definitions
     "CsfHeaderInfo",
     "CsfBlockInfo",
@@ -418,4 +489,5 @@ __all__ = [
     "ParquetInfo",
     "DescriptorGenerationStats",
     "PartitionStats",
+    "CsfGenerationStats",
 ]

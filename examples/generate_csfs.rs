@@ -14,7 +14,7 @@ struct Input {
     core_subshells: Vec<String>,
     min_two_j: u16,
     max_two_j: u16,
-    max_records: usize,
+
     occupations: Vec<Occupation>,
 }
 
@@ -60,7 +60,6 @@ fn main() -> Result<()> {
             .collect::<Result<_>>()?,
         min_two_j: input.min_two_j,
         max_two_j: input.max_two_j,
-        max_records: input.max_records,
     };
     let generated = generate_csfs(&request)?;
     ensure!(

@@ -23,7 +23,7 @@ uv run cargo run --release --example generate_csfs -- \
 
 The example requires a new output path. It rejects existing paths, including
 links, and does not create an output when generation fails or finds zero CSFs.
-`max_records` is required so a request has an explicit record limit.
+Generation has no fixed record-count cap; results remain in memory.
 
 The supplied request has a filled `1s` core and two electrons in `2p_{3/2}`:
 
@@ -31,7 +31,6 @@ The supplied request has a filled `1s` core and two electrons in `2p_{3/2}`:
 core_subshells = ["1s"]
 min_two_j = 0
 max_two_j = 4
-max_records = 10000
 
 [[occupations]]
 subshell = "2p"
@@ -56,7 +55,6 @@ fn main() -> anyhow::Result<()> {
         }],
         min_two_j: 0,
         max_two_j: 4,
-        max_records: 10000,
     };
     let csfs = generate_csfs(&request)?;
     eprintln!("{} CSFs in {} blocks", csfs.records.len(), csfs.blocks.len());
@@ -91,7 +89,7 @@ the returned codec representation retains the printed sparse couplings.
   including filled subshells. Other occupations fail explicitly.
 - Requested and printed J values must fit the original writer's decimal
   fields: integer J at most 99, half-integer numerator at most 99.
-- Exceeding `max_records` returns an error and discards the partial result.
+- Generation has no fixed record-count cap. Available process memory limits the problem size.
   This limits record count; it is not a process memory or work/time budget.
   Large state products and coupling spaces can still take substantial time.
 - An empty peel configuration or an unreachable target returns an empty
@@ -190,9 +188,8 @@ log. The two registered full baselines also continue to pass record-level equali
 `examples/benchmark_generation.rs` composes the existing serial stages for
 measurement. It retains integer chunks per occupation and exports their blocks
 in final order through `CompleteCsfFile::write_record_to`, without copying
-record payloads or writing intermediate CSF files. It requires an explicit global
-record limit; it does not yet implement a process memory budget or a public
-transcript-generation API.
+record payloads or writing intermediate CSF files. There is no fixed record-count
+cap or process memory budget. The Python product entry is `uv run rcsfs csfsgenerate`.
 
 Both registered full outputs, including their headers, match byte for byte.
 The [2026-09-10 baseline report](benchmarks/rcsfgenerate_serial_20260910.md)
@@ -205,20 +202,22 @@ checkout. No parallel implementation is included in these results.
 
 `generate_csfs_parallel` expands independent occupation tasks with Rayon and
 collects indexed results in input order. An optional thread count creates an
-isolated pool; omitting it uses Rayon defaults. The API applies a global record
-limit and rejects batches whose combined output exceeds it. The
+isolated pool; omitting it uses Rayon defaults. Record-count arithmetic is checked
+for overflow, without a fixed cap. Tasks with at least 64 state combinations
+can split into ordered state-prefix subtrees within the pool. The
 `benchmark_generation` example accepts `RCSFS_THREADS` to exercise this path.
 Per-task generation and final block organization remain unchanged, enabling
 byte-for-byte serial/parallel comparisons.
 
 ## Transcript CLI
 
-The `generate_transcript_csfs` example is the supported command-line path for
-transcript inputs:
+The product entry is `uv run rcsfs csfsgenerate [output.c]`, defaulting to
+`rcsf.out`. The `generate_transcript_csfs` example remains a Rust development
+regression tool for transcript inputs:
 
 ```bash
 RCSFS_THREADS=4 uv run cargo run --release --example generate_transcript_csfs -- \
-  input.rcsfgenerate output.c 500000 descriptors.csv --normalize
+  input.rcsfgenerate output.c descriptors.csv --normalize
 ```
 
 The transcript is parsed and expanded in memory; `output.c` is written in
@@ -228,3 +227,9 @@ rules. Both output paths must be new files. When a descriptor CSV is requested,
 the CLI also writes a same-stem `descriptors.toml` sidecar with
 `format_version`, `encoding`, `normalized`, `record_count`, and the ordered
 `subshells` list. The sidecar is versioned and must also be a new file.
+
+
+Descriptor columns and sidecar subshells follow the final CSF header, including
+zero triplets for absent orbitals. Raw and normalized values are checked against
+the existing text-to-Parquet descriptor pipeline. See
+[local parallel measurements](benchmarks/rcsfgenerate_parallel_20260912.md).

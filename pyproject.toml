@@ -54,6 +54,21 @@ python-source = "."
 module-name = "rcsfs._rcsfs"
 features = ["pyo3/extension-module", "pyo3/generate-import-lib"]
 
+[tool.uv]
+# Local wheel consumers must rebuild when Python or Rust sources change,
+# even when the package version and pyproject.toml remain unchanged.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "src/**/*.rs" },
+    { file = "rcsfs/**/*.py" },
+    { file = "rcsfs/**/*.pyi" },
+    { file = "rcsfs/py.typed" },
+    { file = "README.md" },
+    { file = "LICENSE" },
+]
+
 [tool.basedpyright]
 include = ["rcsfs"]
 pythonVersion = "3.14"

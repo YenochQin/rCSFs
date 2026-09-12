@@ -71,8 +71,7 @@ def test_gen_descriptors_reads_header_and_prints_summary(
 
     captured = capsys.readouterr()
     assert captured.out == (
-        "Generated normalized descriptors: descriptors.parquet\n"
-        "descriptor_count: 12\n"
+        "Generated normalized descriptors: descriptors.parquet\ndescriptor_count: 12\n"
     )
     assert captured.err == ""
 
@@ -331,6 +330,120 @@ def test_zero_first_propagates_partition_failure(
     assert "Partition failed: boom" in captured.err
 
 
+def test_csfsgenerate_builds_transcript_and_reports_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from rcsfs import cli
+
+    answers = iter(
+        [
+            "*",  # orbital order
+            "3",  # core
+            "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",  # reference configuration 1
+            "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",  # reference configuration 2
+            "",  # end reference list
+            "5s,5p,5d,4f",  # active orbitals
+            "0,12",  # 2J range
+            "2",  # excitations
+            "n",  # no more lists
+        ]
+    )
+    monkeypatch.setattr(cli, "_prompt", lambda message: next(answers))
+
+    calls: dict[str, object] = {}
+
+    def fake_generate_csfs_from_transcript(
+        transcript: str,
+        output_path: Path,
+        descriptor_path: Path | None = None,
+        normalize: bool = False,
+        threads: int | None = None,
+    ) -> dict[str, object]:
+        calls["transcript"] = transcript
+        calls["output_path"] = output_path
+        calls["descriptor_path"] = descriptor_path
+        calls["normalize"] = normalize
+        calls["threads"] = threads
+        return {
+            "success": True,
+            "output_file": str(output_path),
+            "record_count": 452373,
+            "block_count": 7,
+        }
+
+    monkeypatch.setattr(
+        cli, "generate_csfs_from_transcript", fake_generate_csfs_from_transcript
+    )
+
+    exit_code = cli.main(["csfsgenerate", "out.c"])
+
+    assert exit_code == 0
+    assert calls["output_path"] == Path("out.c")
+    assert calls["descriptor_path"] is None
+    assert calls["normalize"] is False
+    assert calls["threads"] is None
+
+    transcript = calls["transcript"]
+    assert isinstance(transcript, str)
+    lines = transcript.splitlines()
+    assert lines == [
+        "* ! Orbital order",
+        "3",
+        "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
+        "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",
+        "",
+        "5s,5p,5d,4f",
+        "0,12",
+        "2",
+        "n",
+    ]
+
+    captured = capsys.readouterr()
+    assert "Generated CSFs: out.c" in captured.out
+    assert "record_count: 452373" in captured.out
+    assert "block_count: 7" in captured.out
+
+
+def test_csfsgenerate_aborts_on_unsupported_multiple_lists(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from rcsfs import cli
+
+    answers = iter(
+        [
+            "*",
+            "3",
+            "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
+            "",
+            "5s,5p,5d,4f",
+            "0,12",
+            "2",
+            "y",  # requests another list, which is not supported
+        ]
+    )
+    monkeypatch.setattr(cli, "_prompt", lambda message: next(answers))
+
+    called = False
+
+    def fake_generate_csfs_from_transcript(*args: object, **kwargs: object) -> object:
+        nonlocal called
+        called = True
+        raise AssertionError("must not call generation when continuation is requested")
+
+    monkeypatch.setattr(
+        cli, "generate_csfs_from_transcript", fake_generate_csfs_from_transcript
+    )
+
+    exit_code = cli.main(["csfsgenerate", "out.c"])
+
+    assert exit_code == 1
+    assert called is False
+    captured = capsys.readouterr()
+    assert "not supported" in captured.err.lower()
+
+
 def test_zero_first_propagates_convert_failure(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -356,3 +469,55 @@ def test_zero_first_propagates_convert_failure(
     assert exit_code == 1
     captured = capsys.readouterr()
     assert "conversion failed: bad input" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("fixture", "expected_hash"),
+    [
+        (
+            "e1_cc1as1",
+            "5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011",
+        ),
+        (
+            "o1_cc1as1",
+            "a6d55d2a104c8beb68f399ec07c2e6187525b95f575e32a7c1c927f55cc34bb4",
+        ),
+    ],
+)
+def test_interactive_generation_matches_registered_hash(
+    tmp_path: Path,
+    fixture: str,
+    expected_hash: str,
+) -> None:
+    import hashlib
+    import subprocess
+    import sys
+
+    transcript = (
+        Path(__file__).parent / "fixtures" / f"{fixture}.rcsfgenerate"
+    ).read_text()
+    answers = (
+        "\n".join(line.split("!")[0].strip() for line in transcript.splitlines()[1:-1])
+        + "\n"
+    )
+    for threads in (1, 2, 4):
+        work = tmp_path / str(threads)
+        work.mkdir()
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "rcsfs.cli",
+                "csfsgenerate",
+                "--threads",
+                str(threads),
+            ],
+            input=answers,
+            text=True,
+            capture_output=True,
+            cwd=work,
+            timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        with (work / "rcsf.out").open("rb") as output:
+            assert hashlib.file_digest(output, "sha256").hexdigest() == expected_hash

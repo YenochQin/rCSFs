@@ -119,7 +119,7 @@ impl CompleteCsfFile {
         let mut descriptor = vec![0i32; self.subshells.len() * 3];
         let occupied = self.occupied(record)?;
         let couplings = self.couplings(record)?;
-        for shell in occupied {
+        for (position, shell) in occupied.iter().enumerate() {
             let index = usize::from(shell.subshell_index);
             ensure!(index < self.subshells.len(), "subshell index out of range");
             let offset = index * 3;
@@ -127,10 +127,14 @@ impl CompleteCsfFile {
             if let Some(state) = shell.state {
                 descriptor[offset + 1] = i32::from(state.two_j);
             }
-            let boundary = u16::try_from(index + 2)?;
+            // Text descriptors use the printed coupling after this occupied
+            // shell, falling back to its visible state J when omitted.
+            descriptor[offset + 2] = descriptor[offset + 1];
+            let boundary = u16::try_from(position + 1)?;
             if let Some(coupling) = couplings.iter().find(|value| value.boundary == boundary) {
                 descriptor[offset + 2] = i32::from(coupling.two_j);
-            } else if index + 1 == occupied.len() {
+            }
+            if position + 1 == occupied.len() {
                 descriptor[offset + 2] = i32::from(record.total_two_j);
             }
         }

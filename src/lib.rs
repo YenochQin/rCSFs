@@ -21,6 +21,7 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_csfs_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
     m.add_function(wrap_pyfunction!(partition_csfs, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_csfs_from_transcript, m)?)?;
 
     // Register CSF descriptor module
     csfs_descriptor::register_descriptor_module(m)?;
@@ -267,6 +268,81 @@ fn partition_csfs(
             d.set_item("full_csf_count", stats.full_csf_count)?;
             d.set_item("output_csf_count", stats.output_csf_count)?;
             d.set_item("first_order_count", stats.first_order_count)?;
+            Ok(d.into())
+        }
+        Err(e) => {
+            let d = PyDict::new(py);
+            d.set_item("success", false)?;
+            d.set_item("error", e.to_string())?;
+            Ok(d.into())
+        }
+    }
+}
+
+/// Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript.
+///
+/// The transcript is parsed, enumerated and generated entirely in Rust and
+/// written directly to `output_path`; it is never written to disk itself.
+/// This backs the interactive `rcsfs csfsgenerate` CLI, which assembles the
+/// transcript from the user's answers before calling this function.
+///
+/// Args:
+/// - transcript: `rcsfgenerate.log`-format text (see `ExcitationRequest::from_transcript`).
+/// - output_path: Destination CSF text file. Must not already exist.
+/// - descriptor_path: Optional destination for a descriptor CSV (plus a `{stem}.toml` sidecar).
+/// - normalize: Whether to normalize descriptor values (only used if descriptor_path is set).
+/// - threads: Optional Rayon thread count; defaults to all cores.
+///
+/// Returns:
+/// Dictionary with `success`, and on success `output_file`, `record_count`,
+/// `block_count`, `unique_occupations`, optionally `descriptor_file`/
+/// `descriptor_count`; on failure `error`.
+#[pyfunction]
+#[pyo3(signature = (
+    transcript,
+    output_path,
+
+    descriptor_path=None,
+    normalize=false,
+    threads=None
+))]
+fn generate_csfs_from_transcript(
+    py: Python,
+    transcript: String,
+    output_path: String,
+
+    descriptor_path: Option<String>,
+    normalize: bool,
+    threads: Option<usize>,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    if matches!(threads, Some(0)) {
+        return Err(PyValueError::new_err("threads must be greater than 0"));
+    }
+
+    let result = py.detach(|| {
+        crate::csf_generation::generate_csfs_from_transcript(
+            &transcript,
+            Path::new(&output_path),
+            threads,
+            descriptor_path.as_deref().map(Path::new),
+            normalize,
+        )
+    });
+
+    match result {
+        Ok(stats) => {
+            let d = PyDict::new(py);
+            d.set_item("success", true)?;
+            d.set_item("output_file", &output_path)?;
+            if let Some(path) = &descriptor_path {
+                d.set_item("descriptor_file", path)?;
+            }
+            d.set_item("record_count", stats.record_count)?;
+            d.set_item("block_count", stats.block_count)?;
+            d.set_item("unique_occupations", stats.unique_occupations)?;
+            if let Some(descriptor_count) = stats.descriptor_count {
+                d.set_item("descriptor_count", descriptor_count)?;
+            }
             Ok(d.into())
         }
         Err(e) => {

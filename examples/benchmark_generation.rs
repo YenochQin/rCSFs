@@ -32,17 +32,10 @@ fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let input = PathBuf::from(
         args.next()
-            .context("usage: benchmark_generation INPUT OUTPUT MAX_RECORDS")?,
+            .context("usage: benchmark_generation INPUT OUTPUT")?,
     );
     let output = PathBuf::from(args.next().context("missing output path")?);
-    let max_records = args
-        .next()
-        .context("missing global record limit")?
-        .to_str()
-        .context("invalid limit")?
-        .parse::<usize>()?;
     ensure!(args.next().is_none(), "unexpected arguments");
-    ensure!(max_records > 0, "record limit must be positive");
     let request = ExcitationRequest::from_transcript(&fs::read_to_string(input)?)?;
     let input_seconds = total.elapsed().as_secs_f64();
     let start = Instant::now();
@@ -57,14 +50,13 @@ fn main() -> Result<()> {
             configuration: configuration.occupations.clone(),
             min_two_j: request.min_two_j,
             max_two_j: request.max_two_j,
-            max_records,
         })
         .collect::<Vec<_>>();
     let threads = std::env::var("RCSFS_THREADS")
         .ok()
         .map(|value| value.parse())
         .transpose()?;
-    let chunks = generate_csfs_parallel(&requests, max_records, threads)?;
+    let chunks = generate_csfs_parallel(&requests, threads)?;
     let count = chunks.iter().try_fold(0usize, |count, chunk| {
         count
             .checked_add(chunk.records.len())

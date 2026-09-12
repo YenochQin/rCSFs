@@ -6,11 +6,15 @@
 //! and are not inferred by this interface.
 
 mod occupations;
+mod pipeline;
 mod states;
 
 pub use occupations::{
     EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, OccupationMode, Orbital,
     ReferenceConfiguration, ReferenceSubshell, enumerate_occupations,
+};
+pub use pipeline::{
+    TranscriptGenerationStats, WriteStats, generate_csfs_from_transcript, write_generated_csfs,
 };
 
 use anyhow::{Context, Result, ensure};
@@ -127,9 +131,6 @@ pub struct GenerationRequest {
     pub configuration: Vec<SubshellOccupation>,
     pub min_two_j: u16,
     pub max_two_j: u16,
-    /// Hard cap on emitted records; exceeding it returns an error, never a
-    /// partial result. This is a record bound, not a process-memory budget.
-    pub max_records: usize,
 }
 
 /// Enumerate new CSFs without invoking Fortran or constructing text records.
@@ -138,11 +139,14 @@ pub struct GenerationRequest {
 /// result. Inspect `records.is_empty()` before export: empty CSF lists cannot
 /// be written by the strict codec. Unsupported subshell state tables fail.
 pub fn generate_csfs(request: &GenerationRequest) -> Result<CompleteCsfFile> {
+    generate_csfs_impl(request, 1)
+}
+
+fn generate_csfs_impl(request: &GenerationRequest, branch_count: usize) -> Result<CompleteCsfFile> {
     ensure!(
         request.min_two_j <= request.max_two_j,
         "minimum 2J exceeds maximum 2J"
     );
-    ensure!(request.max_records > 0, "max_records must be positive");
     ensure!(
         printable_j(request.max_two_j),
         "target J exceeds GRASP's output field range"
@@ -222,6 +226,74 @@ pub fn generate_csfs(request: &GenerationRequest) -> Result<CompleteCsfFile> {
     if occupied.is_empty() {
         return Ok(output);
     }
+    // Prefixes follow the serial state-table traversal. Each subtree is disjoint;
+    // indexed collection preserves that order independently of worker completion.
+    let combinations = choices
+        .iter()
+        .fold(1usize, |n, states| n.saturating_mul(states.len()));
+    if branch_count > 1 && combinations >= 64 {
+        let mut prefixes = vec![Vec::new()];
+        for states in &choices {
+            if prefixes.len() >= branch_count {
+                break;
+            }
+            prefixes = prefixes
+                .into_iter()
+                .flat_map(|prefix| {
+                    states.iter().map(move |state| {
+                        let mut next = prefix.clone();
+                        next.push(*state);
+                        next
+                    })
+                })
+                .collect();
+        }
+        for target in (request.min_two_j..=request.max_two_j).step_by(2) {
+            let branches = prefixes
+                .par_iter()
+                .map(|prefix| {
+                    let mut chunk = CompleteCsfFile {
+                        header_lines: output.header_lines.clone(),
+                        subshells: output.subshells.clone(),
+                        records: Vec::new(),
+                        occupied_subshells: Vec::new(),
+                        intermediate_couplings: Vec::new(),
+                        blocks: Vec::new(),
+                    };
+                    let mut selected = vec![
+                        SubshellState {
+                            two_j: 0,
+                            seniority: None
+                        };
+                        occupied.len()
+                    ];
+                    selected[..prefix.len()].copy_from_slice(prefix);
+                    let mut generator = Generator {
+                        choices: &choices,
+                        selected,
+                        cumulative: vec![0; occupied.len()],
+                        occupied: occupied.clone(),
+                        printed_couplings: Vec::with_capacity(MAX_OCCUPIED_SUBSHELLS),
+                        parity,
+                        output: &mut chunk,
+                    };
+                    generator.select_states(prefix.len(), target)?;
+                    Ok(chunk)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for chunk in branches {
+                for record in &chunk.records {
+                    output.append_generated_record(
+                        chunk.occupied(record)?,
+                        chunk.couplings(record)?,
+                        record.total_two_j,
+                        record.parity,
+                    )?;
+                }
+            }
+        }
+        return Ok(output);
+    }
     let mut generator = Generator {
         choices: &choices,
         selected: vec![
@@ -235,7 +307,7 @@ pub fn generate_csfs(request: &GenerationRequest) -> Result<CompleteCsfFile> {
         occupied,
         printed_couplings: Vec::with_capacity(MAX_OCCUPIED_SUBSHELLS),
         parity,
-        max_records: request.max_records,
+
         output: &mut output,
     };
     for target in (request.min_two_j..=request.max_two_j).step_by(2) {
@@ -248,21 +320,25 @@ pub fn generate_csfs(request: &GenerationRequest) -> Result<CompleteCsfFile> {
 ///
 /// Rayon collects indexed parallel iterators in their original input order,
 /// so callers can apply the same ordering and block merge logic as the
-/// serial generator. Each task receives the global record limit as a local
-/// safety bound; the combined result is checked before returning.
+/// serial generator. Record-count arithmetic is checked for overflow.
 pub fn generate_csfs_parallel(
     requests: &[GenerationRequest],
-    max_records: usize,
+
     threads: Option<usize>,
 ) -> Result<Vec<CompleteCsfFile>> {
-    ensure!(max_records > 0, "max_records must be positive");
+    ensure!(threads != Some(0), "threads must be greater than 0");
     let run = || {
         requests
             .par_iter()
             .map(|request| {
-                let mut request = request.clone();
-                request.max_records = request.max_records.min(max_records);
-                generate_csfs(&request)
+                generate_csfs_impl(
+                    request,
+                    if rayon::current_num_threads() > 1 {
+                        rayon::current_num_threads().saturating_mul(4)
+                    } else {
+                        1
+                    },
+                )
             })
             .collect::<Result<Vec<_>>>()
     };
@@ -274,15 +350,11 @@ pub fn generate_csfs_parallel(
             .install(run)?,
         None => run()?,
     };
-    let total = results.iter().try_fold(0usize, |total, file| {
+    results.iter().try_fold(0usize, |total, file| {
         total
             .checked_add(file.records.len())
             .context("record count overflow")
     })?;
-    ensure!(
-        total <= max_records,
-        "generated records exceed global limit {max_records}"
-    );
     Ok(results)
 }
 
@@ -317,7 +389,7 @@ struct Generator<'a> {
     occupied: Vec<OccupiedSubshell>,
     printed_couplings: Vec<IntermediateCoupling>,
     parity: Parity,
-    max_records: usize,
+
     output: &'a mut CompleteCsfFile,
 }
 
@@ -360,11 +432,6 @@ impl Generator<'_> {
     }
 
     fn emit(&mut self, target: u16) -> Result<()> {
-        ensure!(
-            self.output.records.len() < self.max_records,
-            "CSF generation exceeded max_records={} at 2J={target}",
-            self.max_records
-        );
         for (index, entry) in self.occupied.iter_mut().enumerate() {
             let state = self.selected[index];
             entry.state = if state.two_j == 0 && self.choices[index].len() == 1 {

@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Python 交互生成与验收收尾（2026-09-12）
+
+- 产品入口改为 `rcsfs csfsgenerate [output]`，默认 `rcsf.out`；问答经内存 transcript 进入共享 Rust 流水线，cargo examples 保留作开发回归。
+- 移除 Rust/Python/CLI 的记录数上限；保留整数溢出和格式边界检查。
+- 增加单占据任务的有序态前缀并行，保持串行记录顺序。
+- 修复直接描述符导出的全局轨道补零、sidecar 列序和稀疏耦合字段映射，使其与既有文本描述符路径一致。旧 CSV 哈希不再适用，CSF 文本哈希保持不变。
+- 新增真实 Python CLI 的 e1/o1 1/2/4 线程哈希回归，以及原始/归一化描述符逐项回归。
+
+
 ### CLI 生成与并行阶段进展（2026-09-10）
 
 - 新增 `generate_transcript_csfs` CLI：直接读取 `rcsfgenerate` transcript，执行

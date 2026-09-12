@@ -83,3 +83,16 @@ class PartitionStats(TypedDict):
     output_csf_count: NotRequired[int]
     first_order_count: NotRequired[int]
     error: NotRequired[str]
+
+
+class CsfGenerationStats(TypedDict):
+    """Statistics returned from transcript-driven CSF generation."""
+
+    success: bool
+    output_file: NotRequired[str]
+    descriptor_file: NotRequired[str]
+    record_count: NotRequired[int]
+    block_count: NotRequired[int]
+    unique_occupations: NotRequired[int]
+    descriptor_count: NotRequired[int]
+    error: NotRequired[str]

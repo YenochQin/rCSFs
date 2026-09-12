@@ -3,7 +3,6 @@
 core_subshells = ["1s"]
 min_two_j = 0
 max_two_j = 4
-max_records = 10000
 
 [[occupations]]
 subshell = "2p"

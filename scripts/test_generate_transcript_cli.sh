@@ -7,7 +7,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/rcsfs-cli.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 [ -x "$BIN" ] || { echo "build CLI first: cargo build --release --example generate_transcript_csfs" >&2; exit 2; }
 for threads in 1 2; do
-  RCSFS_THREADS=$threads "$BIN" "$FIXTURE" "$WORK/out-$threads.c" 200000 "$WORK/out-$threads.csv" --normalize > "$WORK/run-$threads.log"
+  RCSFS_THREADS=$threads "$BIN" "$FIXTURE" "$WORK/out-$threads.c" "$WORK/out-$threads.csv" --normalize > "$WORK/run-$threads.log"
   test -s "$WORK/out-$threads.c"
   test -s "$WORK/out-$threads.csv"
   test -s "$WORK/out-$threads.toml"

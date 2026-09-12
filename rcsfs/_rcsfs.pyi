@@ -4,6 +4,7 @@ from typing import Protocol
 
 from ._types import (
     ConversionStats,
+    CsfGenerationStats,
     CsfHeaderData,
     DescriptorGenerationStats,
     ParquetInfo,
@@ -49,3 +50,10 @@ def py_generate_descriptors_from_parquet(
     compression: str | None = None,
 ) -> DescriptorGenerationStats: ...
 def py_read_peel_subshells(header_path: str) -> list[str]: ...
+def generate_csfs_from_transcript(
+    transcript: str,
+    output_path: str,
+    descriptor_path: str | None = None,
+    normalize: bool = False,
+    threads: int | None = None,
+) -> CsfGenerationStats: ...

@@ -277,16 +277,86 @@ fn main() -> anyhow::Result<()> {
 
 目前这是 Rust 开发接口。串行生成器已可从一个明确给定的相对论占据组态枚举子壳层态与耦合，并直接返回该整数表示；该表示的 Python 绑定尚未实现。
 
-### 6. 从固定相对论占据组态生成 CSF
+### 6. 从单个固定相对论占据组态生成 CSF（Rust 开发接口）
 
 ```bash
 uv run cargo run --release --example generate_csfs -- \
   examples/fixed_configuration.toml /path/to/new-output.c
 ```
 
-示例生成闭核 `1s` 加 `2p_{3/2}^2` 的两个合法 CSF。TOML 请求明确指定每个相对论子壳层的占据、总 `2J` 范围和记录数上限；输出路径必须尚不存在。
+示例生成闭核 `1s` 加 `2p_{3/2}^2` 的两个合法 CSF。TOML 请求明确指定每个相对论子壳层的占据、总 `2J` 范围；输出路径必须尚不存在。这是一个 Rust 开发期入口（`csf_generation::generate_csfs(&GenerationRequest)`），不是面向用户的产品 CLI——从 Python 生成完整 CSF 列表见下面的[命令行工具](#命令行工具)一节。
 
-Rust 接口为 `csf_generation::generate_csfs(&GenerationRequest)`，直接返回整数记录，保留原版态表顺序、seniority 标签与耦合输出规则。其上层的 `csf_generation::enumerate_occupations(&ExcitationRequest)` 解析 `rcsfgenerate` 交互输入记录，完成激发枚举、参考宇称筛选、非相对论占据拆分与多参考合并；已有列表扩展模式与 Python 生成入口仍待实现。用法、限制与 Fortran 对照测试见 [生成指南](docs/CSF_GENERATION.md)。
+## 命令行工具
+
+安装 `rcsfs` 会同时安装一个 `rcsfs` 命令行脚本（`uv run rcsfs ...`），提供三个子命令。
+
+### `rcsfs csfsgenerate` —— 交互式生成新的 CSF 列表
+
+复刻 GRASP2018 `rcsfgenerate` 的交互式问答（轨道排序、选核、参考组态、活性轨道、`2J` 范围、激发数），并调用上面提到的 Rust 生成器（`csf_generation::enumerate_occupations` + `csf_generation::generate_csfs_parallel`）生成结果。原版问答中没有对应问题的选项——输出路径、描述符导出、线程数——都是普通的命令行参数：
+
+```text
+$ uv run rcsfs csfsgenerate out.c
+Default, reverse, symmetry or user specified ordering? (*/r/s/u) *
+Select core
+ 0  No core
+ 1  He (2)
+ 2  Ne (10)
+ 3  Ar (18)
+ 4  Kr (36)
+ 5  Xe (54)
+ 6  Rn (86)
+Core? (0-6) 3
+Enter list of (maximum 100) configurations. End list with a blank line or an asterisk (*)
+Give configuration 1: 3d(10,i)4s(2,*)4p(6,*)4d(6,*)
+Give configuration 2: 3d(10,*)4s(2,i)4p(6,i)4d(6,*)
+Give configuration 3:
+Give set of active orbitals, as defined by the highest principal quantum number per l-symmetry, in a comma delimited list in s,p,d etc order, e.g. 5s,4p,3d: 5s,5p,5d,4f
+Resulting 2*J-number? lower, higher (J=1 -> 2*J=2 etc.): 0,12
+Number of excitations (if negative number e.g. -2, correlation orbitals will always be doubly occupied): 2
+Generate more lists ? (y/n) n
+Generated CSFs: out.c
+record_count: 452373
+block_count: 7
+```
+
+可用参数：`--descriptors PATH`（同时写出描述符 CSV 及 `.toml` sidecar）、`--normalize`、`--threads N`、`--json`。
+
+尚不支持的选项会在问答阶段直接拒绝，而不是转发给一个必然报错的调用：非默认轨道排序（`r`/`s`/`u`，只实现了 `*`），以及在“Generate more lists?”回答 `y`（多列表续接）。
+
+同一套生成引擎也可以直接从 Python 调用，用于脚本化或非交互场景——自己组装 transcript 文本，而不用逐个回答问题：
+
+```python
+from rcsfs import generate_csfs_from_transcript
+
+transcript = "\n".join([
+    "* ! Orbital order",
+    "3",
+    "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
+    "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",
+    "",
+    "5s,5p,5d,4f",
+    "0,12",
+    "2",
+    "n",
+])
+stats = generate_csfs_from_transcript(transcript, "out.c")
+print(stats)
+```
+
+### `rcsfs gen-descriptors` —— 从 CSF Parquet 生成描述符 Parquet
+
+```bash
+uv run rcsfs gen-descriptors csf.parquet descriptors.parquet \
+  --header csf_header.toml --normalize
+```
+
+### `rcsfs zero-first` —— 将 CSF 列表重排为零级 + 一级空间
+
+对应 GRASP2018 的 `rcsfzerofirst`：在每个对称性分块内，零级参考 CSF 固定在块首，随后追加一级补集。
+
+```bash
+uv run rcsfs zero-first zero.csf full.csf out.csf
+```
 
 ## Python 公共 API
 
@@ -297,6 +367,8 @@ Rust 接口为 `csf_generation::generate_csfs(&GenerationRequest)`，直接返�
 | `get_parquet_info(input_path)` | 读取 Parquet 元数据 |
 | `read_peel_subshells(header_path)` | 从头文件 TOML 中提取 peel subshells |
 | `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False)` | 从转换后的 CSF 数据生成描述符 Parquet |
+| `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | 按对称性分块将 CSF 列表重排为零级 + 一级空间 |
+| `generate_csfs_from_transcript(transcript, output_path, descriptor_path=None, normalize=False, threads=None)` | 从内存中的 `rcsfgenerate.log` 格式 transcript 生成 CSF；`rcsfs csfsgenerate` 的底层实现 |
 
 ## 输入数据格式
 
@@ -322,21 +394,15 @@ rCSFs 期望的 CSF 文本结构如下：
 - `chunk_size=3_000_000` 是当前默认值，除非你已经测量出更合适的参数，否则建议先保持默认。
 - 如果输入文件中存在特别长的 CSF 行，并且你不希望被截断，可以适当增大 `max_line_len`。
 
-## 关于旧文档
-
-仓库里一些较早的文档提到过 `convert_csfs_parallel`、`CSFProcessor`、`CSFDescriptorGenerator`、`csfs_header`、`j_to_double_j` 这类接口。
-
-这些内容并不属于当前 [rcsfs/__init__.py](rcsfs/__init__.py) 导出的公共 Python 包装层，因此本 README 只保留当前实际支持、且与代码一致的接口说明。
-
 ## 开发命令
 
 本地常用命令：
 
 ```bash
 uv run cargo test
-uv run pytest tests/rcsfs_test.py
+uv run pytest
 uv run ruff check .
-uv run mypy rcsfs
+uv run basedpyright rcsfs/
 ```
 
 Cargo 测试也应通过 `uv run` 运行，这样 PyO3 会链接到项目 uv 环境中的 Python 3.14。裸 `cargo test` 可能会发现系统 Python，例如 macOS 上 Xcode 的 Python 3.9，并在链接阶段报 `library 'python3.9' not found`。
@@ -344,3 +410,5 @@ Cargo 测试也应通过 `uv run` 运行，这样 PyO3 会链接到项目 uv 环
 ## 许可证
 
 MIT，详见 [LICENSE](LICENSE)。
+
+`uv run rcsfs csfsgenerate` 默认输出到 `rcsf.out`；输出路径可省略。

@@ -303,7 +303,7 @@ representation to enumerate states and couplings for one explicit relativistic
 occupation configuration. Python bindings for this representation are not
 implemented yet.
 
-### 6. Generate CSFs for a fixed relativistic configuration
+### 6. Generate CSFs for a single fixed relativistic configuration (Rust dev API)
 
 ```bash
 uv run cargo run --release --example generate_csfs -- \
@@ -312,18 +312,97 @@ uv run cargo run --release --example generate_csfs -- \
 
 The example produces the two allowed CSFs of `2p_{3/2}^2` with a filled `1s`
 core. It accepts a TOML request with explicit subshell occupations, an inclusive
-`2J` range, and a record limit; output must be a new file.
+`2J` range; output must be a new file. This is a Rust
+development entry point (`csf_generation::generate_csfs(&GenerationRequest)`),
+not the product CLI — see [Command Line Interface](#command-line-interface)
+below for generating a full CSF list from Python.
 
-The Rust interface is `csf_generation::generate_csfs(&GenerationRequest)`.
-It returns integer records directly, preserving GRASP's state-table order,
-seniority labels and coupling formatting. Above it,
-`csf_generation::enumerate_occupations(&ExcitationRequest)` reads an
-`rcsfgenerate` input transcript and performs excitation enumeration, the
-reference-parity filter, nonrelativistic occupation splitting and
-multiple-reference merging. Expansion of an existing list and Python
-generation bindings remain planned.
-See [the generation guide](docs/CSF_GENERATION.md) for usage, limits and the
-Fortran differential test.
+## Command Line Interface
+
+Installing `rcsfs` also installs an `rcsfs` console script (`uv run rcsfs ...`)
+with three subcommands.
+
+### `rcsfs csfsgenerate` — interactively generate a new CSF list
+
+Replicates GRASP2018's `rcsfgenerate` interactive dialog (orbital order, core,
+reference configurations, active orbitals, `2J` range, excitation count) and
+generates the resulting CSF list with the Rust generator described above,
+composed via `csf_generation::enumerate_occupations` +
+`csf_generation::generate_csfs_parallel`. Options with no equivalent question
+in the original dialog — output path, descriptor export, thread
+count — are plain CLI flags instead:
+
+```text
+$ uv run rcsfs csfsgenerate out.c
+Default, reverse, symmetry or user specified ordering? (*/r/s/u) *
+Select core
+ 0  No core
+ 1  He (2)
+ 2  Ne (10)
+ 3  Ar (18)
+ 4  Kr (36)
+ 5  Xe (54)
+ 6  Rn (86)
+Core? (0-6) 3
+Enter list of (maximum 100) configurations. End list with a blank line or an asterisk (*)
+Give configuration 1: 3d(10,i)4s(2,*)4p(6,*)4d(6,*)
+Give configuration 2: 3d(10,*)4s(2,i)4p(6,i)4d(6,*)
+Give configuration 3:
+Give set of active orbitals, as defined by the highest principal quantum number per l-symmetry, in a comma delimited list in s,p,d etc order, e.g. 5s,4p,3d: 5s,5p,5d,4f
+Resulting 2*J-number? lower, higher (J=1 -> 2*J=2 etc.): 0,12
+Number of excitations (if negative number e.g. -2, correlation orbitals will always be doubly occupied): 2
+Generate more lists ? (y/n) n
+Generated CSFs: out.c
+record_count: 452373
+block_count: 7
+```
+
+Flags: `--descriptors PATH` (also write
+a descriptor CSV + `.toml` sidecar), `--normalize`, `--threads N`, `--json`.
+
+Not yet supported — the dialog rejects these up front instead of forwarding
+them to a call that would fail: non-default orbital order (`r`/`s`/`u`,
+only `*` works), and answering `y` to "Generate more lists?" (multi-list
+continuation).
+
+The same engine is available directly from Python for scripted or
+non-interactive use — build the transcript text yourself instead of
+answering the prompts:
+
+```python
+from rcsfs import generate_csfs_from_transcript
+
+transcript = "\n".join([
+    "* ! Orbital order",
+    "3",
+    "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
+    "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",
+    "",
+    "5s,5p,5d,4f",
+    "0,12",
+    "2",
+    "n",
+])
+stats = generate_csfs_from_transcript(transcript, "out.c")
+print(stats)
+```
+
+### `rcsfs gen-descriptors` — descriptor Parquet from a CSF Parquet file
+
+```bash
+uv run rcsfs gen-descriptors csf.parquet descriptors.parquet \
+  --header csf_header.toml --normalize
+```
+
+### `rcsfs zero-first` — reorder a CSF list into zero-order + first-order space
+
+Mirrors GRASP2018's `rcsfzerofirst`: within each symmetry block, the
+zero-order reference CSFs are locked to the head, followed by the
+first-order complement.
+
+```bash
+uv run rcsfs zero-first zero.csf full.csf out.csf
+```
 
 ## Public Python API
 
@@ -334,6 +413,8 @@ Fortran differential test.
 | `get_parquet_info(input_path)` | Inspect Parquet metadata |
 | `read_peel_subshells(header_path)` | Read peel subshells from header TOML |
 | `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False)` | Generate descriptor Parquet from converted CSFs |
+| `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | Reorder a CSF list into zero-order + first-order space per symmetry block |
+| `generate_csfs_from_transcript(transcript, output_path, descriptor_path=None, normalize=False, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` |
 
 ## Input Format
 
@@ -359,21 +440,15 @@ rCSFs expects CSF text files in this layout:
 - Keep the default `chunk_size=3_000_000` unless you have a measured reason to tune it.
 - Increase `max_line_len` if your input has unusually long CSF lines and you want to avoid truncation.
 
-## Notes on Older Docs
-
-Some older repository docs refer to APIs such as `convert_csfs_parallel`, `CSFProcessor`, `CSFDescriptorGenerator`, `csfs_header`, or `j_to_double_j`.
-
-Those are not part of the current public Python wrapper exported by [rcsfs/__init__.py](rcsfs/__init__.py), so this README documents the current supported surface instead.
-
 ## Development
 
 Useful local commands:
 
 ```bash
 uv run cargo test
-uv run pytest tests/rcsfs_test.py
+uv run pytest
 uv run ruff check .
-uv run mypy rcsfs
+uv run basedpyright rcsfs/
 ```
 
 Run Cargo tests through `uv run` so PyO3 links against the project Python 3.14 environment. Bare `cargo test` can pick up a system Python and fail at link time, for example with `library 'python3.9' not found` on macOS.
@@ -381,3 +456,5 @@ Run Cargo tests through `uv run` so PyO3 links against the project Python 3.14 e
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+`uv run rcsfs csfsgenerate` defaults to `rcsf.out`; the output path is optional.

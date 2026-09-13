@@ -7,6 +7,7 @@ import json
 import shutil
 import sys
 import tempfile
+import tomllib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol, cast
@@ -55,8 +56,11 @@ class CsfsGenerateArgs(Protocol):
 
     command: Literal["csfsgenerate"]
     output: Path
+    config: Path | None
+    generate_descriptors: bool
+    parquet: Path | None
+    descriptor_parquet: Path | None
 
-    descriptors: Path | None
     normalize: bool
     threads: int | None
     json: bool
@@ -185,15 +189,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Destination CSF text file (default: rcsf.out; must not already exist).",
     )
     _ = csfsgenerate.add_argument(
-        "--descriptors",
-        type=Path,
-        default=None,
-        help="Optional descriptor CSV output path.",
+        "--config", type=Path, default=None,
+        help="TOML generation configuration; replaces the interactive dialog.",
+    )
+    _ = csfsgenerate.add_argument(
+        "--generate-descriptors", action="store_true",
+        help="Also write CSF Parquet and descriptor Parquet outputs.",
+    )
+    _ = csfsgenerate.add_argument(
+        "--parquet", type=Path, default=None,
+        help="CSF Parquet output (default: same stem as the CSF file).",
+    )
+    _ = csfsgenerate.add_argument(
+        "--descriptor-parquet", type=Path, default=None,
+        help="Descriptor Parquet output (default: <stem>_descriptors.parquet).",
     )
     _ = csfsgenerate.add_argument(
         "--normalize",
         action="store_true",
-        help="Normalize descriptor values (only used with --descriptors).",
+        help="Normalize descriptor values when --generate-descriptors is enabled.",
     )
     _ = csfsgenerate.add_argument(
         "--threads",
@@ -434,13 +448,41 @@ def _print_csfsgenerate_summary(stats: Mapping[str, object]) -> None:
 
 
 def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
-    order = _read_order()
-    core = _read_core()
-    references = _read_references()
-    active_orbitals = _read_active_orbitals()
-    j_min, j_max = _read_j_range()
-    excitations = _read_excitations()
-    if _read_continue():
+    if args.config is not None:
+        try:
+            config = tomllib.loads(args.config.read_text(encoding="utf-8"))
+            generate = config["generate"]
+            order = str(generate.get("order", "*"))
+            core = int(generate["core"])
+            references = [str(value) for value in generate["references"]]
+            active_orbitals = str(generate["active_orbitals"])
+            j_min = int(generate["j_min"])
+            j_max = int(generate["j_max"])
+            excitations = int(generate["excitations"])
+            output = config.get("output", {})
+            if args.output == Path("rcsf.out") and output.get("csf") is not None:
+                args.output = Path(str(output["csf"]))
+            if not args.generate_descriptors:
+                args.generate_descriptors = bool(output.get("generate_descriptors", False))
+            if args.parquet is None and output.get("parquet") is not None:
+                args.parquet = Path(str(output["parquet"]))
+            if args.descriptor_parquet is None and output.get("descriptor_parquet") is not None:
+                args.descriptor_parquet = Path(str(output["descriptor_parquet"]))
+            if not args.normalize:
+                args.normalize = bool(output.get("normalize", False))
+            if bool(generate.get("continue_lists", False)):
+                raise ValueError("continue_lists is not supported yet; use false")
+        except (KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as exc:
+            print(f"Invalid generation config: {exc}", file=sys.stderr)
+            return 2
+    else:
+        order = _read_order()
+        core = _read_core()
+        references = _read_references()
+        active_orbitals = _read_active_orbitals()
+        j_min, j_max = _read_j_range()
+        excitations = _read_excitations()
+    if args.config is None and _read_continue():
         print(
             "Multiple lists are not supported yet; only the first list "
             "would be generated. Aborting.",
@@ -464,10 +506,32 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
     stats = generate_csfs_from_transcript(
         transcript,
         args.output,
-        descriptor_path=args.descriptors,
+        descriptor_path=None,
         normalize=args.normalize,
         threads=args.threads,
     )
+
+    if stats.get("success") is True and args.generate_descriptors:
+        csf_parquet = args.parquet or args.output.with_suffix(".parquet")
+        descriptor_parquet = args.descriptor_parquet or args.output.with_name(
+            f"{args.output.stem}_descriptors.parquet"
+        )
+        conversion = convert_csfs(args.output, csf_parquet)
+        if conversion.get("success") is not True:
+            stats = {"success": False, "error": conversion.get("error", "CSF conversion failed")}
+        else:
+            header = conversion.get("header_file")
+            if not isinstance(header, str):
+                header = str(csf_parquet.parent / f"{args.output.stem}_header.toml")
+            descriptors = generate_descriptors_from_parquet(
+                csf_parquet, descriptor_parquet,
+                peel_subshells=read_peel_subshells(header),
+                normalize=args.normalize,
+            )
+            stats["parquet_file"] = str(csf_parquet)
+            stats["descriptor_parquet_file"] = str(descriptor_parquet)
+            if descriptors.get("success") is not True:
+                stats = {"success": False, "error": descriptors.get("error", "Descriptor generation failed")}
 
     if args.json:
         json.dump(stats, sys.stdout, indent=2, sort_keys=True)

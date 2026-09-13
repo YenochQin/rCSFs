@@ -290,58 +290,30 @@ uv run cargo run --release --example generate_csfs -- \
 
 安装 `rcsfs` 会同时安装一个 `rcsfs` 命令行脚本（`uv run rcsfs ...`），提供三个子命令。
 
-### `rcsfs csfsgenerate` —— 交互式生成新的 CSF 列表
+### `rcsfs csfsgenerate` —— 生成新的 CSF 列表
 
-复刻 GRASP2018 `rcsfgenerate` 的交互式问答（轨道排序、选核、参考组态、活性轨道、`2J` 范围、激发数），并调用上面提到的 Rust 生成器（`csf_generation::enumerate_occupations` + `csf_generation::generate_csfs_parallel`）生成结果。原版问答中没有对应问题的选项——输出路径、描述符导出、线程数——都是普通的命令行参数：
+除了交互式问答外，也可以使用 TOML 配置进行可复现的批处理。默认只生成 CSF 文本；将 `generate_descriptors` 设为 `true` 后，还会生成 CSF Parquet、header TOML、描述符 Parquet 和描述符 TOML sidecar。CSV 描述符输出不再支持。
 
-```text
-$ uv run rcsfs csfsgenerate out.c
-Default, reverse, symmetry or user specified ordering? (*/r/s/u) *
-Select core
- 0  No core
- 1  He (2)
- 2  Ne (10)
- 3  Ar (18)
- 4  Kr (36)
- 5  Xe (54)
- 6  Rn (86)
-Core? (0-6) 3
-Enter list of (maximum 100) configurations. End list with a blank line or an asterisk (*)
-Give configuration 1: 3d(10,i)4s(2,*)4p(6,*)4d(6,*)
-Give configuration 2: 3d(10,*)4s(2,i)4p(6,i)4d(6,*)
-Give configuration 3:
-Give set of active orbitals, as defined by the highest principal quantum number per l-symmetry, in a comma delimited list in s,p,d etc order, e.g. 5s,4p,3d: 5s,5p,5d,4f
-Resulting 2*J-number? lower, higher (J=1 -> 2*J=2 etc.): 0,12
-Number of excitations (if negative number e.g. -2, correlation orbitals will always be doubly occupied): 2
-Generate more lists ? (y/n) n
-Generated CSFs: out.c
-record_count: 452373
-block_count: 7
+```toml
+[generate]
+order = "*"
+core = 3
+references = ["3d(10,i)4s(2,*)4p(6,*)4d(6,*)", "3d(10,*)4s(2,i)4p(6,i)4d(6,*)"]
+active_orbitals = "5s,5p,5d,4f"
+j_min = 0
+j_max = 12
+excitations = 2
+continue_lists = false
+
+[output]
+generate_descriptors = true
+csf = "out.c"
+parquet = "out.parquet"
+descriptor_parquet = "out_descriptors.parquet"
+normalize = false
 ```
 
-可用参数：`--descriptors PATH`（同时写出描述符 CSV 及 `.toml` sidecar）、`--normalize`、`--threads N`、`--json`。
-
-尚不支持的选项会在问答阶段直接拒绝，而不是转发给一个必然报错的调用：非默认轨道排序（`r`/`s`/`u`，只实现了 `*`），以及在“Generate more lists?”回答 `y`（多列表续接）。
-
-同一套生成引擎也可以直接从 Python 调用，用于脚本化或非交互场景——自己组装 transcript 文本，而不用逐个回答问题：
-
-```python
-from rcsfs import generate_csfs_from_transcript
-
-transcript = "\n".join([
-    "* ! Orbital order",
-    "3",
-    "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
-    "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",
-    "",
-    "5s,5p,5d,4f",
-    "0,12",
-    "2",
-    "n",
-])
-stats = generate_csfs_from_transcript(transcript, "out.c")
-print(stats)
-```
+运行：`uv run rcsfs csfsgenerate --config generation.toml`。
 
 ### `rcsfs gen-descriptors` —— 从 CSF Parquet 生成描述符 Parquet
 
@@ -368,7 +340,7 @@ uv run rcsfs zero-first zero.csf full.csf out.csf
 | `read_peel_subshells(header_path)` | 从头文件 TOML 中提取 peel subshells |
 | `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False)` | 从转换后的 CSF 数据生成描述符 Parquet |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | 按对称性分块将 CSF 列表重排为零级 + 一级空间 |
-| `generate_csfs_from_transcript(transcript, output_path, descriptor_path=None, normalize=False, threads=None)` | 从内存中的 `rcsfgenerate.log` 格式 transcript 生成 CSF；`rcsfs csfsgenerate` 的底层实现 |
+| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | 从内存中的 `rcsfgenerate.log` 格式 transcript 生成 CSF；`rcsfs csfsgenerate` 的底层实现 |
 
 ## 输入数据格式
 

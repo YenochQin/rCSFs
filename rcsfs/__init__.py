@@ -405,7 +405,6 @@ def partition_csfs(
 def generate_csfs_from_transcript(
     transcript: str,
     output_path: str | Path,
-    descriptor_path: str | Path | None = None,
     normalize: bool = False,
     threads: int | None = None,
 ) -> CsfGenerationStats:
@@ -416,8 +415,7 @@ def generate_csfs_from_transcript(
     CLI, which assembles the transcript from the user's answers before
     calling this function; the transcript is never written to disk. Parsing,
     occupation enumeration and CSF generation all happen in Rust and are
-    written directly to ``output_path``, which (like ``descriptor_path``)
-    must not already exist.
+    written directly to ``output_path``, which must not already exist.
 
     Args:
         transcript: ``rcsfgenerate.log``-format text: an orbital-order line,
@@ -427,10 +425,8 @@ def generate_csfs_from_transcript(
             (list continuation is not supported).
         output_path: Destination CSF text file.
 
-        descriptor_path: Optional destination for a descriptor CSV; a
-            ``{stem}.toml`` sidecar is written alongside it.
-        normalize: Whether to normalize descriptor values (only used when
-            ``descriptor_path`` is set).
+        normalize: Retained for API compatibility; descriptor Parquet export
+            is performed by the generation CLI pipeline.
         threads: Optional Rayon thread count (default: all cores).
 
     Returns:
@@ -456,7 +452,7 @@ def generate_csfs_from_transcript(
     return _generate_csfs_from_transcript(
         transcript=transcript,
         output_path=str(output_path),
-        descriptor_path=str(descriptor_path) if descriptor_path is not None else None,
+        descriptor_path=None,
         normalize=normalize,
         threads=threads,
     )

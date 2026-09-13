@@ -14,7 +14,6 @@ use super::{
     ExcitationRequest, GenerationRequest, Subshell, enumerate_occupations, generate_csfs_parallel,
 };
 use crate::complete_csf::{CompleteCsfFile, Parity};
-use crate::descriptor_normalization::{infer_two_j_target, normalize_descriptor_per_csf};
 
 fn header(labels: impl IntoIterator<Item = String>) -> String {
     labels
@@ -41,15 +40,15 @@ pub struct WriteStats {
 }
 
 /// Order generated chunks into GRASP's final J/P block order, merge them into
-/// one CSF text file, and optionally export a descriptor CSV alongside it.
+/// one CSF text file. Descriptor Parquet is produced by the Python pipeline.
 ///
 /// `output_path` and (if given) `descriptor_path` must not already exist.
 pub fn write_generated_csfs(
     core_subshells: &[Subshell],
     chunks: &[CompleteCsfFile],
     output_path: &Path,
-    descriptor_path: Option<&Path>,
-    normalize: bool,
+    _descriptor_path: Option<&Path>,
+    _normalize: bool,
 ) -> Result<WriteStats> {
     let count = chunks.iter().try_fold(0usize, |count, chunk| {
         count
@@ -74,7 +73,6 @@ pub fn write_generated_csfs(
     }
     let mut used = used.into_iter().collect::<Vec<_>>();
     used.sort_by_key(|shell| (shell.n(), shell.l(), shell.kappa() < 0));
-    let descriptor_subshells = used.iter().map(ToString::to_string).collect::<Vec<_>>();
     let headers = [
         "Core subshells:".to_owned(),
         header(core_subshells.iter().map(ToString::to_string)),
@@ -109,93 +107,11 @@ pub fn write_generated_csfs(
     writer.flush()?;
     drop(writer);
 
-    let mut descriptor_count = None;
-    if let Some(path) = descriptor_path {
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .with_context(|| format!("descriptor output must be a new file: {}", path.display()))?;
-        let mut writer = BufWriter::new(file);
-        let mut written = 0usize;
-        for block_refs in order.values() {
-            for &(chunk_index, block_index) in block_refs {
-                let chunk = &chunks[chunk_index];
-                let descriptor_indices = chunk
-                    .subshells
-                    .iter()
-                    .map(|shell| {
-                        descriptor_subshells
-                            .iter()
-                            .position(|global| global == shell)
-                            .context("descriptor subshell missing from output header")
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let block = &chunk.blocks[block_index];
-                let start = usize::try_from(block.record_start)?;
-                let end = start + usize::try_from(block.record_len)?;
-                for record in &chunk.records[start..end] {
-                    let local = chunk.descriptor_for(record)?;
-                    let mut descriptor = vec![0; descriptor_subshells.len() * 3];
-                    for (local_index, &global_index) in descriptor_indices.iter().enumerate() {
-                        descriptor[global_index * 3..global_index * 3 + 3]
-                            .copy_from_slice(&local[local_index * 3..local_index * 3 + 3]);
-                    }
-                    if normalize {
-                        let values = normalize_descriptor_per_csf(
-                            &descriptor,
-                            &descriptor_subshells,
-                            infer_two_j_target(&descriptor),
-                        )?;
-                        writeln!(
-                            writer,
-                            "{}",
-                            values
-                                .iter()
-                                .map(ToString::to_string)
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        )?;
-                    } else {
-                        writeln!(
-                            writer,
-                            "{}",
-                            descriptor
-                                .iter()
-                                .map(ToString::to_string)
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        )?;
-                    }
-                    written += 1;
-                }
-            }
-        }
-        writer.flush()?;
-        let metadata_path = path.with_extension("toml");
-        let metadata = format!(
-            "format_version = 1\nencoding = \"csv\"\nnormalized = {}\nrecord_count = {}\nsubshells = {:?}\n",
-            normalize, count, descriptor_subshells
-        );
-        let mut metadata_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&metadata_path)
-            .with_context(|| {
-                format!(
-                    "descriptor metadata must be a new file: {}",
-                    metadata_path.display()
-                )
-            })?;
-        metadata_file.write_all(metadata.as_bytes())?;
-        descriptor_count = Some(written);
-    }
-
-    Ok(WriteStats {
+     Ok(WriteStats {
         record_count: count,
         block_count: order.len(),
         output_bytes: fs::metadata(output_path)?.len(),
-        descriptor_count,
+        descriptor_count: None,
     })
 }
 

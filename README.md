@@ -357,35 +357,68 @@ record_count: 452373
 block_count: 7
 ```
 
-Flags: `--descriptors PATH` (also write
-a descriptor CSV + `.toml` sidecar), `--normalize`, `--threads N`, `--json`.
+Flags: `--generate-descriptors`, `--normalize`, `--threads N`, `--json`.
 
-Not yet supported — the dialog rejects these up front instead of forwarding
-them to a call that would fail: non-default orbital order (`r`/`s`/`u`,
-only `*` works), and answering `y` to "Generate more lists?" (multi-list
-continuation).
+For reproducible batch runs, use a TOML configuration instead of the interactive
+dialog. `generate_descriptors` defaults to `false`; when enabled, generation
+writes the CSF text, the CSF Parquet plus its header TOML, and descriptor
+Parquet plus its metadata sidecar:
 
-The same engine is available directly from Python for scripted or
-non-interactive use — build the transcript text yourself instead of
-answering the prompts:
+```toml
+[generate]
+order = "*"
+core = 2
+references = ["3s(2,i)3p(6,5)3d(6,5)4s(2,i)", "3s(2,i)3p(6,5)3d(6,i)4s(2,*)"]
+active_orbitals = "4s,4p,3d"
+j_min = 0
+j_max = 12
+excitations = 2
+continue_lists = false
 
-```python
-from rcsfs import generate_csfs_from_transcript
-
-transcript = "\n".join([
-    "* ! Orbital order",
-    "3",
-    "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
-    "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",
-    "",
-    "5s,5p,5d,4f",
-    "0,12",
-    "2",
-    "n",
-])
-stats = generate_csfs_from_transcript(transcript, "out.c")
-print(stats)
+[output]
+generate_descriptors = true
+csf = "calculation.c"
+parquet = "calculation.parquet"
+descriptor_parquet = "calculation_descriptors.parquet"
+normalize = false
 ```
+
+Run it with:
+
+```bash
+uv run rcsfs csfsgenerate --config calculation.toml
+```
+
+
+For reproducible scripted runs, use a TOML configuration. This avoids
+transcript files and keeps generation settings with the output names:
+
+```toml
+[generate]
+order = "*"
+core = 3
+references = [
+  "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
+  "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",
+]
+active_orbitals = "5s,5p,5d,4f"
+j_min = 0
+j_max = 12
+excitations = 2
+continue_lists = false
+
+[output]
+generate_descriptors = true
+csf = "out.c"
+parquet = "out.parquet"
+descriptor_parquet = "out_descriptors.parquet"
+normalize = false
+```
+
+Run it with `uv run rcsfs csfsgenerate --config generation.toml`. By default
+only the CSF text is written. With `generate_descriptors = true`, the command
+also writes the CSF Parquet and header TOML, followed by descriptor Parquet and
+its TOML sidecar. Descriptor CSV output is not supported.
 
 ### `rcsfs gen-descriptors` — descriptor Parquet from a CSF Parquet file
 
@@ -414,7 +447,7 @@ uv run rcsfs zero-first zero.csf full.csf out.csf
 | `read_peel_subshells(header_path)` | Read peel subshells from header TOML |
 | `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False)` | Generate descriptor Parquet from converted CSFs |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | Reorder a CSF list into zero-order + first-order space per symmetry block |
-| `generate_csfs_from_transcript(transcript, output_path, descriptor_path=None, normalize=False, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` |
+| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` |
 
 ## Input Format
 

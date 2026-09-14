@@ -9,6 +9,7 @@ import sys
 import tempfile
 import tomllib
 from collections.abc import Mapping, Sequence
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
@@ -189,19 +190,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Destination CSF text file (default: rcsf.out; must not already exist).",
     )
     _ = csfsgenerate.add_argument(
-        "--config", type=Path, default=None,
+        "--config",
+        type=Path,
+        default=None,
         help="TOML generation configuration; replaces the interactive dialog.",
     )
     _ = csfsgenerate.add_argument(
-        "--generate-descriptors", action="store_true",
+        "--generate-descriptors",
+        action="store_true",
         help="Also write CSF Parquet and descriptor Parquet outputs.",
     )
     _ = csfsgenerate.add_argument(
-        "--parquet", type=Path, default=None,
+        "--parquet",
+        type=Path,
+        default=None,
         help="CSF Parquet output (default: same stem as the CSF file).",
     )
     _ = csfsgenerate.add_argument(
-        "--descriptor-parquet", type=Path, default=None,
+        "--descriptor-parquet",
+        type=Path,
+        default=None,
         help="Descriptor Parquet output (default: <stem>_descriptors.parquet).",
     )
     _ = csfsgenerate.add_argument(
@@ -447,32 +455,159 @@ def _print_csfsgenerate_summary(stats: Mapping[str, object]) -> None:
         print(f"descriptor_file: {descriptor_file}")
 
 
+def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, object]:
+    csf_parquet = args.parquet or args.output.with_suffix(".parquet")
+    descriptor_parquet = args.descriptor_parquet or args.output.with_name(
+        f"{args.output.stem}_descriptors.parquet"
+    )
+    header = csf_parquet.parent / f"{args.output.stem}_header.toml"
+    metadata = descriptor_parquet.with_suffix(".toml")
+    destinations = [args.output]
+    if args.generate_descriptors:
+        destinations.extend([csf_parquet, header, descriptor_parquet, metadata])
+    resolved = [path.resolve() for path in destinations]
+    if len(set(resolved)) != len(resolved):
+        raise ValueError("Generation output paths must be distinct")
+    if args.config is not None and args.config.resolve() in resolved:
+        raise ValueError("Generation output must not overwrite the configuration input")
+    for path in destinations:
+        if path.exists() or path.is_symlink():
+            raise FileExistsError(f"Output already exists: {path}")
+        if not path.parent.is_dir():
+            raise FileNotFoundError(f"Output directory does not exist: {path.parent}")
+    if not args.generate_descriptors:
+        return dict(
+            generate_csfs_from_transcript(
+                transcript, args.output, normalize=args.normalize, threads=args.threads
+            )
+        )
+
+    # The existing converters truncate their destinations. Run them only in a
+    # private staging directory, then hold exclusive handles for publication.
+    with tempfile.TemporaryDirectory(prefix="rcsfs-generation-") as directory:
+        root = Path(directory)
+        csf_dir = root / "text"
+        csf_dir.mkdir()
+        csf = csf_dir / args.output.name
+        parquet_dir = root / "parquet"
+        parquet_dir.mkdir()
+        parquet = parquet_dir / "csfs.parquet"
+        descriptors = root / "features.parquet"
+        stats = dict(
+            generate_csfs_from_transcript(
+                transcript, csf, normalize=args.normalize, threads=args.threads
+            )
+        )
+        if stats.get("success") is not True:
+            return stats
+        conversion = convert_csfs(csf, parquet)
+        if conversion.get("success") is not True:
+            return {
+                "success": False,
+                "error": conversion.get("error", "CSF conversion failed"),
+            }
+        staged_header = parquet_dir / f"{csf.stem}_header.toml"
+        shells = read_peel_subshells(staged_header)
+        result = generate_descriptors_from_parquet(
+            parquet,
+            descriptors,
+            peel_subshells=shells,
+            normalize=args.normalize,
+            compression="zstd",
+        )
+        if result.get("success") is not True:
+            return {
+                "success": False,
+                "error": result.get("error", "Descriptor generation failed"),
+            }
+        sidecar = root / "features.toml"
+        _ = sidecar.write_text(
+            'format_version = 1\nencoding = "parquet"\n'
+            f"normalized = {str(args.normalize).lower()}\n"
+            f"record_count = {result['descriptor_count']}\n"
+            f"subshells = {json.dumps(shells)}\n",
+            encoding="utf-8",
+        )
+        sources = [csf, parquet, staged_header, descriptors, sidecar]
+        with ExitStack() as stack:
+            handles = [stack.enter_context(path.open("xb")) for path in destinations]
+            for source, handle in zip(sources, handles, strict=True):
+                with source.open("rb") as reader:
+                    shutil.copyfileobj(reader, handle)
+        stats.update(
+            output_file=str(args.output),
+            parquet_file=str(csf_parquet),
+            descriptor_parquet_file=str(descriptor_parquet),
+            descriptor_metadata_file=str(metadata),
+        )
+        return stats
+
+
+def _config_table(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError("Expected a TOML table")
+    return cast(dict[str, object], value)
+
+
+def _config_int(value: object) -> int:
+    if type(value) is not int:
+        raise ValueError("Expected an integer")
+    return value
+
+
+def _config_bool(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError("Expected a boolean")
+    return value
+
+
+def _config_string(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Expected a string")
+    return value
+
+
+def _config_references(value: object) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError("references must be an array of strings")
+    return [_config_string(item) for item in cast(list[object], value)]
+
+
 def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
     if args.config is not None:
         try:
-            config = tomllib.loads(args.config.read_text(encoding="utf-8"))
-            generate = config["generate"]
-            order = str(generate.get("order", "*"))
-            core = int(generate["core"])
-            references = [str(value) for value in generate["references"]]
-            active_orbitals = str(generate["active_orbitals"])
-            j_min = int(generate["j_min"])
-            j_max = int(generate["j_max"])
-            excitations = int(generate["excitations"])
-            output = config.get("output", {})
+            config = _config_table(
+                tomllib.loads(args.config.read_text(encoding="utf-8"))
+            )
+            generate = _config_table(config["generate"])
+            order = _config_string(generate.get("order", "*"))
+            core = _config_int(generate["core"])
+            references = _config_references(generate["references"])
+            active_orbitals = _config_string(generate["active_orbitals"])
+            j_min = _config_int(generate["j_min"])
+            j_max = _config_int(generate["j_max"])
+            excitations = _config_int(generate["excitations"])
+            output = _config_table(config.get("output", {}))
             if args.output == Path("rcsf.out") and output.get("csf") is not None:
-                args.output = Path(str(output["csf"]))
+                args.output = Path(_config_string(output["csf"]))
             if not args.generate_descriptors:
-                args.generate_descriptors = bool(output.get("generate_descriptors", False))
+                args.generate_descriptors = _config_bool(
+                    output.get("generate_descriptors", False)
+                )
             if args.parquet is None and output.get("parquet") is not None:
-                args.parquet = Path(str(output["parquet"]))
-            if args.descriptor_parquet is None and output.get("descriptor_parquet") is not None:
-                args.descriptor_parquet = Path(str(output["descriptor_parquet"]))
+                args.parquet = Path(_config_string(output["parquet"]))
+            if (
+                args.descriptor_parquet is None
+                and output.get("descriptor_parquet") is not None
+            ):
+                args.descriptor_parquet = Path(
+                    _config_string(output["descriptor_parquet"])
+                )
             if not args.normalize:
-                args.normalize = bool(output.get("normalize", False))
-            if bool(generate.get("continue_lists", False)):
+                args.normalize = _config_bool(output.get("normalize", False))
+            if _config_bool(generate.get("continue_lists", False)):
                 raise ValueError("continue_lists is not supported yet; use false")
-        except (KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as exc:
+        except (OSError, KeyError, TypeError, ValueError) as exc:
             print(f"Invalid generation config: {exc}", file=sys.stderr)
             return 2
     else:
@@ -503,35 +638,10 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
         ]
     )
 
-    stats = generate_csfs_from_transcript(
-        transcript,
-        args.output,
-        descriptor_path=None,
-        normalize=args.normalize,
-        threads=args.threads,
-    )
-
-    if stats.get("success") is True and args.generate_descriptors:
-        csf_parquet = args.parquet or args.output.with_suffix(".parquet")
-        descriptor_parquet = args.descriptor_parquet or args.output.with_name(
-            f"{args.output.stem}_descriptors.parquet"
-        )
-        conversion = convert_csfs(args.output, csf_parquet)
-        if conversion.get("success") is not True:
-            stats = {"success": False, "error": conversion.get("error", "CSF conversion failed")}
-        else:
-            header = conversion.get("header_file")
-            if not isinstance(header, str):
-                header = str(csf_parquet.parent / f"{args.output.stem}_header.toml")
-            descriptors = generate_descriptors_from_parquet(
-                csf_parquet, descriptor_parquet,
-                peel_subshells=read_peel_subshells(header),
-                normalize=args.normalize,
-            )
-            stats["parquet_file"] = str(csf_parquet)
-            stats["descriptor_parquet_file"] = str(descriptor_parquet)
-            if descriptors.get("success") is not True:
-                stats = {"success": False, "error": descriptors.get("error", "Descriptor generation failed")}
+    try:
+        stats = _generate_outputs(transcript, args)
+    except (OSError, ValueError, RuntimeError) as exc:
+        stats = {"success": False, "error": str(exc)}
 
     if args.json:
         json.dump(stats, sys.stdout, indent=2, sort_keys=True)

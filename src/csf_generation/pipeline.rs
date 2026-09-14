@@ -42,13 +42,11 @@ pub struct WriteStats {
 /// Order generated chunks into GRASP's final J/P block order, merge them into
 /// one CSF text file. Descriptor Parquet is produced by the Python pipeline.
 ///
-/// `output_path` and (if given) `descriptor_path` must not already exist.
+/// `output_path` must not already exist.
 pub fn write_generated_csfs(
     core_subshells: &[Subshell],
     chunks: &[CompleteCsfFile],
     output_path: &Path,
-    _descriptor_path: Option<&Path>,
-    _normalize: bool,
 ) -> Result<WriteStats> {
     let count = chunks.iter().try_fold(0usize, |count, chunk| {
         count
@@ -107,7 +105,7 @@ pub fn write_generated_csfs(
     writer.flush()?;
     drop(writer);
 
-     Ok(WriteStats {
+    Ok(WriteStats {
         record_count: count,
         block_count: order.len(),
         output_bytes: fs::metadata(output_path)?.len(),
@@ -135,8 +133,6 @@ pub fn generate_csfs_from_transcript(
     output_path: &Path,
 
     threads: Option<usize>,
-    descriptor_path: Option<&Path>,
-    normalize: bool,
 ) -> Result<TranscriptGenerationStats> {
     let request = ExcitationRequest::from_transcript(transcript)?;
     let occupations = enumerate_occupations(&request)?;
@@ -151,13 +147,7 @@ pub fn generate_csfs_from_transcript(
         })
         .collect::<Vec<_>>();
     let chunks = generate_csfs_parallel(&requests, threads)?;
-    let write_stats = write_generated_csfs(
-        &occupations.core_subshells,
-        &chunks,
-        output_path,
-        descriptor_path,
-        normalize,
-    )?;
+    let write_stats = write_generated_csfs(&occupations.core_subshells, &chunks, output_path)?;
     Ok(TranscriptGenerationStats {
         unique_occupations: occupations.configurations.len(),
         record_count: write_stats.record_count,

@@ -23,7 +23,7 @@ fn transcript_pipeline_matches_registered_e1_cc1as1() {
     fs::create_dir(&dir).expect("failed to create temp dir");
     let output = dir.join("out.c");
 
-    let stats = generate_csfs_from_transcript(&transcript, &output, None, None, false)
+    let stats = generate_csfs_from_transcript(&transcript, &output, None)
         .expect("generation must succeed for the registered fixture");
 
     assert_eq!(stats.record_count, 452_373);

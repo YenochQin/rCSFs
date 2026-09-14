@@ -356,13 +356,11 @@ def test_csfsgenerate_builds_transcript_and_reports_summary(
     def fake_generate_csfs_from_transcript(
         transcript: str,
         output_path: Path,
-        descriptor_path: Path | None = None,
         normalize: bool = False,
         threads: int | None = None,
     ) -> dict[str, object]:
         calls["transcript"] = transcript
         calls["output_path"] = output_path
-        calls["descriptor_path"] = descriptor_path
         calls["normalize"] = normalize
         calls["threads"] = threads
         return {
@@ -380,7 +378,6 @@ def test_csfsgenerate_builds_transcript_and_reports_summary(
 
     assert exit_code == 0
     assert calls["output_path"] == Path("out.c")
-    assert calls["descriptor_path"] is None
     assert calls["normalize"] is False
     assert calls["threads"] is None
 

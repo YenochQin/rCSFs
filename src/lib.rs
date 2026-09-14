@@ -289,8 +289,7 @@ fn partition_csfs(
 /// Args:
 /// - transcript: `rcsfgenerate.log`-format text (see `ExcitationRequest::from_transcript`).
 /// - output_path: Destination CSF text file. Must not already exist.
-/// - descriptor_path: Optional destination for a descriptor CSV (plus a `{stem}.toml` sidecar).
-/// - normalize: Whether to normalize descriptor values (only used if descriptor_path is set).
+/// - normalize: Retained for Python API compatibility; descriptors use the CLI pipeline.
 /// - threads: Optional Rayon thread count; defaults to all cores.
 ///
 /// Returns:
@@ -302,7 +301,6 @@ fn partition_csfs(
     transcript,
     output_path,
 
-    descriptor_path=None,
     normalize=false,
     threads=None
 ))]
@@ -311,7 +309,6 @@ fn generate_csfs_from_transcript(
     transcript: String,
     output_path: String,
 
-    descriptor_path: Option<String>,
     normalize: bool,
     threads: Option<usize>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
@@ -319,13 +316,12 @@ fn generate_csfs_from_transcript(
         return Err(PyValueError::new_err("threads must be greater than 0"));
     }
 
+    let _ = normalize;
     let result = py.detach(|| {
         crate::csf_generation::generate_csfs_from_transcript(
             &transcript,
             Path::new(&output_path),
             threads,
-            descriptor_path.as_deref().map(Path::new),
-            normalize,
         )
     });
 
@@ -334,9 +330,6 @@ fn generate_csfs_from_transcript(
             let d = PyDict::new(py);
             d.set_item("success", true)?;
             d.set_item("output_file", &output_path)?;
-            if let Some(path) = &descriptor_path {
-                d.set_item("descriptor_file", path)?;
-            }
             d.set_item("record_count", stats.record_count)?;
             d.set_item("block_count", stats.block_count)?;
             d.set_item("unique_occupations", stats.unique_occupations)?;

@@ -97,54 +97,29 @@ the returned codec representation retains the printed sparse couplings.
   empty lists. A core-only configuration currently follows `GEN`'s zero-peel
   behavior and produces no records.
 
-## Differential verification
+## Test scope
 
-The implementation was checked against `genb.f90`, `kopp1.f90` and `kopp2.f90`
-from GRASP commit `9006157730a82ac839f2b4ff4e938bcba63a539e`. The optional test
-compiles these unmodified sources using `gfortran` in an isolated temporary
-directory, with `tests/fixtures/gen_reference.f90` as the driver:
+The maintained test suite is responsible only for this repository's own code:
+its Rust algorithms, Python APIs, CLI behavior, and file formats. Tests must be
+self-contained, using repository fixtures and normal project dependencies; they
+must not require an external GRASP source checkout, executable, or private
+baseline dataset. Stored fixtures may encode expected compatibility behavior.
 
-```bash
-GRASP_SOURCE=/path/to/grasp uv run cargo test --test csf_generation_test \
-  generated_records_match_unmodified_fortran_gen -- --ignored --nocapture
-```
+Put temporary test code, exploratory probes, and one-off external comparisons
+under `temp/`, not `tests/`, `src/`, or `examples/`. Temporary code is outside the
+maintained suite and must not be added to Cargo or pytest test discovery. Keep
+local inputs and generated outputs there untracked. This rule concerns temporary
+test code; maintained tests may still use standard temporary directories for I/O.
 
-The comparison covers every populated subshell table and its particle-hole
-mirror, mixed configurations with seniority, suppressed coupling fields, and
-the 20-subshell limit (121 configurations passed with GNU Fortran 16.2.0).
-It compares the three record lines in exact order after
-stable grouping by total J and the trailing-space trimming done by `rcsfblock`.
-It does not compare the full `rcsfgenerate` wrapper or header generation by
-`fivefirst`. Normal integration
-tests separately check generated headers through the strict codec round trip.
+The three optional external comparison tests were removed on 2026-09-14.
+Earlier GRASP comparisons are historical development evidence, not checks run
+by the maintained suite. See the dated benchmark reports for those results.
+The repository retains self-contained generation, parsing, block-count,
+serialization, and serial/parallel consistency regressions.
 
-This is a substage differential check. Occupation enumeration is covered
-separately: the two registered transcripts in `tests/fixtures/` reproduce the
-per-symmetry-block record counts of the registered baselines exactly (452,373
-records in 7 even blocks for `e1_cc1as1`, 89,786 in 2 odd blocks for
-`o1_cc1as1`). Phase C acceptance additionally requires the existing-list
-expansion mode.
-
-## Registered full-output regression
-
-The transcript parser currently accepts only default orbital order (`*`) and
-one list terminated by `n`. Nondefault order, continuation (`y`), missing
-termination and extra input after termination fail explicitly. Core rewrites and negative excitation counts are implemented. Existing-list
-expansion remains unfinished.
-
-Run the record-level differential test against the external registered files:
-
-```bash
-RCSFS_BASELINE_DIR=/path/to/baselines uv run cargo test --test csf_generation_test \
-  registered_inputs_match_every_baseline_record_in_order -- --ignored --nocapture
-```
-
-On 2026-09-10 both files passed: 452,373 even and 89,786 odd records. The test
-compares every occupied subshell identity, population, state (including seniority),
-coupling, total J and parity in order and checks block boundaries. Failures identify
-the file, occupation task and record. Missing files fail rather than silently skip.
-This is semantic record equality; full generated headers and byte-level text
-formatting are not checked by this test.
+The transcript parser accepts default orbital order (`*`) and one list terminated
+by `n`. Nondefault order, continuation (`y`), missing termination, and trailing
+input fail explicitly. Existing-list expansion remains unfinished.
 
 ## Transcript input normalization
 
@@ -168,20 +143,9 @@ selectors remain unchanged. Nonempty `d` shells fail. Excitation limits must fit
 `u8`, including after taking the absolute value. Active shells with l >= 5 use
 Fortran's four-electron enumeration cap, independently of physical capacity.
 
-The parser also accepts the actual log's comments and whitespace-separated J
-range. To reproduce the wrapper-level comparison with the registered executable:
-
-```bash
-GRASP_RCSFGENERATE=/path/to/grasp/build-debug/bin/rcsfgenerate \
-  uv run cargo test --test csf_generation_test \
-  input_rewrites_match_unmodified_rcsfgenerate -- --ignored --nocapture
-```
-
-All 18 cases passed on 2026-09-10, covering cores 0–6, active-limit patches,
-negative/positive/zero excitation counts, explicit zero selectors, and multiple
-references. The test runs each original calculation in its own temporary directory,
-checks core labels and every three-line record in order, and replays the generated
-log. The two registered full baselines also continue to pass record-level equality.
+The parser also accepts log comments and whitespace-separated J ranges.
+Self-contained tests cover these input-normalization rules using repository
+fixtures and explicit expected values.
 
 ## Serial performance baseline
 
@@ -217,16 +181,36 @@ regression tool for transcript inputs:
 
 ```bash
 RCSFS_THREADS=4 uv run cargo run --release --example generate_transcript_csfs -- \
-  input.rcsfgenerate output.c descriptors.csv --normalize
+  input.rcsfgenerate output.c
 ```
 
-The transcript is parsed and expanded in memory; `output.c` is written in
-deterministic J/parity block order. The optional CSV contains one dense
-descriptor row per CSF, and `--normalize` applies the existing normalization
-rules. Both output paths must be new files. When a descriptor CSV is requested,
-the CLI also writes a same-stem `descriptors.toml` sidecar with
-`format_version`, `encoding`, `normalized`, `record_count`, and the ordered
-`subshells` list. The sidecar is versioned and must also be a new file.
+The transcript is parsed in memory and CSFs are written in deterministic J/parity
+block order. The Rust example accepts only input and output paths. Use the Python
+CLI's `--generate-descriptors` option for CSF and descriptor Parquet output, and
+`--normalize` for normalized descriptors. TOML `[output]` settings offer the same
+options (see the configuration example above).
+
+All destinations must be new and distinct: CSF text, CSF Parquet, its
+`{csf_stem}_header.toml` sidecar, descriptor Parquet, and its same-stem `.toml`
+sidecar. Outputs cannot alias the configuration file. The descriptor pipeline
+stages files in a temporary directory before publishing through exclusively
+created destination handles; existing files are never truncated. Staging requires
+temporary disk space for the complete output set.
+
+The descriptor sidecar schema is:
+
+```toml
+format_version = 1
+encoding = "parquet"
+normalized = false
+record_count = 1
+subshells = ["1s"]
+```
+
+`subshells` lists the final header's ordered peel subshells. Each contributes
+three consecutive columns: occupation, intermediate 2J, and coupling 2J.
+`record_count` is the descriptor Parquet row count. Parquet columns are `Int32`
+for raw values and `Float32` for normalized values, compressed with ZSTD level 3.
 
 
 Descriptor columns and sidecar subshells follow the final CSF header, including

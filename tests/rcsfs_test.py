@@ -116,11 +116,12 @@ def test_generated_descriptors_match_text_pipeline(
         work = tmp_path / str(normalize)
         work.mkdir()
         csf = work / "out.c"
-        csv = work / "direct.csv"
+        from rcsfs import cli
+
+        direct_path = work / "direct.parquet"
         stats = generate_csfs_from_transcript(
             transcript,
             csf,
-            descriptor_path=csv,
             normalize=normalize,
             threads=2,
         )
@@ -135,7 +136,21 @@ def test_generated_descriptors_match_text_pipeline(
             normalize=normalize,
         )
         assert derived["success"], derived
-        direct = pl.read_csv(csv, has_header=False)
+        lines = iter(["*", *transcript.splitlines()[1:]])
+        from unittest.mock import patch
+
+        with patch.object(cli, "_prompt", side_effect=lambda _: next(lines)):
+            argv = [
+                "csfsgenerate",
+                str(work / "cli.c"),
+                "--generate-descriptors",
+                "--descriptor-parquet",
+                str(direct_path),
+            ]
+            if normalize:
+                argv.append("--normalize")
+            assert cli.main(argv) == 0
+        direct = pl.read_parquet(direct_path)
         expected = pl.read_parquet(work / "features.parquet")
         assert direct.shape == expected.shape
         for actual_row, expected_row in zip(
@@ -146,5 +161,6 @@ def test_generated_descriptors_match_text_pipeline(
             else:
                 assert actual_row == expected_row
         assert (
-            tomllib.loads(csv.with_suffix(".toml").read_text())["subshells"] == shells
+            tomllib.loads(direct_path.with_suffix(".toml").read_text())["subshells"]
+            == shells
         )

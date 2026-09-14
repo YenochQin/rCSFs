@@ -1,3 +1,9 @@
+> Test-scope update (2026-09-14): the three external GRASP comparison tests
+> described below have been removed. These entries record historical results,
+> not current test commands. Maintained tests cover only rCSFs code using local
+> fixtures and project dependencies. Temporary external comparison code belongs
+> under `temp/` and is excluded from the maintained suite.
+
 CSFs 文件目录：`/Users/yiqin/Projects/GraspKit-Workspace/temp`目录下的 `e1_cc1as1.c` 和 `o1_cc1as1.c`
 
 # CSF 内存表示与 Rust 并行生成器开发计划

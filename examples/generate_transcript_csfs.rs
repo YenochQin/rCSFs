@@ -17,11 +17,9 @@ fn main() -> Result<()> {
             .context("usage: generate_transcript_csfs INPUT OUTPUT")?,
     );
     let output = PathBuf::from(args.next().context("missing output path")?);
-    let descriptor_output = args.next().map(PathBuf::from);
-    let normalize = args.next().is_some_and(|arg| arg == "--normalize");
     ensure!(
         args.next().is_none(),
-        "usage: generate_transcript_csfs INPUT OUTPUT [DESCRIPTORS.csv] [--normalize]"
+        "usage: generate_transcript_csfs INPUT OUTPUT"
     );
     let request = ExcitationRequest::from_transcript(&fs::read_to_string(input)?)?;
     let input_seconds = total.elapsed().as_secs_f64();
@@ -49,13 +47,7 @@ fn main() -> Result<()> {
     // shared with the rcsfs.generate_csfs_from_transcript PyO3 binding), so
     // they are timed together rather than as separate organization/output phases.
     let start = Instant::now();
-    let write_stats = write_generated_csfs(
-        &occupations.core_subshells,
-        &chunks,
-        &output,
-        descriptor_output.as_deref(),
-        normalize,
-    )?;
+    let write_stats = write_generated_csfs(&occupations.core_subshells, &chunks, &output)?;
     let output_seconds = start.elapsed().as_secs_f64();
     let total_seconds = total.elapsed().as_secs_f64();
     println!(

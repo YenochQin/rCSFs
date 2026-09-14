@@ -92,6 +92,18 @@ codegen-units = 1
 Keep version changes aligned between `Cargo.toml` and packaging metadata, and document release-facing behavior in `docs/CHANGELOG.md` when appropriate.
 
 ## Testing Guidelines
+
+The maintained test suite is responsible only for this repository's own code:
+its Rust algorithms, Python APIs, CLI behavior, and file formats. Tests must be
+self-contained, using repository fixtures and normal project dependencies; they
+must not require an external GRASP source checkout, executable, or private
+baseline dataset. Stored fixtures may encode expected compatibility behavior.
+
+Put temporary test code, exploratory probes, and one-off external comparisons
+under `temp/`, not `tests/`, `src/`, or `examples/`. Temporary code is outside the
+maintained suite and must not be added to Cargo or pytest test discovery. Keep
+local inputs and generated outputs there untracked. This rule concerns temporary
+test code; maintained tests may still use standard temporary directories for I/O.
 Add Rust coverage for core parsing, conversion, descriptor behavior, and normalization in `tests/`. Add Python regression tests when changing the public package API or file I/O behavior. Name Rust tests `*_test.rs`; keep Python tests under `tests/` and start functions with `test_`. Reuse `tests/fixtures/` for stable sample data.
 
 Run both Rust and Python checks before opening a PR:

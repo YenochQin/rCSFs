@@ -38,3 +38,7 @@ uv.lock
 
 .DS_Store
 .omo
+
+# Temporary test code, local inputs, and probe outputs
+/temp/*
+!/temp/README.md

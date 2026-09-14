@@ -432,8 +432,7 @@ def generate_csfs_from_transcript(
     Returns:
         Dictionary containing generation statistics and status. On success:
         ``output_file``, ``record_count``, ``block_count``,
-        ``unique_occupations``, and optionally ``descriptor_file``/
-        ``descriptor_count``. On failure: ``error``.
+        ``unique_occupations``. On failure: ``error``.
 
     Examples:
         >>> transcript = "\\n".join([
@@ -452,7 +451,6 @@ def generate_csfs_from_transcript(
     return _generate_csfs_from_transcript(
         transcript=transcript,
         output_path=str(output_path),
-        descriptor_path=None,
         normalize=normalize,
         threads=threads,
     )

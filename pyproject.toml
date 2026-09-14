@@ -89,3 +89,7 @@ url = "https://pypi.tuna.tsinghua.edu.cn/simple/"
 [[tool.uv.index]]
 name = "aliyun"
 url = "https://mirrors.aliyun.com/pypi/simple/"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--ignore=temp"

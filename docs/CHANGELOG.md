@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### Repository test scope (2026-09-14)
+
+- Remove the three external GRASP comparison tests and their unused Fortran driver.
+- Keep maintained tests self-contained and focused on rCSFs code; put temporary test code and external probes under `temp/`.
+
+### Generation Parquet review fixes (2026-09-14)
+
+- Align the generation CLI, Python wrapper, extension, and Rust callers after CSV removal.
+- Reject existing or aliased generation destinations and publish staged Parquet outputs with exclusive creation.
+- Restore versioned descriptor TOML metadata and validate TOML configuration value types.
+- Cover real interactive/config generation, metadata, destination collisions, and concurrent file creation.
+
+
 ### Python 交互生成与验收收尾（2026-09-12）
 
 - 产品入口改为 `rcsfs csfsgenerate [output]`，默认 `rcsf.out`；问答经内存 transcript 进入共享 Rust 流水线，cargo examples 保留作开发回归。

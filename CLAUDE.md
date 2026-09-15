@@ -14,22 +14,23 @@ rCSFs is a high-performance Rust/Python hybrid library for processing CSF (Confi
 - Python support: 3.14 only (`requires-python = ">=3.14"` in pyproject.toml)
 - Extension module name: `_rcsfs` (compiled Rust library, defined as `module-name = "rcsfs._rcsfs"`)
 - Public package name: `rcsfs` (Python wrapper in `rcsfs/` at project root)
-- Uses uv for Python environment management
+- Uses the shared uv environment at `../graspkit-tools/.venv`
 
 ## Build Commands
 
 ```bash
-# Set up Python environment
-uv sync --group dev --group lint
+# Set up the workspace's only Python environment
+cd ../graspkit-tools && uv sync && cd ../rCSFs
+source ../graspkit-tools/.venv/bin/activate
 
 # Build Rust extension in development mode (run after any Rust changes)
-uv run maturin develop
+maturin develop
 
 # Build optimized release (for production/distribution)
-uv run maturin build --release
+maturin build --release
 ```
 
-`maturin` is installed in the uv-managed Python environment. Use `uv run maturin ...`, or activate `.venv` first before using bare `maturin`.
+All Python, Maturin, and PyO3 commands must use `../graspkit-tools/.venv`. Do not run `uv sync` or `uv run` here and do not create/use `rCSFs/.venv`; activate the Tools environment before invoking tools.
 
 ## Testing
 
@@ -47,29 +48,29 @@ test code; maintained tests may still use standard temporary directories for I/O
 
 ```bash
 # Run all Python tests
-uv run pytest
+pytest
 
 # Run a single Python test file
-uv run pytest tests/rcsfs_test.py
+pytest tests/rcsfs_test.py
 
 # Run all Rust tests (unit + integration)
-uv run cargo test
+cargo test
 
 # Run a single Rust test by name
-uv run cargo test test_descriptor_generator_parse_csf_basic
+cargo test test_descriptor_generator_parse_csf_basic
 
 # Run tests with speed benchmarking
-uv run pytest --speed
+pytest --speed
 
 # Lint and type-check Python
-uv run ruff check .
-uv run ruff format .
-uv run basedpyright rcsfs/
+ruff check .
+ruff format .
+basedpyright rcsfs/
 ```
 
 **Note:** `tests/rcsfs_test.py` exercises the canonical API from `rcsfs/__init__.py`.
 
-**Rust test note:** Run Cargo tests through `uv run` so PyO3 links against the uv-managed Python 3.14 runtime. Bare `cargo test` may pick up a system Python, for example Xcode's Python 3.9 on macOS, and fail during linking with `library 'python3.9' not found`.
+**Rust test note:** Activate `../graspkit-tools/.venv` before Cargo tests so PyO3 links against its Python 3.14 runtime. Cargo without that environment may pick up an incompatible system Python.
 
 ## Code Architecture
 
@@ -151,4 +152,4 @@ lto = true
 codegen-units = 1
 ```
 
-Always use `uv run maturin build --release` for production — the development build (`uv run maturin develop`) skips LTO.
+Always activate the Tools venv and use `maturin build --release` for production — the development build (`maturin develop`) skips LTO.

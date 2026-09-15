@@ -11,7 +11,7 @@ Key implementation details:
 - Rust library / compiled file: `_rcsfs`.
 - Python install target: `rcsfs._rcsfs`.
 - Public Python package: `rcsfs`.
-- Build system: Maturin/PyO3 with uv for Python environment management.
+- Build system: Maturin/PyO3 using the shared uv environment at `../graspkit-tools/.venv`.
 
 Rust backend code lives in `src/`:
 
@@ -23,26 +23,27 @@ Rust backend code lives in `src/`:
 The Python frontend lives in `rcsfs/`. `rcsfs/__init__.py` is the public API wrapper and supports `pathlib.Path`; `rcsfs/py.typed` marks the package as typed. Tests live in `tests/`, including Rust integration tests, Python API checks, speed tests, and fixtures such as `tests/fixtures/sample.csf`. Treat `dist/` and `target/` as build output unless a release task explicitly requires them.
 
 ## Build, Test, and Development Commands
-Set up the Python environment and build the Rust extension before Python API tests. This project uses `uv` to manage the Python environment, so run Python-environment tools through `uv run ...` unless you have already activated `.venv`.
+All Python, Maturin, and PyO3 work in this repository must use `../graspkit-tools/.venv`, created and synchronized by running `uv sync` in `graspkit-tools/`. Do not run `uv venv`, `uv sync`, or `uv run` here, and do not create, activate, or use `rCSFs/.venv`. Keep Rust sources and build artifacts in this repository, but activate the Tools environment before invoking build or test tools.
 
 ```bash
-uv sync --group dev --group lint
-uv run maturin develop
+cd ../graspkit-tools && uv sync && cd ../rCSFs
+source ../graspkit-tools/.venv/bin/activate
+maturin develop
 ```
 
-- `uv run maturin develop`: build the Rust extension and install it into the uv-managed environment for local testing; run this after Rust changes.
-- `uv run maturin build --release`: build optimized production/distribution wheels.
+- `maturin develop`: with the shared Tools environment activated, build the Rust extension and install it there for local testing; run this after Rust changes.
+- `maturin build --release`: with the shared Tools environment activated, build optimized production/distribution wheels.
 - `cargo build --release`: produce optimized Rust artifacts.
-- `uv run cargo test`: run Rust unit and integration tests. Use `uv run` for Cargo tests because PyO3 links against the uv-managed Python 3.14 runtime; bare `cargo test` may discover a system Python such as Xcode's Python 3.9 and fail at link time with `library 'python3.9' not found`.
-- `uv run cargo test test_descriptor_generator_parse_csf_basic`: run a single Rust test by name.
-- `uv run pytest`: run all Python tests.
-- `uv run pytest tests/rcsfs_test.py`: run the canonical Python API tests.
-- `uv run pytest --speed`: run tests with speed benchmarking.
-- `uv run ruff check .`: lint Python code.
-- `uv run ruff format .`: format Python code.
-- `uv run basedpyright rcsfs/`: type-check the Python wrapper.
+- `cargo test`: run Rust unit and integration tests after activating the Tools venv so PyO3 links against its Python 3.14 runtime.
+- `cargo test test_descriptor_generator_parse_csf_basic`: run a single Rust test by name.
+- `pytest`: run all Python tests.
+- `pytest tests/rcsfs_test.py`: run the canonical Python API tests.
+- `pytest --speed`: run tests with speed benchmarking.
+- `ruff check .`: lint Python code.
+- `ruff format .`: format Python code.
+- `basedpyright rcsfs/`: type-check the Python wrapper.
 
-Always use `uv run maturin build --release` for production. The development build from `uv run maturin develop` skips LTO.
+Always activate the Tools venv and use `maturin build --release` for production. The development build from `maturin develop` skips LTO.
 
 ## Public Python API
 `tests/rcsfs_test.py` exercises the canonical API exported from `rcsfs/__init__.py`.
@@ -109,14 +110,15 @@ Add Rust coverage for core parsing, conversion, descriptor behavior, and normali
 Run both Rust and Python checks before opening a PR:
 
 ```bash
-uv run cargo test
-uv run pytest
-uv run ruff check .
-uv run basedpyright rcsfs/
+source ../graspkit-tools/.venv/bin/activate
+cargo test
+pytest
+ruff check .
+basedpyright rcsfs/
 ```
 
 ## Commit & Pull Request Guidelines
 Recent history favors short, imperative commit subjects such as `update linux build` or `create win artifact`. Keep subjects brief and descriptive, and expand in the body when needed. PRs should explain the user-visible change, list validation commands run, and link related issues or docs. Include sample output or screenshots only when CLI/API behavior, generated files, or documentation rendering changes.
 
 ## Security & Configuration Tips
-Do not commit generated build outputs, local data, credentials, virtual environments, or machine-specific paths. Treat CSF inputs as external data and validate file paths at the Python boundary. Build wheels intentionally with `uv run maturin build --release`; do not rely on development artifacts for release validation.
+Do not commit generated build outputs, local data, credentials, virtual environments, or machine-specific paths. Do not create a local Python environment; use only `graspkit-tools/.venv`. Treat CSF inputs as external data and validate file paths at the Python boundary. Build wheels intentionally with `maturin build --release` after activating the Tools venv; do not rely on development artifacts for release validation.

@@ -7,6 +7,9 @@ from ._types import (
     CsfGenerationStats,
     CsfHeaderData,
     DescriptorGenerationStats,
+    InteractionHamiltonian,
+    InteractionMethod,
+    InteractionStats,
     ParquetInfo,
     PartitionStats,
 )
@@ -56,3 +59,13 @@ def generate_csfs_from_transcript(
     normalize: bool = False,
     threads: int | None = None,
 ) -> CsfGenerationStats: ...
+def select_interacting_csfs(
+    reference_csf: str,
+    candidate_csf: str,
+    output_csf: str,
+    *,
+    hamiltonian: InteractionHamiltonian = "dirac_coulomb",
+    method: InteractionMethod = "structural_upper_bound",
+    num_workers: int | None = None,
+    overwrite: bool = False,
+) -> InteractionStats: ...

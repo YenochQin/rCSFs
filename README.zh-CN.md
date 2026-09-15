@@ -65,6 +65,7 @@ from rcsfs import (
     get_parquet_info,
     read_csfs,
     read_peel_subshells,
+    select_interacting_csfs,
 )
 
 input_csf = Path("tests/fixtures/sample.csf")
@@ -105,6 +106,12 @@ print(desc_stats)
 # 5. 读取描述符表
 df = pl.read_parquet(desc_parquet)
 print(df.head())
+
+# 6. 生成保守、非精确的相互作用候选上界
+interaction_stats = select_interacting_csfs(
+    "reference.csf", "candidates.csf", "selected.csf", num_workers=8
+)
+assert interaction_stats["exact"] is False
 ```
 
 ## 典型工作流
@@ -288,7 +295,7 @@ uv run cargo run --release --example generate_csfs -- \
 
 ## 命令行工具
 
-安装 `rcsfs` 会同时安装一个 `rcsfs` 命令行脚本（`uv run rcsfs ...`），提供三个子命令。
+安装 `rcsfs` 会同时安装一个 `rcsfs` 命令行脚本（`uv run rcsfs ...`），提供四个子命令。
 
 ### `rcsfs csfsgenerate` —— 生成新的 CSF 列表
 
@@ -330,6 +337,24 @@ uv run rcsfs gen-descriptors csf.parquet descriptors.parquet \
 uv run rcsfs zero-first zero.csf full.csf out.csf
 ```
 
+### `rcsfs interacting` —— 生成相互作用候选上界
+
+第一阶段实现把每个 MR 块置于输出块首，然后追加满足二体占据差预筛的候选
+CSF。它保持输入顺序且并行结果确定，但尚未实现 GRASP 的重耦合、Coulomb
+角因子和 Breit/SNRC 判定。因此结果只是可能含假阳性的结构上界，返回统计固定
+为 `exact=False`；Dirac–Coulomb 与 Dirac–Coulomb–Breit 当前使用同一上界规则。
+
+CLI 默认写入 `rcsf.out`，并使用 8 个 worker 线程。可通过 `--output PATH`
+和 `--threads N` 覆盖这两个默认值。
+
+```bash
+uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc
+
+# 可选覆盖项
+uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
+  --threads 4 --output selected.csf
+```
+
 ## Python 公共 API
 
 | 函数 | 说明 |
@@ -340,6 +365,7 @@ uv run rcsfs zero-first zero.csf full.csf out.csf
 | `read_peel_subshells(header_path)` | 从头文件 TOML 中提取 peel subshells |
 | `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False)` | 从转换后的 CSF 数据生成描述符 Parquet |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | 按对称性分块将 CSF 列表重排为零级 + 一级空间 |
+| `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | 写出保守且非精确的相互作用候选上界；统计固定包含 `exact=False` |
 | `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | 从内存中的 `rcsfgenerate.log` 格式 transcript 生成 CSF；`rcsfs csfsgenerate` 的底层实现 |
 
 ## 输入数据格式

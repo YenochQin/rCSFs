@@ -1,6 +1,12 @@
 """Shared public result types for the Python and native API boundaries."""
 
-from typing import NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
+
+type InteractionHamiltonian = Literal[
+    "dirac_coulomb",
+    "dirac_coulomb_breit",
+]
+type InteractionMethod = Literal["structural_upper_bound"]
 
 
 class CsfHeaderInfo(TypedDict):
@@ -96,3 +102,37 @@ class CsfGenerationStats(TypedDict):
     unique_occupations: NotRequired[int]
     descriptor_count: NotRequired[int]
     error: NotRequired[str]
+
+
+class InteractionBlockStats(TypedDict):
+    """Per-symmetry-block structural interaction statistics."""
+
+    block_index: int
+    total_two_j: int
+    parity: Literal["+", "-"]
+    reference_count: int
+    candidate_count: int
+    exact_reference_skipped: int
+    selected_count: int
+    rejected_count: int
+    output_count: int
+
+
+class InteractionStats(TypedDict):
+    """Statistics from conservative structural interaction selection."""
+
+    exact: Literal[False]
+    hamiltonian: InteractionHamiltonian
+    method: InteractionMethod
+    reference_file: str
+    candidate_file: str
+    output_file: str
+    block_count: int
+    reference_count: int
+    candidate_count: int
+    exact_reference_skipped: int
+    selected_count: int
+    rejected_count: int
+    output_count: int
+    output_bytes: int
+    blocks: list[InteractionBlockStats]

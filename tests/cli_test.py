@@ -1,8 +1,7 @@
+import shutil
 from pathlib import Path
 
 import pytest
-
-import shutil
 
 
 def test_gen_descriptors_reads_header_and_prints_summary(
@@ -148,6 +147,185 @@ def test_gen_descriptors_can_print_json(
         "output_file": "descriptors.parquet",
         "descriptor_count": 12,
     }
+
+
+def test_interacting_defaults_to_rcsf_out_and_eight_threads(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from rcsfs import cli
+
+    calls: dict[str, object] = {}
+    successful_stats: dict[str, object] = {
+        "exact": False,
+        "output_file": "rcsf.out",
+        "reference_count": 3,
+        "candidate_count": 20,
+        "selected_count": 8,
+    }
+
+    def fake_select_interacting_csfs(
+        reference: Path,
+        candidates: Path,
+        output: Path,
+        *,
+        hamiltonian: str,
+        method: str,
+        num_workers: int | None,
+        overwrite: bool,
+    ) -> dict[str, object]:
+        calls.update(
+            reference=reference,
+            candidates=candidates,
+            output=output,
+            hamiltonian=hamiltonian,
+            method=method,
+            num_workers=num_workers,
+            overwrite=overwrite,
+        )
+        return successful_stats
+
+    monkeypatch.setattr(cli, "select_interacting_csfs", fake_select_interacting_csfs)
+
+    exit_code = cli.main(
+        [
+            "interacting",
+            "rcsfsmr.inp",
+            "rcsf.inp",
+            "--hamiltonian",
+            "dc",
+        ]
+    )
+
+    assert exit_code == 0
+    assert successful_stats["exact"] is False
+    assert "success" not in successful_stats
+    assert calls == {
+        "reference": Path("rcsfsmr.inp"),
+        "candidates": Path("rcsf.inp"),
+        "output": Path("rcsf.out"),
+        "hamiltonian": "dirac_coulomb",
+        "method": "structural_upper_bound",
+        "num_workers": 8,
+        "overwrite": False,
+    }
+    captured = capsys.readouterr()
+    assert "Selected interacting CSFs (structural upper bound): rcsf.out" in (
+        captured.out
+    )
+    assert "selected_count: 8" in captured.out
+    assert "STRUCTURAL UPPER BOUND ONLY" in captured.err
+    assert "NOT an exact rcsfinteract90" in captured.err
+
+
+def test_interacting_maps_output_thread_and_overwrite_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rcsfs import cli
+
+    calls: dict[str, object] = {}
+
+    def fake_select_interacting_csfs(
+        reference: Path,
+        candidates: Path,
+        output: Path,
+        *,
+        hamiltonian: str,
+        method: str,
+        num_workers: int | None,
+        overwrite: bool,
+    ) -> dict[str, object]:
+        calls.update(
+            output=output,
+            hamiltonian=hamiltonian,
+            method=method,
+            num_workers=num_workers,
+            overwrite=overwrite,
+        )
+        return {"exact": False, "output_file": str(output)}
+
+    monkeypatch.setattr(cli, "select_interacting_csfs", fake_select_interacting_csfs)
+
+    exit_code = cli.main(
+        [
+            "interacting",
+            "rcsfsmr.inp",
+            "rcsf.inp",
+            "--hamiltonian",
+            "dcb",
+            "--threads",
+            "4",
+            "--output",
+            "selected.csf",
+            "--overwrite",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == {
+        "output": Path("selected.csf"),
+        "hamiltonian": "dirac_coulomb_breit",
+        "method": "structural_upper_bound",
+        "num_workers": 4,
+        "overwrite": True,
+    }
+
+
+def test_interacting_rejects_a_positional_output_path() -> None:
+    from rcsfs import cli
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(
+            [
+                "interacting",
+                "rcsfsmr.inp",
+                "rcsf.inp",
+                "selected.csf",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize("threads", ["0", "-1"])
+def test_interacting_rejects_non_positive_thread_counts(threads: str) -> None:
+    from rcsfs import cli
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(
+            [
+                "interacting",
+                "rcsfsmr.inp",
+                "rcsf.inp",
+                "--threads",
+                threads,
+            ]
+        )
+
+    assert exc_info.value.code == 2
+
+
+def test_interacting_returns_failure_exit_code_and_prints_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from rcsfs import cli
+
+    def fail_selection(*args: object, **kwargs: object) -> object:
+        raise ValueError("candidate header does not match reference header")
+
+    monkeypatch.setattr(cli, "select_interacting_csfs", fail_selection)
+
+    exit_code = cli.main(["interacting", "rcsfsmr.inp", "rcsf.inp"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "STRUCTURAL UPPER BOUND ONLY" in captured.err
+    assert (
+        "Interaction selection failed: candidate header does not match reference header"
+        in captured.err
+    )
 
 
 def test_zero_first_orchestrates_convert_and_partition(
@@ -514,6 +692,7 @@ def test_interactive_generation_matches_registered_hash(
             capture_output=True,
             cwd=work,
             timeout=120,
+            check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
         with (work / "rcsf.out").open("rb") as output:

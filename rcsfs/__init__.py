@@ -51,6 +51,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+
 from polars import DataFrame
 
 from ._types import (
@@ -61,6 +62,10 @@ from ._types import (
     CsfHeaderData,
     CsfHeaderInfo,
     DescriptorGenerationStats,
+    InteractionBlockStats,
+    InteractionHamiltonian,
+    InteractionMethod,
+    InteractionStats,
     ParquetInfo,
     PartitionStats,
 )
@@ -80,16 +85,16 @@ from ._rcsfs import (
     get_parquet_info as _get_parquet_info,
 )
 from ._rcsfs import (
+    partition_csfs as _partition_csfs,
+)
+from ._rcsfs import (
     py_generate_descriptors_from_parquet as _generate_descriptors_from_parquet,
 )
 from ._rcsfs import (
     py_read_peel_subshells as _read_peel_subshells,
 )
-from ._rcsfs import (
-    partition_csfs as _partition_csfs,
-)
 from ._rcsfs import read_csfs_arrow as _read_csfs_arrow
-
+from ._rcsfs import select_interacting_csfs as _select_interacting_csfs
 
 # ///////////////////////////////////////////////////////////////////////////////
 # Python Wrapper Functions (with Path support)
@@ -398,6 +403,64 @@ def partition_csfs(
 
 
 # ///////////////////////////////////////////////////////////////////////////////
+# Structural Interaction Selection
+# ///////////////////////////////////////////////////////////////////////////////
+
+
+def select_interacting_csfs(
+    reference_csf: str | Path,
+    candidate_csf: str | Path,
+    output_csf: str | Path,
+    *,
+    hamiltonian: InteractionHamiltonian = "dirac_coulomb",
+    method: InteractionMethod = "structural_upper_bound",
+    num_workers: int | None = None,
+    overwrite: bool = False,
+) -> InteractionStats:
+    """Select a conservative upper bound of CSFs interacting with a reference.
+
+    ``structural_upper_bound`` is the only supported method. It applies cheap
+    structural selection rules but does not implement GRASP's complete angular
+    and recoupling algebra. Consequently, this function does **not** reproduce
+    the exact ``rcsfinteract90`` result: every returned statistics dictionary
+    has ``exact=False``, and selected candidates can include false positives.
+
+    Reference CSFs are written first in each symmetry block. Candidate CSFs
+    that exactly duplicate a reference record are skipped; structurally
+    admissible remaining candidates are appended in candidate-file order.
+
+    Args:
+        reference_csf: Reference-space CSF text file.
+        candidate_csf: Candidate-space CSF text file on the same orbital basis.
+        output_csf: Destination CSF text file.
+        hamiltonian: ``"dirac_coulomb"`` or ``"dirac_coulomb_breit"``.
+            The current structural method records this choice but cannot
+            distinguish every exact Coulomb/Breit angular zero.
+        method: Must be ``"structural_upper_bound"``.
+        num_workers: Optional positive worker count; ``None`` uses the runtime
+            default.
+        overwrite: Replace an existing output file when ``True``.
+
+    Returns:
+        Global and per-block selection statistics. ``exact`` is always
+        ``False`` for the currently supported method.
+
+    Raises:
+        ValueError: An option is unsupported or ``num_workers`` is not positive.
+        OSError: Input parsing or file I/O fails.
+    """
+    return _select_interacting_csfs(
+        reference_csf=str(reference_csf),
+        candidate_csf=str(candidate_csf),
+        output_csf=str(output_csf),
+        hamiltonian=hamiltonian,
+        method=method,
+        num_workers=num_workers,
+        overwrite=overwrite,
+    )
+
+
+# ///////////////////////////////////////////////////////////////////////////////
 # CSF Generation Functions
 # ///////////////////////////////////////////////////////////////////////////////
 
@@ -460,7 +523,7 @@ def generate_csfs_from_transcript(
 # Public API
 # ///////////////////////////////////////////////////////////////////////////////
 
-__all__ = [
+__all__ = [  # noqa: RUF022 - grouped by public API area
     # Version
     "__version__",
     # CSF file conversion
@@ -472,6 +535,8 @@ __all__ = [
     "read_peel_subshells",
     # Zero-first partition
     "partition_csfs",
+    # Structural interaction selection
+    "select_interacting_csfs",
     # CSF generation
     "generate_csfs_from_transcript",
     # Type definitions
@@ -484,4 +549,8 @@ __all__ = [
     "DescriptorGenerationStats",
     "PartitionStats",
     "CsfGenerationStats",
+    "InteractionHamiltonian",
+    "InteractionMethod",
+    "InteractionBlockStats",
+    "InteractionStats",
 ]

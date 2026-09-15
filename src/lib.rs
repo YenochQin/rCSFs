@@ -1,7 +1,7 @@
 use arrow::record_batch::RecordBatchIterator;
-use pyo3::exceptions::{PyIOError, PyValueError};
+use pyo3::exceptions::{PyFileExistsError, PyIOError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyDictMethods};
+use pyo3::types::{PyDict, PyDictMethods, PyList, PyListMethods};
 use pyo3_arrow::PyRecordBatchReader;
 use std::path::Path;
 
@@ -13,6 +13,7 @@ pub mod csfs_conversion;
 pub mod csfs_descriptor;
 pub mod csfs_memory;
 pub mod descriptor_normalization;
+pub mod interaction;
 
 #[pymodule]
 fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -22,11 +23,129 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
     m.add_function(wrap_pyfunction!(partition_csfs, m)?)?;
     m.add_function(wrap_pyfunction!(generate_csfs_from_transcript, m)?)?;
+    m.add_function(wrap_pyfunction!(select_interacting_csfs, m)?)?;
 
     // Register CSF descriptor module
     csfs_descriptor::register_descriptor_module(m)?;
 
     Ok(())
+}
+
+/// Select candidate CSFs that may interact with a reference space.
+///
+/// The structural-upper-bound method is conservative and intentionally does
+/// not reproduce GRASP's complete angular and recoupling algebra. Its result
+/// is therefore not an exact non-zero Hamiltonian test.
+#[pyfunction]
+#[pyo3(signature = (
+    reference_csf,
+    candidate_csf,
+    output_csf,
+    *,
+    hamiltonian="dirac_coulomb",
+    method="structural_upper_bound",
+    num_workers=None,
+    overwrite=false
+))]
+#[allow(clippy::too_many_arguments)] // PyO3 exposes one argument per Python parameter.
+fn select_interacting_csfs(
+    py: Python,
+    reference_csf: String,
+    candidate_csf: String,
+    output_csf: String,
+    hamiltonian: &str,
+    method: &str,
+    num_workers: Option<usize>,
+    overwrite: bool,
+) -> PyResult<Py<PyAny>> {
+    if matches!(num_workers, Some(0)) {
+        return Err(PyValueError::new_err("num_workers must be greater than 0"));
+    }
+
+    let mode = match hamiltonian {
+        "dirac_coulomb" => interaction::HamiltonianMode::DiracCoulomb,
+        "dirac_coulomb_breit" => interaction::HamiltonianMode::DiracCoulombBreit,
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "unknown hamiltonian {hamiltonian:?}; expected \"dirac_coulomb\" or \"dirac_coulomb_breit\""
+            )));
+        }
+    };
+    let interaction_method = match method {
+        "structural_upper_bound" => interaction::InteractionMethod::StructuralUpperBound,
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "unknown method {method:?}; only \"structural_upper_bound\" is supported"
+            )));
+        }
+    };
+    if !overwrite && Path::new(&output_csf).exists() {
+        return Err(PyFileExistsError::new_err(format!(
+            "output file {output_csf} already exists (set overwrite=True to replace it)"
+        )));
+    }
+
+    let stats = py
+        .detach(|| {
+            interaction::select_interacting_csfs(
+                Path::new(&reference_csf),
+                Path::new(&candidate_csf),
+                Path::new(&output_csf),
+                mode,
+                interaction_method,
+                num_workers,
+                overwrite,
+            )
+        })
+        .map_err(|error| {
+            let message = error.to_string();
+            let io_error = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<std::io::Error>());
+            match io_error.map(std::io::Error::kind) {
+                Some(std::io::ErrorKind::AlreadyExists) => PyFileExistsError::new_err(message),
+                Some(_) => PyIOError::new_err(message),
+                None => PyValueError::new_err(message),
+            }
+        })?;
+
+    let result = PyDict::new(py);
+    result.set_item("exact", stats.exact)?;
+    result.set_item("hamiltonian", stats.mode.as_str())?;
+    result.set_item("method", stats.method.as_str())?;
+    result.set_item("reference_file", &reference_csf)?;
+    result.set_item("candidate_file", &candidate_csf)?;
+    result.set_item("output_file", &output_csf)?;
+    result.set_item("block_count", stats.block_count)?;
+    result.set_item("reference_count", stats.reference_count)?;
+    result.set_item("candidate_count", stats.candidate_count)?;
+    result.set_item("exact_reference_skipped", stats.exact_reference_skipped)?;
+    result.set_item("selected_count", stats.selected_count)?;
+    result.set_item("rejected_count", stats.rejected_count)?;
+    result.set_item("output_count", stats.output_count)?;
+    result.set_item("output_bytes", stats.output_bytes)?;
+
+    let blocks = PyList::empty(py);
+    for block in &stats.blocks {
+        let block_result = PyDict::new(py);
+        block_result.set_item("block_index", block.block_index)?;
+        block_result.set_item("total_two_j", block.total_two_j)?;
+        let parity = match block.parity {
+            complete_csf::Parity::Even => "+",
+            complete_csf::Parity::Odd => "-",
+        };
+        block_result.set_item("parity", parity)?;
+        block_result.set_item("reference_count", block.reference_count)?;
+        block_result.set_item("candidate_count", block.candidate_count)?;
+        block_result.set_item("exact_reference_skipped", block.exact_reference_skipped)?;
+        block_result.set_item("selected_count", block.selected_count)?;
+        block_result.set_item("rejected_count", block.rejected_count)?;
+        block_result.set_item("output_count", block.output_count)?;
+        blocks.append(block_result)?;
+    }
+    result.set_item("blocks", blocks)?;
+
+    Ok(result.into())
 }
 
 /// Read CSF header metadata and data rows for zero-copy import by Polars.

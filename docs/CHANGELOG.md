@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Structural interaction upper bound (2026-09-15)
+
+- Add a Rust/Python `select_interacting_csfs` file API and a
+  `rcsfs interacting` CLI, defaulting to `rcsf.out` and 8 workers. The
+  first-stage method applies the
+  two-electron occupation bound in parallel while preserving block and record
+  order, exact-reference skipping, and atomic output publication.
+- Mark every result `exact=False`: recoupling and Coulomb/Breit angular tests
+  are not implemented yet, so selected CSFs are a conservative upper bound.
+- Add deterministic worker-count, header/block validation, alias protection,
+  adjacent equal-symmetry block, Python API, and CLI regression coverage.
+
 ### Repository test scope (2026-09-14)
 
 - Remove the three external GRASP comparison tests and their unused Fortran driver.

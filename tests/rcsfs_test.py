@@ -8,8 +8,8 @@ from rcsfs import (
     generate_descriptors_from_parquet,
     get_parquet_info,
     read_peel_subshells,
+    select_interacting_csfs,
 )
-
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 SAMPLE_CSF = FIXTURES_DIR / "sample.csf"
@@ -51,6 +51,32 @@ def test_end_to_end_public_python_api(tmp_path: Path) -> None:
     descriptor_info = get_parquet_info(descriptor_parquet)
     assert descriptor_info["num_rows"] == stats["csf_count"]
     assert "ZSTD" in descriptor_info["compression"]
+
+
+def test_select_interacting_csfs_public_api_is_explicitly_non_exact(
+    tmp_path: Path,
+) -> None:
+    source = Path(__file__).parent / "fixtures" / "complete.csf"
+    candidates = tmp_path / "candidates.csf"
+    candidates.write_bytes(source.read_bytes())
+    output = tmp_path / "selected.csf"
+
+    stats = select_interacting_csfs(source, candidates, output, num_workers=2)
+
+    assert stats["exact"] is False
+    assert stats["method"] == "structural_upper_bound"
+    assert stats["hamiltonian"] == "dirac_coulomb"
+    assert stats["block_count"] == 2
+    assert stats["reference_count"] == 2
+    assert stats["candidate_count"] == 2
+    assert stats["exact_reference_skipped"] == 2
+    assert stats["selected_count"] == 0
+    assert stats["output_count"] == 2
+    assert [block["parity"] for block in stats["blocks"]] == ["-", "+"]
+    assert output.read_bytes() == source.read_bytes()
+
+    with pytest.raises(FileExistsError):
+        _ = select_interacting_csfs(source, candidates, output)
 
 
 def test_generate_csfs_from_transcript_matches_registered_e1_cc1as1(
@@ -109,8 +135,9 @@ def test_normalize_path_tolerates_normalization_errors(tmp_path: Path) -> None:
 def test_generated_descriptors_match_text_pipeline(
     tmp_path: Path, transcript: str
 ) -> None:
-    import polars as pl
     import tomllib
+
+    import polars as pl
 
     for normalize in (False, True):
         work = tmp_path / str(normalize)
@@ -139,7 +166,9 @@ def test_generated_descriptors_match_text_pipeline(
         lines = iter(["*", *transcript.splitlines()[1:]])
         from unittest.mock import patch
 
-        with patch.object(cli, "_prompt", side_effect=lambda _: next(lines)):
+        with patch.object(
+            cli, "_prompt", side_effect=lambda _, lines=lines: next(lines)
+        ):
             argv = [
                 "csfsgenerate",
                 str(work / "cli.c"),

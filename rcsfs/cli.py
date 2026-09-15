@@ -19,6 +19,7 @@ from . import (
     generate_descriptors_from_parquet,
     partition_csfs,
     read_peel_subshells,
+    select_interacting_csfs,
 )
 
 #: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
@@ -67,7 +68,55 @@ class CsfsGenerateArgs(Protocol):
     json: bool
 
 
-type CliArgs = GenDescriptorsArgs | ZeroFirstArgs | CsfsGenerateArgs
+class InteractingArgs(Protocol):
+    """Parsed arguments for the ``interacting`` subcommand."""
+
+    command: Literal["interacting"]
+    reference: Path
+    candidates: Path
+    output: Path
+    hamiltonian: Literal["dirac_coulomb", "dirac_coulomb_breit"]
+    method: Literal["structural_upper_bound"]
+    num_workers: int
+    overwrite: bool
+    json: bool
+
+
+type CliArgs = GenDescriptorsArgs | ZeroFirstArgs | CsfsGenerateArgs | InteractingArgs
+
+
+def _parse_hamiltonian(
+    value: str,
+) -> Literal["dirac_coulomb", "dirac_coulomb_breit"]:
+    aliases: dict[str, Literal["dirac_coulomb", "dirac_coulomb_breit"]] = {
+        "dc": "dirac_coulomb",
+        "dirac-coulomb": "dirac_coulomb",
+        "dirac_coulomb": "dirac_coulomb",
+        "dcb": "dirac_coulomb_breit",
+        "dirac-coulomb-breit": "dirac_coulomb_breit",
+        "dirac_coulomb_breit": "dirac_coulomb_breit",
+    }
+    try:
+        return aliases[value.lower()]
+    except KeyError as exc:
+        raise argparse.ArgumentTypeError(
+            "expected dc, dcb, dirac-coulomb, or dirac-coulomb-breit"
+        ) from exc
+
+
+def _parse_interaction_method(value: str) -> Literal["structural_upper_bound"]:
+    if value.lower() in {"structural-upper-bound", "structural_upper_bound"}:
+        return "structural_upper_bound"
+    raise argparse.ArgumentTypeError(
+        "only structural-upper-bound is implemented in this release"
+    )
+
+
+def _parse_positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("expected a positive integer")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -229,6 +278,67 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print generation statistics as JSON.",
     )
 
+    interacting = subparsers.add_parser(
+        "interacting",
+        help="Select a structural upper bound of CSFs interacting with references.",
+        description=(
+            "Select candidate CSFs that pass inexpensive structural conditions "
+            "for interaction with at least one reference CSF. This is a "
+            "STRUCTURAL UPPER BOUND, NOT an exact reproduction of GRASP's "
+            "rcsfinteract90 angular-algebra calculation."
+        ),
+    )
+    _ = interacting.add_argument(
+        "reference", type=Path, help="Reference (MR) CSF file."
+    )
+    _ = interacting.add_argument(
+        "candidates", type=Path, help="Candidate CSF file to filter."
+    )
+    _ = interacting.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=Path("rcsf.out"),
+        help="Destination CSF file (default: rcsf.out).",
+    )
+    _ = interacting.add_argument(
+        "--hamiltonian",
+        type=_parse_hamiltonian,
+        default="dirac_coulomb",
+        metavar="{dc,dcb,dirac-coulomb,dirac-coulomb-breit}",
+        help=(
+            "Hamiltonian whose structural selection rules are applied (default: dc)."
+        ),
+    )
+    _ = interacting.add_argument(
+        "--method",
+        type=_parse_interaction_method,
+        default="structural_upper_bound",
+        metavar="structural-upper-bound",
+        help=(
+            "Selection method. Only structural-upper-bound is currently "
+            "implemented; it can include false positives."
+        ),
+    )
+    _ = interacting.add_argument(
+        "--threads",
+        "--num-workers",
+        dest="num_workers",
+        type=_parse_positive_int,
+        default=8,
+        help="Worker thread count (default: 8).",
+    )
+    _ = interacting.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace an existing output file.",
+    )
+    _ = interacting.add_argument(
+        "--json",
+        action="store_true",
+        help="Print selection statistics as JSON.",
+    )
+
     return parser
 
 
@@ -262,6 +372,53 @@ def _print_zero_first_summary(stats: Mapping[str, object]) -> None:
     block_count = stats.get("block_count")
     if block_count is not None:
         print(f"block_count: {block_count}")
+
+
+def _print_interacting_summary(stats: Mapping[str, object]) -> None:
+    output_file = stats.get("output_file", "")
+    print(f"Selected interacting CSFs (structural upper bound): {output_file}")
+    for key in ("reference_count", "candidate_count", "selected_count"):
+        value = stats.get(key)
+        if value is not None:
+            print(f"{key}: {value}")
+
+
+def _run_interacting(args: InteractingArgs) -> int:
+    print(
+        "WARNING: STRUCTURAL UPPER BOUND ONLY; NOT an exact rcsfinteract90 "
+        "angular-algebra calculation. False positives may be retained.",
+        file=sys.stderr,
+    )
+    try:
+        stats = select_interacting_csfs(
+            args.reference,
+            args.candidates,
+            args.output,
+            hamiltonian=args.hamiltonian,
+            method=args.method,
+            num_workers=args.num_workers,
+            overwrite=args.overwrite,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        if args.json:
+            json.dump(
+                {"success": False, "error": str(exc)},
+                sys.stdout,
+                indent=2,
+                sort_keys=True,
+            )
+            _ = sys.stdout.write("\n")
+        else:
+            print(f"Interaction selection failed: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        json.dump(stats, sys.stdout, indent=2, sort_keys=True)
+        _ = sys.stdout.write("\n")
+    else:
+        _print_interacting_summary(stats)
+
+    return 0
 
 
 def _convert_to_parquet(
@@ -545,7 +702,7 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
 
 def _config_table(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
-        raise ValueError("Expected a TOML table")
+        raise TypeError("Expected a TOML table")
     return cast(dict[str, object], value)
 
 
@@ -557,19 +714,19 @@ def _config_int(value: object) -> int:
 
 def _config_bool(value: object) -> bool:
     if not isinstance(value, bool):
-        raise ValueError("Expected a boolean")
+        raise TypeError("Expected a boolean")
     return value
 
 
 def _config_string(value: object) -> str:
     if not isinstance(value, str):
-        raise ValueError("Expected a string")
+        raise TypeError("Expected a string")
     return value
 
 
 def _config_references(value: object) -> list[str]:
     if not isinstance(value, list):
-        raise ValueError("references must be an array of strings")
+        raise TypeError("references must be an array of strings")
     return [_config_string(item) for item in cast(list[object], value)]
 
 
@@ -682,6 +839,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "csfsgenerate":
         return _run_csfsgenerate(args)
+
+    if args.command == "interacting":
+        return _run_interacting(args)
 
     return _run_zero_first(args)
 

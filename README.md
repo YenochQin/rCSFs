@@ -65,6 +65,7 @@ from rcsfs import (
     get_parquet_info,
     read_csfs,
     read_peel_subshells,
+    select_interacting_csfs,
 )
 
 input_csf = Path("tests/fixtures/sample.csf")
@@ -105,6 +106,12 @@ print(desc_stats)
 # 5. Load the descriptor table
 df = pl.read_parquet(desc_parquet)
 print(df.head())
+
+# 6. Select a conservative (non-exact) interaction upper bound
+interaction_stats = select_interacting_csfs(
+    "reference.csf", "candidates.csf", "selected.csf", num_workers=8
+)
+assert interaction_stats["exact"] is False
 ```
 
 ## Workflow
@@ -320,7 +327,7 @@ below for generating a full CSF list from Python.
 ## Command Line Interface
 
 Installing `rcsfs` also installs an `rcsfs` console script (`uv run rcsfs ...`)
-with three subcommands.
+with four subcommands.
 
 ### `rcsfs csfsgenerate` — interactively generate a new CSF list
 
@@ -437,6 +444,26 @@ first-order complement.
 uv run rcsfs zero-first zero.csf full.csf out.csf
 ```
 
+### `rcsfs interacting` — conservative interaction candidates
+
+This first implementation writes each reference block followed by candidate
+CSFs that pass the two-electron occupation bound. It preserves input order and
+parallel results are deterministic, but it does **not** yet implement GRASP's
+recoupling, Coulomb angular-factor, or Breit/SNRC tests. The result is therefore
+a structural upper bound (`exact=False`) that can retain false positives.
+Dirac–Coulomb and Dirac–Coulomb–Breit currently share this same bound.
+
+The CLI writes `rcsf.out` and uses 8 worker threads by default. Use
+`--output PATH` and `--threads N` to override either default.
+
+```bash
+uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc
+
+# Optional overrides
+uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
+  --threads 4 --output selected.csf
+```
+
 ## Public Python API
 
 | Function | Description |
@@ -447,6 +474,7 @@ uv run rcsfs zero-first zero.csf full.csf out.csf
 | `read_peel_subshells(header_path)` | Read peel subshells from header TOML |
 | `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False)` | Generate descriptor Parquet from converted CSFs |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | Reorder a CSF list into zero-order + first-order space per symmetry block |
+| `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | Write a conservative, non-exact upper bound of interacting candidates; returned stats always include `exact=False` |
 | `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` |
 
 ## Input Format

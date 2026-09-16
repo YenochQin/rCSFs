@@ -23,20 +23,24 @@ Rust backend code lives in `src/`:
 The Python frontend lives in `rcsfs/`. `rcsfs/__init__.py` is the public API wrapper and supports `pathlib.Path`; `rcsfs/py.typed` marks the package as typed. Tests live in `tests/`, including Rust integration tests, Python API checks, speed tests, and fixtures such as `tests/fixtures/sample.csf`. Treat `dist/` and `target/` as build output unless a release task explicitly requires them.
 
 ## Build, Test, and Development Commands
-All Python, Maturin, and PyO3 work in this repository must use `../graspkit-tools/.venv`, created and synchronized by running `uv sync` in `graspkit-tools/`. Do not run `uv venv`, `uv sync`, or `uv run` here, and do not create, activate, or use `rCSFs/.venv`. Keep Rust sources and build artifacts in this repository, but activate the Tools environment before invoking build or test tools.
+All Python execution for this repository uses `../graspkit-tools/.venv`, created and synchronized by running `uv sync` in `graspkit-tools/`, because every consumer of this package lives in the parent workspace. Do not run `uv venv`, `uv sync`, or `uv run` here, and do not create, activate, or use `rCSFs/.venv`. Keep Rust sources and build artifacts in this repository, and activate the Tools environment before invoking test tools.
 
 ```bash
-cd ../graspkit-tools && uv sync && cd ../rCSFs
+# After a Rust change: refresh the in-tree extension that pytest imports
 source ../graspkit-tools/.venv/bin/activate
-maturin develop
+cargo build --release --features pyo3/extension-module
+cp target/release/lib_rcsfs.so rcsfs/_rcsfs.cpython-314-x86_64-linux-gnu.so
+pytest
 ```
 
-- `maturin develop`: with the shared Tools environment activated, build the Rust extension and install it there for local testing; run this after Rust changes.
-- `maturin build --release`: with the shared Tools environment activated, build optimized production/distribution wheels.
-- `cargo build --release`: produce optimized Rust artifacts.
-- `cargo test`: run Rust unit and integration tests after activating the Tools venv so PyO3 links against its Python 3.14 runtime.
+Because `[tool.maturin] python-source = "."` makes the repository root the package root, anything run from this directory imports the in-tree `rcsfs/` and shadows the copy installed in the shared environment. That gives two separate rebuild targets:
+
+- `cargo build --release --features pyo3/extension-module` then copy `target/release/lib_rcsfs.so` over `rcsfs/_rcsfs.cpython-314-x86_64-linux-gnu.so` (adjust the ABI tag per platform): **refreshes what this repository's `pytest` imports.** Needs no Maturin and writes nothing into the shared environment.
+- `cd ../graspkit-tools && uv sync`: **refreshes what parent-workspace code imports.** `graspkit-tools` consumes this repository as a Maturin-backed path dependency and `[tool.uv] cache-keys` lists `src/**/*.rs`, so this rebuilds the wheel under PEP 517 build isolation (release profile) and reinstalls it. Build isolation supplies Maturin itself, so Maturin is intentionally absent from the shared environment — **do not add it there, and do not run `maturin develop`**, which installs Maturin plus this repository's dev dependencies into the active environment and turns the `rcsfs` wheel install into an editable one. Recover with `uv sync` in `graspkit-tools/`.
+- `uvx --from 'maturin>=1.14,<2.0' maturin build --release --interpreter ../graspkit-tools/.venv/bin/python`: produce a redistributable wheel in `target/wheels/`. Wheel packaging is the only task scoped to this repository alone, which is why Maturin is declared only in this repository's `dev` group; running it via `uvx` keeps a second virtual environment from appearing.
+- `cargo test`: run Rust unit and integration tests after activating the Tools venv so PyO3 links against its Python 3.14 runtime. Needs no wheel build.
 - `cargo test test_descriptor_generator_parse_csf_basic`: run a single Rust test by name.
-- `pytest`: run all Python tests.
+- `pytest`: run all Python tests. Rebuild the in-tree extension first if Rust sources changed, otherwise the tests import a stale extension.
 - `pytest tests/rcsfs_test.py`: run the canonical Python API tests.
 - `pytest --speed`: run tests with speed benchmarking.
 - `ruff check .`: lint Python code.

@@ -18,19 +18,59 @@ rCSFs is a high-performance Rust/Python hybrid library for processing CSF (Confi
 
 ## Build Commands
 
+There is exactly one Python environment, `../graspkit-tools/.venv`, because every
+consumer of this package lives in the parent workspace and imports it from there.
+Do not run `uv sync` or `uv run` here, and do not create or use `rCSFs/.venv`.
+
+After a Rust change there are two distinct places the extension may need
+refreshing, because `[tool.maturin] python-source = "."` makes the repository
+root itself the package root. Running anything from this directory imports the
+in-tree `rcsfs/`, which shadows the copy installed in the shared environment.
+
+**1. For parent-workspace code (`graspkit`, `graspkit-tools`, scripts) — sync:**
+
 ```bash
-# Set up the workspace's only Python environment
-cd ../graspkit-tools && uv sync && cd ../rCSFs
-source ../graspkit-tools/.venv/bin/activate
-
-# Build Rust extension in development mode (run after any Rust changes)
-maturin develop
-
-# Build optimized release (for production/distribution)
-maturin build --release
+cd ../graspkit-tools && uv sync
 ```
 
-All Python, Maturin, and PyO3 commands must use `../graspkit-tools/.venv`. Do not run `uv sync` or `uv run` here and do not create/use `rCSFs/.venv`; activate the Tools environment before invoking tools.
+`graspkit-tools` consumes this repository as a path dependency whose build
+backend is Maturin, and `[tool.uv] cache-keys` in `pyproject.toml` lists
+`src/**/*.rs`. `uv sync` therefore detects Rust edits, rebuilds the wheel through
+PEP 517 build isolation — fetching Maturin into a throwaway build environment
+itself, and using the release profile — and reinstalls it.
+
+**2. For this repository's own `pytest` — build the in-tree extension:**
+
+```bash
+source ../graspkit-tools/.venv/bin/activate
+cargo build --release --features pyo3/extension-module
+cp target/release/lib_rcsfs.so rcsfs/_rcsfs.cpython-314-x86_64-linux-gnu.so
+```
+
+`pytest` runs from this directory, so it loads `rcsfs/_rcsfs*.so` rather than the
+installed wheel; `uv sync` alone will not update what the tests import. The
+Cargo build needs no Maturin and writes nothing into the shared environment.
+Adjust the destination filename for your platform ABI tag.
+
+**Maturin is deliberately absent from the shared environment and must not be
+added to it.** Do not run `maturin develop`: it installs Maturin and this
+repository's dev dependencies into whatever environment is active and converts
+the `rcsfs` wheel install into an editable one, which silently desynchronizes the
+shared environment from `graspkit-tools/uv.lock`. Recover with `uv sync` in
+`graspkit-tools/`.
+
+Maturin is declared only in this repository's `dev` dependency group, because
+wheel packaging is the one task scoped to this repository alone. Run it as a
+one-off tool so no second virtual environment appears:
+
+```bash
+# Produce a distributable wheel in target/wheels/
+uvx --from 'maturin>=1.14,<2.0' maturin build --release \
+  --interpreter ../graspkit-tools/.venv/bin/python
+```
+
+For Rust-only work, `cargo build` and `cargo test` need no wheel at all —
+activate the Tools venv first so PyO3 links against its Python 3.14 runtime.
 
 ## Testing
 
@@ -152,4 +192,6 @@ lto = true
 codegen-units = 1
 ```
 
-Always activate the Tools venv and use `maturin build --release` for production — the development build (`maturin develop`) skips LTO.
+`uv sync` in `graspkit-tools/` builds this profile, so the extension installed in
+the shared environment is already LTO-optimized. Use the `uvx maturin build
+--release` command above only when you need a redistributable wheel file.

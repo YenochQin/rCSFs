@@ -429,10 +429,27 @@ def select_interacting_csfs(
     that exactly duplicate a reference record are skipped; structurally
     admissible remaining candidates are appended in candidate-file order.
 
+    **Orbital basis.** The core header lines must be byte-identical, and the
+    reference peel subshell list must be a *prefix* of the candidate peel
+    subshell list, in the same order. GRASP's own ``rcsfinteract`` requires the
+    two peel lists to be identical; this function deliberately relaxes that to
+    a prefix so a reference space can be reused against a candidate space that
+    appends further correlation orbitals. The candidate header — including the
+    appended subshells — becomes the output header, and the appended subshells
+    take part in occupation comparisons. Block counts and each block's
+    :math:`J/P` must still match.
+
+    **Distinct inputs.** ``reference_csf`` and ``candidate_csf`` must name
+    different files; equal paths, symlinks to a common target, and Unix hard
+    links are all rejected. ``output_csf`` must likewise not alias either
+    input, so a run cannot overwrite the data it is reading.
+
     Args:
         reference_csf: Reference-space CSF text file.
-        candidate_csf: Candidate-space CSF text file on the same orbital basis.
-        output_csf: Destination CSF text file.
+        candidate_csf: Candidate-space CSF text file whose peel subshell list
+            starts with the reference peel subshell list. Must be a different
+            file from ``reference_csf``.
+        output_csf: Destination CSF text file. Must not alias either input.
         hamiltonian: ``"dirac_coulomb"`` or ``"dirac_coulomb_breit"``.
             The current structural method records this choice but cannot
             distinguish every exact Coulomb/Breit angular zero.
@@ -446,7 +463,11 @@ def select_interacting_csfs(
         ``False`` for the currently supported method.
 
     Raises:
-        ValueError: An option is unsupported or ``num_workers`` is not positive.
+        ValueError: An option is unsupported, the inputs are incompatible or
+            not distinct, or ``num_workers`` is zero, negative, or too large
+            for this platform.
+        TypeError: ``num_workers`` is neither an integer nor ``None``.
+        FileExistsError: ``output_csf`` exists and ``overwrite`` is ``False``.
         OSError: Input parsing or file I/O fails.
     """
     return _select_interacting_csfs(

@@ -5,16 +5,19 @@
 //! radial matrix elements, so a retained CSF is merely *possibly* interacting.
 //! The [`InteractionStats::exact`] flag is consequently always `false`.
 
+use crate::atomic_output::{
+    create_temporary_output, ensure_distinct_inputs, ensure_output_does_not_alias_input,
+    publish_temporary_output,
+};
 use crate::complete_csf::{CompleteCsfFile, CsfRecord, Parity, SymmetryBlock};
 use anyhow::{Context, Result, ensure};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
+use std::fs;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 
 /// Hamiltonian requested by the caller.
 ///
@@ -32,6 +35,17 @@ impl HamiltonianMode {
         match self {
             Self::DiracCoulomb => "dirac_coulomb",
             Self::DiracCoulombBreit => "dirac_coulomb_breit",
+        }
+    }
+
+    /// Decode the public option spelling accepted at API boundaries.
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "dirac_coulomb" => Ok(Self::DiracCoulomb),
+            "dirac_coulomb_breit" => Ok(Self::DiracCoulombBreit),
+            other => anyhow::bail!(
+                "unknown hamiltonian {other:?}; expected \"dirac_coulomb\" or \"dirac_coulomb_breit\""
+            ),
         }
     }
 }
@@ -55,6 +69,16 @@ impl InteractionMethod {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::StructuralUpperBound => "structural_upper_bound",
+        }
+    }
+
+    /// Decode the public option spelling accepted at API boundaries.
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "structural_upper_bound" => Ok(Self::StructuralUpperBound),
+            other => anyhow::bail!(
+                "unknown method {other:?}; only \"structural_upper_bound\" is supported"
+            ),
         }
     }
 }
@@ -123,18 +147,6 @@ struct ReferenceRecord {
     electron_count: u32,
 }
 
-struct TemporaryOutput {
-    path: PathBuf,
-}
-
-impl Drop for TemporaryOutput {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
 /// Select candidate CSFs that may interact with at least one reference CSF.
 ///
 /// This is a conservative, non-exact implementation of the occupation-level
@@ -177,29 +189,11 @@ pub fn select_interacting_csfs(
         "output file {} already exists (set overwrite=true to replace it)",
         output_path.display()
     );
-    ensure!(
-        reference_path != candidates_path,
-        "reference and candidate inputs must be different files"
-    );
-    if reference_path.exists() && candidates_path.exists() {
-        let reference_canonical = reference_path.canonicalize().with_context(|| {
-            format!(
-                "failed to resolve reference input {}",
-                reference_path.display()
-            )
-        })?;
-        let candidates_canonical = candidates_path.canonicalize().with_context(|| {
-            format!(
-                "failed to resolve candidate input {}",
-                candidates_path.display()
-            )
-        })?;
-        ensure!(
-            reference_canonical != candidates_canonical
-                && !same_file_identity(reference_path, candidates_path)?,
-            "reference and candidate inputs must be different files"
-        );
-    }
+    ensure_distinct_inputs(
+        reference_path,
+        candidates_path,
+        "reference and candidate inputs must be different files",
+    )?;
     ensure_output_does_not_alias_input(output_path, reference_path, "reference")?;
     ensure_output_does_not_alias_input(output_path, candidates_path, "candidate")?;
 
@@ -359,8 +353,8 @@ pub fn select_interacting_csfs(
         )
     })?;
     drop(writer);
-    let output_bytes = fs::metadata(&temporary.path)?.len();
-    publish_temporary_output(&temporary.path, output_path, overwrite)?;
+    let output_bytes = fs::metadata(temporary.path())?.len();
+    publish_temporary_output(temporary.path(), output_path, overwrite)?;
 
     let reference_count = checked_sum(block_stats.iter().map(|block| block.reference_count))?;
     let candidate_count = checked_sum(block_stats.iter().map(|block| block.candidate_count))?;
@@ -551,174 +545,12 @@ fn occupation_upper_bound(
     true
 }
 
-fn ensure_output_does_not_alias_input(
-    output: &Path,
-    input: &Path,
-    input_description: &str,
-) -> Result<()> {
-    if output == input {
-        anyhow::bail!(
-            "output path must not be the {input_description} input path: {}",
-            output.display()
-        );
-    }
-
-    // If both names exist, canonicalization detects symlinks and metadata
-    // identity detects hard links.  A missing output cannot alias an existing
-    // input yet, so lexical equality above is sufficient for that case.
-    if output.exists() {
-        let output_canonical = output
-            .canonicalize()
-            .with_context(|| format!("failed to resolve output path {}", output.display()))?;
-        let input_canonical = input.canonicalize().with_context(|| {
-            format!(
-                "failed to resolve {input_description} input {}",
-                input.display()
-            )
-        })?;
-        ensure!(
-            output_canonical != input_canonical,
-            "output path aliases the {input_description} input: {}",
-            output.display()
-        );
-        ensure!(
-            !same_file_identity(output, input)?,
-            "output path is a hard link to the {input_description} input: {}",
-            output.display()
-        );
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn same_file_identity(left: &Path, right: &Path) -> Result<bool> {
-    use std::os::unix::fs::MetadataExt;
-
-    let left = fs::metadata(left)?;
-    let right = fs::metadata(right)?;
-    Ok(left.dev() == right.dev() && left.ino() == right.ino())
-}
-
-#[cfg(not(unix))]
-fn same_file_identity(_left: &Path, _right: &Path) -> Result<bool> {
-    // Canonical paths catch ordinary names and symlinks on non-Unix targets.
-    // Rust's standard library does not expose a portable file-ID comparison.
-    Ok(false)
-}
-
 fn checked_sum(values: impl IntoIterator<Item = usize>) -> Result<usize> {
     values.into_iter().try_fold(0usize, |total, value| {
         total
             .checked_add(value)
             .context("interaction count overflow")
     })
-}
-
-fn create_temporary_output(output_path: &Path) -> Result<(TemporaryOutput, File)> {
-    let parent = output_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let name = output_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("interaction-output");
-    for _ in 0..128 {
-        let sequence = TEMPORARY_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let path = parent.join(format!(
-            ".{name}.rcsfs-{}-{sequence}.tmp",
-            std::process::id()
-        ));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => return Ok((TemporaryOutput { path }, file)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("failed to create temporary output in {}", parent.display())
-                });
-            }
-        }
-    }
-    anyhow::bail!(
-        "failed to allocate a unique temporary output in {}",
-        parent.display()
-    )
-}
-
-fn publish_temporary_output(temporary: &Path, output: &Path, overwrite: bool) -> Result<()> {
-    if overwrite {
-        replace_output(temporary, output)?;
-        return Ok(());
-    }
-
-    // A same-filesystem hard link is an atomic create-if-absent operation.
-    // Unlike a preflight `exists` check, it also closes the publication race.
-    fs::hard_link(temporary, output).with_context(|| {
-        format!(
-            "failed to publish output {} without overwriting an existing file",
-            output.display()
-        )
-    })?;
-    // Publication has succeeded. Cleanup is best-effort so callers never see
-    // a failure for an output that is already complete and visible.
-    let _ = fs::remove_file(temporary);
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn replace_output(temporary: &Path, output: &Path) -> Result<()> {
-    fs::rename(temporary, output).with_context(|| {
-        format!(
-            "failed to replace output {} with completed temporary file",
-            output.display()
-        )
-    })
-}
-
-#[cfg(windows)]
-fn replace_output(temporary: &Path, output: &Path) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
-    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
-    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
-
-    #[link(name = "Kernel32")]
-    unsafe extern "system" {
-        fn MoveFileExW(
-            existing_file_name: *const u16,
-            new_file_name: *const u16,
-            flags: u32,
-        ) -> i32;
-    }
-
-    let temporary_wide = temporary
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let output_wide = output
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    // SAFETY: both pointers refer to live, NUL-terminated UTF-16 buffers for
-    // the duration of the call. The flags request same-filesystem replacement.
-    let succeeded = unsafe {
-        MoveFileExW(
-            temporary_wide.as_ptr(),
-            output_wide.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if succeeded == 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| {
-            format!(
-                "failed to replace output {} with completed temporary file",
-                output.display()
-            )
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]

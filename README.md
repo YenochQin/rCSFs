@@ -35,23 +35,34 @@ It helps you:
 
 `rcsfs` currently targets Python `3.14+`.
 
-Build from source:
+Build a wheel from source and install it wherever you need it:
 
 ```bash
 git clone https://github.com/YenochQin/rCSFs.git
 cd rCSFs
-uv sync
-uv run maturin develop --release
+uvx --from 'maturin>=1.14,<2.0' maturin build --release
+pip install target/wheels/rcsfs-*.whl
 ```
 
-You can also use the repository's documented development flow:
+Maturin is only required for this packaging step, so running it with `uvx` avoids
+adding a virtual environment to the checkout. Any PEP 517 front end works too —
+`pip install .` fetches Maturin into an isolated build environment on its own.
+
+### Inside the GraspKit workspace
+
+When this repository sits beside `graspkit-tools/`, it is consumed as a
+Maturin-backed path dependency and there is a single shared environment at
+`../graspkit-tools/.venv`. Rebuild and reinstall the extension by syncing that
+environment — `[tool.uv] cache-keys` tracks `src/**/*.rs`, so Rust edits are
+picked up automatically:
 
 ```bash
-uv sync --group dev --group lint
-uv run maturin develop
+cd ../graspkit-tools && uv sync
+source .venv/bin/activate
 ```
 
-`maturin` is installed in the uv-managed environment. Use `uv run maturin ...`, or activate `.venv` before running bare `maturin`.
+Do not create `rCSFs/.venv`, and do not install Maturin into the shared
+environment; build isolation provides it.
 
 ## Quick Start
 
@@ -457,12 +468,32 @@ The CLI writes `rcsf.out` and uses 8 worker threads by default. Use
 `--output PATH` and `--threads N` to override either default.
 
 ```bash
-uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc
+rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc
 
 # Optional overrides
-uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
+rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
   --threads 4 --output selected.csf
 ```
+
+#### Input requirements
+
+**Orbital basis — prefix, not equality.** The core header lines must be
+byte-identical, and the reference peel subshell list must be a *prefix* of the
+candidate peel subshell list in the same order. GRASP's own `rcsfinteract`
+requires the two peel lists to be identical; rCSFs deliberately relaxes this to
+a prefix so one reference space can be reused against a candidate space that
+appends further correlation orbitals. Consequences:
+
+- the candidate header, including the appended subshells, becomes the output
+  header, so reference records are re-emitted under the wider peel declaration;
+- the appended subshells participate in the occupation comparison;
+- block counts and each corresponding block's `J/P` must still match exactly.
+
+**The two inputs must be distinct files.** Equal paths, symlinks resolving to a
+common target, and Unix hard links are all rejected. The output path likewise
+must not alias either input, so a run can never overwrite the data it is
+reading. Passing the same file as both reference and candidate is refused
+rather than treated as an identity selection.
 
 ## Public Python API
 

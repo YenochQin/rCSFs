@@ -79,6 +79,91 @@ def test_select_interacting_csfs_public_api_is_explicitly_non_exact(
         _ = select_interacting_csfs(source, candidates, output)
 
 
+@pytest.mark.parametrize("num_workers", [0, -1, -(2**63), 2**64, 10**30])
+def test_select_interacting_csfs_rejects_non_positive_workers(
+    tmp_path: Path, num_workers: int
+) -> None:
+    """Every unusable worker count is a ``ValueError``, per the public API.
+
+    Negative and oversized integers must not escape as ``OverflowError`` from
+    the native argument conversion before the documented check runs.
+    """
+    source = FIXTURES_DIR / "complete.csf"
+    candidates = tmp_path / "candidates.csf"
+    candidates.write_bytes(source.read_bytes())
+    output = tmp_path / "selected.csf"
+
+    with pytest.raises(ValueError):
+        _ = select_interacting_csfs(source, candidates, output, num_workers=num_workers)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("num_workers", ["4", 1.5, object()])
+def test_select_interacting_csfs_rejects_non_integer_workers(
+    tmp_path: Path, num_workers: object
+) -> None:
+    source = FIXTURES_DIR / "complete.csf"
+    candidates = tmp_path / "candidates.csf"
+    candidates.write_bytes(source.read_bytes())
+
+    with pytest.raises(TypeError):
+        _ = select_interacting_csfs(
+            source,
+            candidates,
+            tmp_path / "selected.csf",
+            num_workers=num_workers,  # pyright: ignore[reportArgumentType]
+        )
+
+
+def test_select_interacting_csfs_accepts_extended_candidate_peel_list(
+    tmp_path: Path,
+) -> None:
+    """The reference peel list only has to be a prefix of the candidate's.
+
+    This relaxation of GRASP's identical-peel-list rule lets one reference
+    space be reused against a candidate space that appends correlation
+    orbitals. The candidate header becomes the output header.
+    """
+    reference = FIXTURES_DIR / "complete.csf"
+    lines = reference.read_text().splitlines(keepends=True)
+    # Line 4 is the peel subshell list; append an unoccupied orbital.
+    assert lines[3].split() == ["4f-", "4f", "5d-", "5d"]
+    lines[3] = lines[3].rstrip("\n") + "   6s \n"
+    candidates = tmp_path / "candidates.csf"
+    _ = candidates.write_text("".join(lines))
+    output = tmp_path / "selected.csf"
+
+    stats = select_interacting_csfs(reference, candidates, output, num_workers=2)
+
+    assert stats["exact"] is False
+    assert stats["block_count"] == 2
+    assert stats["reference_count"] == 2
+    # Records are unchanged, so each candidate still duplicates a reference.
+    assert stats["exact_reference_skipped"] == 2
+    assert stats["selected_count"] == 0
+    assert stats["output_count"] == 2
+    # The wider candidate header is what gets published.
+    assert output.read_text().splitlines()[3].split() == [
+        "4f-",
+        "4f",
+        "5d-",
+        "5d",
+        "6s",
+    ]
+
+
+def test_select_interacting_csfs_requires_distinct_inputs(tmp_path: Path) -> None:
+    """One file cannot serve as both reference and candidate."""
+    source = FIXTURES_DIR / "complete.csf"
+    shared = tmp_path / "shared.csf"
+    shared.write_bytes(source.read_bytes())
+    output = tmp_path / "selected.csf"
+
+    with pytest.raises(ValueError, match="different files"):
+        _ = select_interacting_csfs(shared, shared, output)
+    assert not output.exists()
+
+
 def test_generate_csfs_from_transcript_matches_registered_e1_cc1as1(
     tmp_path: Path,
 ) -> None:

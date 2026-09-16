@@ -21,6 +21,7 @@ from . import (
     read_peel_subshells,
     select_interacting_csfs,
 )
+from ._types import InteractionHamiltonian, InteractionMethod
 
 #: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
 _MAX_REFERENCE_CONFIGURATIONS = 100
@@ -75,8 +76,8 @@ class InteractingArgs(Protocol):
     reference: Path
     candidates: Path
     output: Path
-    hamiltonian: Literal["dirac_coulomb", "dirac_coulomb_breit"]
-    method: Literal["structural_upper_bound"]
+    hamiltonian: InteractionHamiltonian
+    method: InteractionMethod
     num_workers: int
     overwrite: bool
     json: bool
@@ -85,31 +86,39 @@ class InteractingArgs(Protocol):
 type CliArgs = GenDescriptorsArgs | ZeroFirstArgs | CsfsGenerateArgs | InteractingArgs
 
 
-def _parse_hamiltonian(
-    value: str,
-) -> Literal["dirac_coulomb", "dirac_coulomb_breit"]:
-    aliases: dict[str, Literal["dirac_coulomb", "dirac_coulomb_breit"]] = {
-        "dc": "dirac_coulomb",
-        "dirac-coulomb": "dirac_coulomb",
-        "dirac_coulomb": "dirac_coulomb",
-        "dcb": "dirac_coulomb_breit",
-        "dirac-coulomb-breit": "dirac_coulomb_breit",
-        "dirac_coulomb_breit": "dirac_coulomb_breit",
-    }
+#: CLI spellings accepted for each domain Hamiltonian value.
+_HAMILTONIAN_ALIASES: dict[str, InteractionHamiltonian] = {
+    "dc": "dirac_coulomb",
+    "dirac-coulomb": "dirac_coulomb",
+    "dirac_coulomb": "dirac_coulomb",
+    "dcb": "dirac_coulomb_breit",
+    "dirac-coulomb-breit": "dirac_coulomb_breit",
+    "dirac_coulomb_breit": "dirac_coulomb_breit",
+}
+
+#: CLI spellings accepted for each domain selection method.
+_METHOD_ALIASES: dict[str, InteractionMethod] = {
+    "structural-upper-bound": "structural_upper_bound",
+    "structural_upper_bound": "structural_upper_bound",
+}
+
+
+def _parse_hamiltonian(value: str) -> InteractionHamiltonian:
     try:
-        return aliases[value.lower()]
+        return _HAMILTONIAN_ALIASES[value.lower()]
     except KeyError as exc:
         raise argparse.ArgumentTypeError(
             "expected dc, dcb, dirac-coulomb, or dirac-coulomb-breit"
         ) from exc
 
 
-def _parse_interaction_method(value: str) -> Literal["structural_upper_bound"]:
-    if value.lower() in {"structural-upper-bound", "structural_upper_bound"}:
-        return "structural_upper_bound"
-    raise argparse.ArgumentTypeError(
-        "only structural-upper-bound is implemented in this release"
-    )
+def _parse_interaction_method(value: str) -> InteractionMethod:
+    try:
+        return _METHOD_ALIASES[value.lower()]
+    except KeyError as exc:
+        raise argparse.ArgumentTypeError(
+            "only structural-upper-bound is implemented in this release"
+        ) from exc
 
 
 def _parse_positive_int(value: str) -> int:

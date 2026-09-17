@@ -26,7 +26,7 @@ use std::str::FromStr;
 use crate::complete_csf::{
     CompleteCsfFile, IntermediateCoupling, OccupiedSubshell, Parity, SubshellState,
 };
-use states::subshell_states;
+pub(crate) use states::subshell_states;
 
 const ORBITAL_LETTERS: &[u8] = b"spdfghiklmn";
 const MAX_OCCUPIED_SUBSHELLS: usize = 20;

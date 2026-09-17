@@ -4,11 +4,17 @@
 //! for machine learning applications. Each CSF is parsed into a fixed-length array
 //! containing electron counts and angular momentum coupling values.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use std::collections::HashMap;
 use std::fs::read_to_string;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::complete_csf::{IntermediateCoupling, OccupiedSubshell, Parity, SubshellState};
+#[cfg(test)]
+use crate::descriptor_schema::MISSING;
+use crate::descriptor_schema::{DescriptorLayout, DescriptorVersion, validate_record};
+use crate::descriptor_v2::write_feature_row;
 
 pub(crate) fn parse_peel_subshells_from_header_lines(
     header_lines: &[String],
@@ -212,6 +218,8 @@ pub mod parquet_batch {
         pub descriptor_count: usize,
         pub orbital_count: usize,
         pub descriptor_size: usize,
+        pub descriptor_version: u8,
+        pub channels_per_subshell: usize,
     }
 
     /// Generate descriptors from a parquet file and write to Parquet file
@@ -221,7 +229,10 @@ pub mod parquet_batch {
     /// * `output_file` - Path to output Parquet file for descriptors
     /// * `peel_subshells` - Optional list of subshell names (auto-detected if None)
     /// * `header_path` - Optional path to header TOML file
-    /// * `normalize` - Whether to normalize descriptors (default: false)
+    /// * `normalize` - Whether to normalize descriptors (default: false). Rejected for V2
+    ///   (design doc §4.4/§5.1): the V1 per-subshell normalization denominators
+    ///   are not meaningful for a 4-wide row and are P1 scope.
+    /// * `version` - Descriptor format version (default V1).
     /// * `compression` - Optional parquet compression specifier (default: `zstd-3`).
     ///   See [`parse_compression`] for accepted values.
     ///
@@ -238,27 +249,36 @@ pub mod parquet_batch {
         peel_subshells: Option<Vec<String>>,
         header_path: Option<PathBuf>,
         normalize: bool,
+        version: DescriptorVersion,
         compression: Option<&str>,
     ) -> Result<BatchDescriptorStats> {
-        // Step 1: Determine peel_subshells
+        // Step 1: Determine peel_subshells and, when available, the header
+        // path whose bytes get hashed into the output KV metadata (design
+        // doc §6, plan D5 layer 2: "that hash is the enforcement mechanism
+        // for header/block/descriptor matching").
+        let resolved_header_path = match &header_path {
+            Some(path) => Some(path.clone()),
+            None => find_header_file(input_parquet),
+        };
         let peel_subshells = match peel_subshells {
             Some(s) => s,
             None => {
-                // Try to find and read header file
-                let header = match header_path {
-                    Some(h) => h,
-                    None => find_header_file(input_parquet)
-                        .ok_or_else(|| anyhow::anyhow!("Could not auto-detect header file. Please provide peel_subshells or header_path."))?,
-                };
+                let header = resolved_header_path.clone().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Could not auto-detect header file. Please provide peel_subshells or header_path."
+                    )
+                })?;
                 read_peel_subshells_from_header(&header)?
             }
         };
 
-        let orbital_count = peel_subshells.len();
-        let descriptor_size = 3 * orbital_count;
+        let layout = DescriptorLayout::new(version, peel_subshells.len());
+        let orbital_count = layout.subshell_count();
+        let descriptor_size = layout.row_len();
 
         // Step 2: Create descriptor generator
-        let generator = super::CSFDescriptorGenerator::new(peel_subshells.clone());
+        let generator =
+            super::CSFDescriptorGenerator::new_with_version(peel_subshells.clone(), version);
 
         // Step 3: Open input parquet file
         let file = std::fs::File::open(input_parquet).with_context(|| {
@@ -279,22 +299,25 @@ pub mod parquet_batch {
             .with_context(|| "Failed to build parquet reader")?;
 
         // Step 4: Create output Parquet writer
-        use arrow::datatypes::{DataType, Field, Schema};
         use parquet::file::properties::WriterProperties;
-        use std::sync::Arc;
 
-        // Output schema: descriptor columns (one column per descriptor element)
-        // Use Float32 for normalized output, Int32 for raw descriptors
-        let output_type = if normalize {
-            DataType::Float32
-        } else {
-            DataType::Int32
-        };
-        let mut fields = Vec::with_capacity(descriptor_size);
-        for i in 0..descriptor_size {
-            fields.push(Field::new(format!("col_{}", i), output_type.clone(), false));
-        }
-        let output_schema = Arc::new(Schema::new(fields));
+        let output_schema = crate::descriptor_schema::output_schema(layout, normalize)?;
+        let source_header_sha256 = resolved_header_path
+            .as_ref()
+            .map(|path| crate::descriptor_schema::hash_header_file(path))
+            .transpose()?;
+        let source_header_filename = resolved_header_path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .map(str::to_owned);
+        let kv_metadata = crate::descriptor_schema::output_kv_metadata(
+            layout,
+            &peel_subshells,
+            normalize,
+            source_header_sha256.as_deref(),
+            source_header_filename.as_deref(),
+        );
 
         let output_file_handle = std::fs::File::create(output_file)
             .with_context(|| format!("Failed to create output file: {}", output_file.display()))?;
@@ -306,6 +329,7 @@ pub mod parquet_batch {
         let props = WriterProperties::builder()
             .set_compression(parse_compression(compression)?)
             .set_dictionary_enabled(!normalize)
+            .set_key_value_metadata(Some(kv_metadata))
             .build();
 
         let writer = ArrowWriter::try_new(output_file_handle, output_schema.clone(), Some(props))
@@ -389,6 +413,11 @@ pub mod parquet_batch {
                                     }
                                 }
                                 Err(e) => {
+                                    if version == DescriptorVersion::V2 {
+                                        return Err(e).with_context(|| {
+                                            format!("Failed to parse V2 CSF at index {idx}")
+                                        });
+                                    }
                                     eprintln!(
                                         "Warning: Failed to parse CSF at index {}: {}",
                                         idx, e
@@ -420,6 +449,11 @@ pub mod parquet_batch {
                             .write(&output_batch)
                             .with_context(|| "Failed to write batch")?;
                     } else {
+                        let mut row = vec![0i32; descriptor_size];
+                        let fallback_value = match version {
+                            DescriptorVersion::V1 => 0,
+                            DescriptorVersion::V2 => crate::descriptor_schema::MISSING,
+                        };
                         let mut builders: Vec<Int32Builder> = (0..descriptor_size)
                             .map(|_| arrow::array::Int32Builder::with_capacity(batch_size))
                             .collect();
@@ -430,20 +464,25 @@ pub mod parquet_batch {
                             let line3 = line3_col.value(i);
                             let idx = idx_col.value(i);
 
-                            match generator.parse_csf(line1, line2, line3) {
-                                Ok(descriptor) => {
+                            match generator.parse_row_into(line1, line2, line3, &mut row) {
+                                Ok(()) => {
                                     // Append directly to column builders
-                                    for (col_idx, &val) in descriptor.iter().enumerate() {
+                                    for (col_idx, &val) in row.iter().enumerate() {
                                         builders[col_idx].append_value(val);
                                     }
                                 }
                                 Err(e) => {
+                                    if version == DescriptorVersion::V2 {
+                                        return Err(e).with_context(|| {
+                                            format!("Failed to parse V2 CSF at index {idx}")
+                                        });
+                                    }
                                     eprintln!(
                                         "Warning: Failed to parse CSF at index {}: {}",
                                         idx, e
                                     );
                                     for builder in &mut builders {
-                                        builder.append_value(0i32);
+                                        builder.append_value(fallback_value);
                                     }
                                 }
                             }
@@ -489,6 +528,8 @@ pub mod parquet_batch {
             descriptor_count,
             orbital_count,
             descriptor_size,
+            descriptor_version: version.tag(),
+            channels_per_subshell: layout.channels_per_subshell(),
         })
     }
 
@@ -558,14 +599,18 @@ pub mod parquet_batch {
         pool: &rayon::ThreadPool,
         generator: Arc<super::CSFDescriptorGenerator>,
         rows: Vec<DescriptorRow>,
-    ) -> Vec<Vec<i32>> {
+    ) -> Result<Vec<Vec<i32>>> {
         use rayon::prelude::*;
 
-        let descriptor_size = 3 * generator.orbital_count();
+        let descriptor_size = generator.layout().row_len();
+        let fallback_value = match generator.layout().version() {
+            DescriptorVersion::V1 => 0,
+            DescriptorVersion::V2 => crate::descriptor_schema::MISSING,
+        };
         let batch_size = rows.len();
         let chunk_size = descriptor_chunk_size(batch_size, pool.current_num_threads());
 
-        let chunk_columns: Vec<(usize, Vec<Vec<i32>>)> = pool.install(|| {
+        let chunk_columns: Vec<Result<(usize, Vec<Vec<i32>>)>> = pool.install(|| {
             rows.par_chunks(chunk_size)
                 .enumerate()
                 .map(|(chunk_idx, chunk)| {
@@ -576,22 +621,28 @@ pub mod parquet_batch {
 
                     for (idx, line1, line2, line3) in chunk {
                         if let Err(e) =
-                            generator.parse_csf_into(line1, line2, line3, &mut descriptor)
+                            generator.parse_row_into(line1, line2, line3, &mut descriptor)
                         {
+                            if generator.layout().version() == DescriptorVersion::V2 {
+                                return Err(e).with_context(|| {
+                                    format!("Failed to parse V2 CSF at index {idx}")
+                                });
+                            }
                             eprintln!("Warning: Failed to parse CSF at index {}: {}", idx, e);
-                            descriptor.fill(0);
+                            descriptor.fill(fallback_value);
                         }
                         for (col_idx, column) in columns.iter_mut().enumerate() {
                             column.push(descriptor[col_idx]);
                         }
                     }
 
-                    (chunk_idx, columns)
+                    Ok((chunk_idx, columns))
                 })
                 .collect()
         });
+        let chunk_columns = chunk_columns.into_iter().collect::<Result<Vec<_>>>()?;
 
-        pool.install(|| {
+        Ok(pool.install(|| {
             (0..descriptor_size)
                 .into_par_iter()
                 .map(|col_idx| {
@@ -602,7 +653,7 @@ pub mod parquet_batch {
                     col
                 })
                 .collect()
-        })
+        }))
     }
 
     fn build_normalized_descriptor_columns_parallel(
@@ -711,7 +762,11 @@ pub mod parquet_batch {
     /// * `output_file` - Path to output Parquet file
     /// * `peel_subshells` - List of subshell names
     /// * `num_workers` - Number of worker threads (default: CPU core count)
-    /// * `normalize` - Whether to normalize descriptors (default: false)
+    /// * `normalize` - Whether to normalize descriptors (default: false). Rejected for
+    ///   V2 (design doc §4.4/§5.1).
+    /// * `version` - Descriptor format version (default V1).
+    /// * `header_path` - Optional header TOML whose SHA-256 is bound into the
+    ///   output's KV metadata (design doc §6, plan D5).
     /// * `compression` - Optional parquet compression specifier (default: `zstd-3`).
     ///   See [`parse_compression`] for accepted values.
     pub fn generate_descriptors_from_parquet_parallel(
@@ -720,10 +775,11 @@ pub mod parquet_batch {
         peel_subshells: Vec<String>,
         num_workers: Option<usize>,
         normalize: bool,
+        version: DescriptorVersion,
+        header_path: Option<&Path>,
         compression: Option<&str>,
     ) -> Result<BatchDescriptorStats> {
         use arrow::array::{Array, StringArray, UInt64Array};
-        use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use crossbeam_channel::{Receiver, Sender, bounded};
         use parquet::file::properties::WriterProperties;
@@ -735,8 +791,9 @@ pub mod parquet_batch {
             return Err(anyhow::anyhow!("num_workers must be greater than 0"));
         }
 
-        let orbital_count = peel_subshells.len();
-        let descriptor_size = 3 * orbital_count;
+        let layout = DescriptorLayout::new(version, peel_subshells.len());
+        let orbital_count = layout.subshell_count();
+        let descriptor_size = layout.row_len();
 
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 1: Setup channels with bounded capacity
@@ -749,17 +806,21 @@ pub mod parquet_batch {
         ////////////////////////////////////////////////////////////////////////////////
         // Phase 2: Setup output schema and writer (multi-column format for better performance)
         ////////////////////////////////////////////////////////////////////////////////
-        // Use Float32 for normalized output, Int32 for raw descriptors
-        let output_type = if normalize {
-            DataType::Float32
-        } else {
-            DataType::Int32
-        };
-        let mut fields = Vec::with_capacity(descriptor_size);
-        for i in 0..descriptor_size {
-            fields.push(Field::new(format!("col_{}", i), output_type.clone(), false));
-        }
-        let schema = Arc::new(Schema::new(fields));
+        let schema = crate::descriptor_schema::output_schema(layout, normalize)?;
+        let source_header_sha256 = header_path
+            .map(crate::descriptor_schema::hash_header_file)
+            .transpose()?;
+        let source_header_filename = header_path
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .map(str::to_owned);
+        let kv_metadata = crate::descriptor_schema::output_kv_metadata(
+            layout,
+            &peel_subshells,
+            normalize,
+            source_header_sha256.as_deref(),
+            source_header_filename.as_deref(),
+        );
 
         let output_file_handle = std::fs::File::create(output_file)
             .with_context(|| format!("Failed to create output file: {}", output_file.display()))?;
@@ -768,6 +829,7 @@ pub mod parquet_batch {
         let props = WriterProperties::builder()
             .set_compression(parse_compression(compression)?)
             .set_dictionary_enabled(!normalize)
+            .set_key_value_metadata(Some(kv_metadata))
             .build();
 
         let writer = ArrowWriter::try_new(output_file_handle, schema.clone(), Some(props))
@@ -877,7 +939,10 @@ pub mod parquet_batch {
         // Phase 4: Compute thread - process each batch with a bounded Rayon pool
         ////////////////////////////////////////////////////////////////////////////////
         let peel_subshells_for_normalization = Arc::new(peel_subshells.clone());
-        let generator = Arc::new(super::CSFDescriptorGenerator::new(peel_subshells));
+        let generator = Arc::new(super::CSFDescriptorGenerator::new_with_version(
+            peel_subshells,
+            version,
+        ));
         let mut worker_handles = Vec::new();
 
         let rayon_pool = rayon::ThreadPoolBuilder::new()
@@ -893,6 +958,7 @@ pub mod parquet_batch {
             let normalize_enabled = normalize;
 
             worker_handles.push(std::thread::spawn(move || {
+                let mut first_error = None;
                 while let Ok(work_item) = work_rx_clone.recv() {
                     // Check for error sentinel
                     if work_item.batch_idx == usize::MAX {
@@ -901,6 +967,9 @@ pub mod parquet_batch {
 
                     let batch_idx = work_item.batch_idx;
                     let batch_size = work_item.rows.len();
+                    if first_error.is_some() {
+                        continue;
+                    }
                     let columns = if normalize_enabled {
                         let cols = build_normalized_descriptor_columns_parallel(
                             &rayon_pool,
@@ -910,11 +979,17 @@ pub mod parquet_batch {
                         );
                         DescriptorColumns::Normalized(cols)
                     } else {
-                        let cols = build_raw_descriptor_columns_parallel(
+                        let cols = match build_raw_descriptor_columns_parallel(
                             &rayon_pool,
                             generator_clone.clone(),
                             work_item.rows,
-                        );
+                        ) {
+                            Ok(cols) => cols,
+                            Err(error) => {
+                                first_error = Some(error);
+                                continue;
+                            }
+                        };
                         DescriptorColumns::Raw(cols)
                     };
 
@@ -928,7 +1003,10 @@ pub mod parquet_batch {
                     }
                 }
 
-                Ok(())
+                match first_error {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                }
             }));
         }
 
@@ -1052,6 +1130,7 @@ pub mod parquet_batch {
         };
 
         if !errors.is_empty() {
+            let _ = std::fs::remove_file(output_file);
             return Err(anyhow::anyhow!(
                 "Parallel descriptor generation failed: {}",
                 errors.join("; ")
@@ -1069,6 +1148,8 @@ pub mod parquet_batch {
             descriptor_count: total_descriptors,
             orbital_count,
             descriptor_size,
+            descriptor_version: version.tag(),
+            channels_per_subshell: layout.channels_per_subshell(),
         })
     }
 
@@ -1104,7 +1185,8 @@ pub mod parquet_batch {
                 .unwrap();
 
             let columns =
-                build_raw_descriptor_columns_parallel(&pool, generator.clone(), rows.clone());
+                build_raw_descriptor_columns_parallel(&pool, generator.clone(), rows.clone())
+                    .unwrap();
 
             let expected_rows: Vec<Vec<i32>> = rows
                 .iter()
@@ -1308,6 +1390,36 @@ fn fixed_width_trimmed_field(line: &str, start: usize, width: usize) -> &str {
     fixed_width_field(line, start, width).trim()
 }
 
+/// Parse a V2 line2 state field, keeping the seniority digit `kopp1` writes
+/// at field offsets 3-4 (`"s;"`) rather than discarding it as V1's
+/// `parse_csf_into` does.
+fn parse_v2_state_field(field: &str) -> Result<Option<SubshellState>> {
+    let trimmed = field.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let (seniority, j_value) = match trimmed.split_once(';') {
+        Some((seniority, j_value)) => {
+            ensure!(
+                field.len() == 9
+                    && field.as_bytes().get(3).is_some_and(u8::is_ascii_digit)
+                    && field.as_bytes().get(4) == Some(&b';'),
+                "seniority must occupy field offsets 3 and 4 as a single digit followed by ';'"
+            );
+            let seniority: u8 = seniority
+                .trim()
+                .parse()
+                .with_context(|| format!("invalid seniority {seniority:?}"))?;
+            ensure!(seniority <= 9, "seniority exceeds one GRASP output digit");
+            (Some(seniority), j_value)
+        }
+        None => (None, trimmed),
+    };
+    let two_j =
+        u16::try_from(j_to_double_j(j_value.trim())?).context("state 2J value is negative")?;
+    Ok(Some(SubshellState { two_j, seniority }))
+}
+
 pub(crate) fn coupling_signature_from_descriptor_into(
     descriptor: &[i32],
     signature: &mut Vec<i32>,
@@ -1341,12 +1453,14 @@ pub struct CSFDescriptorGenerator {
     orbital_index_map: HashMap<String, usize>,
     /// Number of orbitals (cached for performance)
     orbital_count: usize,
+    /// Row shape for this generator's descriptor version (plan D8 seam 1).
+    layout: DescriptorLayout,
     /// Count missing-subshell warnings so malformed input cannot flood stderr.
     missing_subshell_warning_count: AtomicUsize,
 }
 
 impl CSFDescriptorGenerator {
-    /// Create a new CSF descriptor generator
+    /// Create a new V1 CSF descriptor generator
     ///
     /// # Arguments
     /// * `peel_subshells` - List of subshell names (e.g., ["5s", "4d-", "4d"])
@@ -1354,6 +1468,11 @@ impl CSFDescriptorGenerator {
     /// # Returns
     /// A new generator instance
     pub fn new(peel_subshells: Vec<String>) -> Self {
+        Self::new_with_version(peel_subshells, DescriptorVersion::V1)
+    }
+
+    /// Create a new CSF descriptor generator for a specific descriptor version.
+    pub fn new_with_version(peel_subshells: Vec<String>, version: DescriptorVersion) -> Self {
         let orbital_count = peel_subshells.len();
         let orbital_index_map: HashMap<_, _> = peel_subshells
             .iter()
@@ -1365,6 +1484,7 @@ impl CSFDescriptorGenerator {
             peel_subshells,
             orbital_index_map,
             orbital_count,
+            layout: DescriptorLayout::new(version, orbital_count),
             missing_subshell_warning_count: AtomicUsize::new(0),
         }
     }
@@ -1377,6 +1497,29 @@ impl CSFDescriptorGenerator {
     /// Get the peel subshells list
     pub fn peel_subshells(&self) -> &[String] {
         &self.peel_subshells
+    }
+
+    /// Get this generator's descriptor row layout.
+    pub fn layout(&self) -> DescriptorLayout {
+        self.layout
+    }
+
+    /// Parse one CSF's three lines into `row`, dispatching on `self.layout().version()`.
+    ///
+    /// `row.len()` must equal `self.layout().row_len()`. This is the single
+    /// entry point through which both the V1 and V2 text parsers are called
+    /// (plan D8 seam 1), so export code never branches on version itself.
+    pub fn parse_row_into(
+        &self,
+        line1: &str,
+        line2: &str,
+        line3: &str,
+        row: &mut [i32],
+    ) -> Result<()> {
+        match self.layout.version() {
+            DescriptorVersion::V1 => self.parse_csf_into(line1, line2, line3, row),
+            DescriptorVersion::V2 => self.parse_csf_v2_into(line1, line2, line3, row),
+        }
     }
 
     /// Parse a single CSF into a descriptor array
@@ -1527,6 +1670,131 @@ impl CSFDescriptorGenerator {
         Ok(())
     }
 
+    /// Parse one CSF's three lines into a V2 row (design doc §3, plan D2/D3).
+    ///
+    /// Unlike [`Self::parse_csf_into`] (V1), this keeps the seniority digit
+    /// `kopp1` writes at line2 offset 3, never folds the total `2J` into the
+    /// last occupied subshell's field (it becomes the separate
+    /// `total_two_j` global column), and never back-fills line2's value into
+    /// an unprinted line3 coupling slot. Every one of V1's silent-recovery
+    /// paths — a too-short coupling slice, an unparsable J value, an orbital
+    /// missing from the peel table, a truncated or explicit-zero electron
+    /// count — is a hard error here, and out-of-Peel-order or duplicated
+    /// occupied subshells are rejected by [`validate_record`] rather than
+    /// silently overwritten.
+    pub fn parse_csf_v2_into(
+        &self,
+        line1: &str,
+        line2: &str,
+        line3: &str,
+        row: &mut [i32],
+    ) -> Result<()> {
+        ensure!(
+            self.layout.version() == DescriptorVersion::V2,
+            "parse_csf_v2_into requires a V2-configured generator"
+        );
+        ensure!(
+            row.len() == self.layout.row_len(),
+            "row buffer length {} does not match expected {}",
+            row.len(),
+            self.layout.row_len()
+        );
+        ensure!(
+            line1.is_ascii() && line2.is_ascii() && line3.is_ascii(),
+            "CSF lines must be ASCII fixed-width text"
+        );
+
+        let subshells_line = line1.trim_end();
+        let line_length = subshells_line.len();
+        ensure!(
+            line_length > 0 && line_length.is_multiple_of(9),
+            "occupation line length {line_length} is not a positive multiple of 9"
+        );
+        let field_count = line_length / 9;
+
+        let coupling_line_raw = line3.trim_end();
+        ensure!(
+            coupling_line_raw.len() > 5,
+            "coupling line {coupling_line_raw:?} is too short to hold a total J and parity"
+        );
+        let coupling_line = coupling_line_raw
+            .get(4..coupling_line_raw.len() - 5)
+            .with_context(|| {
+                format!(
+                    "coupling line {coupling_line_raw:?} is too short for {field_count} subshells"
+                )
+            })?;
+
+        let final_j_str =
+            &coupling_line_raw[coupling_line_raw.len() - 5..coupling_line_raw.len() - 1];
+        let final_two_j =
+            u16::try_from(j_to_double_j(final_j_str)?).context("total 2J is negative")?;
+
+        let parity_byte = coupling_line_raw.as_bytes()[coupling_line_raw.len() - 1];
+        let parity = match parity_byte {
+            b'+' => Parity::Even,
+            b'-' => Parity::Odd,
+            other => bail!(
+                "invalid parity byte {:?} in coupling line {coupling_line_raw:?}",
+                char::from(other)
+            ),
+        };
+
+        let mut occupied = Vec::with_capacity(field_count);
+        let mut couplings = Vec::new();
+        let trimmed_line2 = line2.trim_end();
+
+        for i in 0..field_count {
+            let start = i * 9;
+            let subshell_field = fixed_width_field(subshells_line, start, 9);
+            ensure!(
+                subshell_field.len() == 9,
+                "occupation field at position {i} is truncated"
+            );
+
+            let subshell = fixed_width_trimmed_field(subshell_field, 0, 5);
+            ensure!(!subshell.is_empty(), "empty subshell field at position {i}");
+            ensure!(
+                subshell_field.as_bytes()[5] == b'(' && subshell_field.as_bytes()[8] == b')',
+                "malformed occupation field {subshell_field:?} at position {i}"
+            );
+
+            let electron_field = fixed_width_trimmed_field(subshell_field, 6, 2);
+            let electrons: u8 = electron_field.parse().with_context(|| {
+                format!("invalid occupation {electron_field:?} at position {i}")
+            })?;
+
+            let &orbital_index = self.orbital_index_map.get(subshell).with_context(|| {
+                format!("{subshell:?} at position {i} is absent from peel subshells")
+            })?;
+
+            let middle_field = fixed_width_field(trimmed_line2, start, 9);
+            let state = parse_v2_state_field(middle_field)
+                .with_context(|| format!("invalid state field {middle_field:?} at position {i}"))?;
+
+            occupied.push(OccupiedSubshell {
+                subshell_index: u16::try_from(orbital_index)?,
+                occupation: electrons,
+                state,
+            });
+
+            let coupling_field = fixed_width_field(coupling_line, start, 9);
+            let trimmed_coupling = coupling_field.trim();
+            if !trimmed_coupling.is_empty() {
+                let boundary = u16::try_from(i + 1)?;
+                let two_j = u16::try_from(j_to_double_j(trimmed_coupling)?)
+                    .context("coupling 2J is negative")?;
+                couplings.push(IntermediateCoupling { boundary, two_j });
+            }
+        }
+
+        validate_record(&self.peel_subshells, &occupied, &couplings)?;
+        write_feature_row(self.layout, &occupied, &couplings, final_two_j, parity, row)
+    }
+
+    /// V1-only: coupling signatures are a V1 triplet-derived concept (design
+    /// doc §5.1 P0 explicitly keeps this interface unchanged rather than
+    /// making it version-generic).
     pub(crate) fn parse_coupling_signature_into(
         &self,
         line1: &str,
@@ -1535,6 +1803,10 @@ impl CSFDescriptorGenerator {
         descriptor: &mut [i32],
         signature: &mut Vec<i32>,
     ) -> Result<()> {
+        ensure!(
+            self.layout.version() == DescriptorVersion::V1,
+            "coupling signatures are only defined for V1 descriptors"
+        );
         self.parse_csf_into(line1, line2, line3, descriptor)?;
         coupling_signature_from_descriptor_into(descriptor, signature)
     }
@@ -1565,8 +1837,12 @@ use pyo3::prelude::*;
     peel_subshells,
     num_workers=None,
     normalize=false,
-    compression=None
+    compression=None,
+    *,
+    descriptor_version=1,
+    header_path=None
 ))]
+#[allow(clippy::too_many_arguments)] // PyO3 exposes one argument per Python parameter.
 fn py_generate_descriptors_from_parquet(
     py: Python,
     input_parquet: String,
@@ -1575,18 +1851,25 @@ fn py_generate_descriptors_from_parquet(
     num_workers: Option<usize>,
     normalize: bool,
     compression: Option<String>,
+    descriptor_version: u8,
+    header_path: Option<String>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     use pyo3::types::PyDict;
     use std::path::Path;
 
     let input_path = Path::new(&input_parquet).to_path_buf();
     let output_path = Path::new(&output_file).to_path_buf();
+    let header_path_buf = header_path
+        .map(|path| Path::new(&path).to_path_buf())
+        .or_else(|| parquet_batch::find_header_file(&input_path));
 
     if matches!(num_workers, Some(0)) {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "num_workers must be greater than 0",
         ));
     }
+    let version = DescriptorVersion::from_tag(descriptor_version)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     // Release the GIL during the long-running operation
     let stats = py
@@ -1597,6 +1880,8 @@ fn py_generate_descriptors_from_parquet(
                 peel_subshells,
                 num_workers,
                 normalize,
+                version,
+                header_path_buf.as_deref(),
                 compression.as_deref(),
             )
         })
@@ -1610,7 +1895,173 @@ fn py_generate_descriptors_from_parquet(
     dict.set_item("descriptor_count", stats.descriptor_count)?;
     dict.set_item("orbital_count", stats.orbital_count)?;
     dict.set_item("descriptor_size", stats.descriptor_size)?;
+    dict.set_item("descriptor_version", stats.descriptor_version)?;
+    dict.set_item("channels_per_subshell", stats.channels_per_subshell)?;
     Ok(dict.into())
+}
+
+/// Python-exposed function to restore CSFs from a V2 descriptor Parquet file
+/// and its source `{stem}_header.toml` (design doc §3.4, plan D5/D7).
+///
+/// The header path must be explicit: `find_header_file`'s candidate list
+/// includes `{stem}.toml`, which collides with the descriptor sidecar name
+/// `cli.py` writes, so auto-detection is not offered here.
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (descriptor_parquet, header_path, output, indices=None))]
+fn py_restore_csfs_from_descriptors(
+    py: Python,
+    descriptor_parquet: String,
+    header_path: String,
+    output: String,
+    indices: Option<Vec<u64>>,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    use crate::atomic_output::{
+        create_temporary_output, ensure_output_does_not_alias_input, publish_temporary_output,
+    };
+    use crate::descriptor_v2::restore_file;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use pyo3::types::PyDict;
+    use std::path::Path;
+
+    let descriptor_path = Path::new(&descriptor_parquet).to_path_buf();
+    let header_path_buf = Path::new(&header_path).to_path_buf();
+    let output_path = Path::new(&output).to_path_buf();
+
+    let stats = py
+        .detach(|| -> anyhow::Result<(usize, u64)> {
+            ensure_output_does_not_alias_input(&output_path, &descriptor_path, "descriptor")?;
+            ensure_output_does_not_alias_input(&output_path, &header_path_buf, "header")?;
+
+            let expected_hash = crate::descriptor_schema::hash_header_file(&header_path_buf)?;
+            let file = std::fs::File::open(&descriptor_path)
+                .with_context(|| format!("failed to open {}", descriptor_path.display()))?;
+            let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+                .with_context(|| "failed to create parquet reader")?;
+            let metadata = builder.metadata().file_metadata().clone();
+            let kv = metadata
+                .key_value_metadata()
+                .context("descriptor file has no key-value metadata; cannot verify version")?;
+            let get = |key: &str| {
+                kv.iter()
+                    .find(|entry| entry.key == key)
+                    .and_then(|entry| entry.value.clone())
+            };
+            let version_tag: u8 = get("descriptor_version")
+                .context("descriptor file is missing descriptor_version metadata")?
+                .parse()
+                .context("descriptor_version metadata is not a valid integer")?;
+            let version = DescriptorVersion::from_tag(version_tag)?;
+            ensure!(
+                version == DescriptorVersion::V2,
+                "py_restore_csfs_from_descriptors only supports V2 descriptor files"
+            );
+            let subshell_count: usize = get("subshell_count")
+                .context("descriptor file is missing subshell_count metadata")?
+                .parse()
+                .context("subshell_count metadata is not a valid integer")?;
+            if let Some(stored_hash) = get("source_header_sha256") {
+                ensure!(
+                    stored_hash == expected_hash,
+                    "header file does not match the hash recorded in the descriptor file"
+                );
+            }
+
+            let layout = DescriptorLayout::new(version, subshell_count);
+            let mut reader = builder
+                .build()
+                .with_context(|| "failed to build parquet reader")?;
+            let mut rows: Vec<Vec<i32>> = Vec::new();
+            loop {
+                match reader.next() {
+                    Some(Ok(batch)) => {
+                        use arrow::array::{Array, Int32Array};
+                        let columns: Vec<&Int32Array> = (0..batch.num_columns())
+                            .map(|i| {
+                                batch
+                                    .column(i)
+                                    .as_any()
+                                    .downcast_ref::<Int32Array>()
+                                    .context("descriptor column is not Int32")
+                            })
+                            .collect::<anyhow::Result<Vec<_>>>()?;
+                        for row_idx in 0..batch.num_rows() {
+                            rows.push(columns.iter().map(|column| column.value(row_idx)).collect());
+                        }
+                    }
+                    Some(Err(e)) => {
+                        return Err(anyhow::anyhow!("error reading parquet batch: {e}"));
+                    }
+                    None => break,
+                }
+            }
+
+            let header_toml = std::fs::read_to_string(&header_path_buf)
+                .with_context(|| format!("failed to read {}", header_path_buf.display()))?;
+            let (header_lines, block_lengths) = parse_restore_header_from_toml(&header_toml)?;
+
+            let (temp, file) = create_temporary_output(&output_path)?;
+            let restored = restore_file(
+                &rows,
+                layout,
+                header_lines,
+                Some(&block_lengths),
+                indices.as_deref(),
+            )?;
+            restored.write_to(std::io::BufWriter::new(file))?;
+            let record_count = restored.records.len();
+            let bytes_written = std::fs::metadata(temp.path())?.len();
+            publish_temporary_output(temp.path(), &output_path, false)?;
+            Ok((record_count, bytes_written))
+        })
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+    let dict = PyDict::new(py);
+    dict.set_item("success", true)?;
+    dict.set_item("output_file", output)?;
+    dict.set_item("record_count", stats.0)?;
+    dict.set_item("output_bytes", stats.1)?;
+    Ok(dict.into())
+}
+
+#[cfg(feature = "python")]
+fn parse_restore_header_from_toml(toml_content: &str) -> Result<([String; 5], Vec<usize>)> {
+    use toml::Value;
+
+    let toml_content = toml_content.replace("\r\n", "\n");
+    let toml_value: Value =
+        toml::from_str(toml_content.trim()).with_context(|| "failed to parse header TOML")?;
+    let header_lines = toml_value
+        .get("header_info")
+        .and_then(|v| v.get("header_lines"))
+        .and_then(|v| v.as_array())
+        .context("header_info.header_lines not found in TOML")?;
+    let lines: Vec<String> = header_lines
+        .iter()
+        .map(|line| {
+            line.as_str()
+                .map(str::to_owned)
+                .context("header_lines entry is not a string")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let header_lines = lines.try_into().map_err(|lines: Vec<String>| {
+        anyhow::anyhow!("expected 5 header lines, got {}", lines.len())
+    })?;
+    let block_values = toml_value
+        .get("block_info")
+        .and_then(|v| v.get("block_lengths"))
+        .and_then(|v| v.as_array())
+        .context("block_info.block_lengths not found in TOML")?;
+    let block_lengths = block_values
+        .iter()
+        .map(|value| {
+            let length = value
+                .as_integer()
+                .context("block_lengths entry is not an integer")?;
+            usize::try_from(length).context("block_lengths entry must be non-negative")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((header_lines, block_lengths))
 }
 
 /// Python-exposed function to read peel subshells from header file
@@ -1629,6 +2080,7 @@ pub fn register_descriptor_module(module: &Bound<'_, PyModule>) -> PyResult<()> 
         py_generate_descriptors_from_parquet,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(py_restore_csfs_from_descriptors, module)?)?;
     module.add_function(wrap_pyfunction!(py_read_peel_subshells, module)?)?;
 
     Ok(())
@@ -1818,5 +2270,277 @@ mod tests {
         assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(2), 2);
         assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(8), 8);
         assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(48), 8);
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    // V2 text-path parser tests
+    ////////////////////////////////////////////////////////////////////////////
+
+    fn v2_generator(subshells: Vec<String>) -> CSFDescriptorGenerator {
+        CSFDescriptorGenerator::new_with_version(subshells, DescriptorVersion::V2)
+    }
+
+    /// Generate one physically legal CSF record and return its three
+    /// canonical text lines, so V2 text-parser tests never rely on
+    /// hand-typed field literals that might not satisfy the real subshell
+    /// state tables (as `tests/fixtures/complete.csf` predates
+    /// `validate_record` and does not).
+    fn generate_one_record_text(
+        configuration: Vec<crate::csf_generation::SubshellOccupation>,
+        two_j: u16,
+    ) -> (Vec<String>, String, String, String) {
+        use crate::csf_generation::{GenerationRequest, generate_csfs};
+
+        let request = GenerationRequest {
+            core_subshells: Vec::new(),
+            configuration,
+            min_two_j: two_j,
+            max_two_j: two_j,
+        };
+        let generated = generate_csfs(&request).unwrap();
+        let record = &generated.records[0];
+        let mut buffer = Vec::new();
+        generated.write_record_to(record, &mut buffer).unwrap();
+        let text = String::from_utf8(buffer).unwrap();
+        let mut lines = text.lines();
+        (
+            generated.subshells.clone(),
+            lines.next().unwrap().to_owned(),
+            lines.next().unwrap().to_owned(),
+            lines.next().unwrap().to_owned(),
+        )
+    }
+
+    #[test]
+    fn parse_csf_v2_into_basic_six_orbitals() {
+        use crate::csf_generation::SubshellOccupation;
+
+        let (subshells, line1, line2, line3) = generate_one_record_text(
+            vec![
+                SubshellOccupation {
+                    subshell: "5s".parse().unwrap(),
+                    electrons: 2,
+                },
+                SubshellOccupation {
+                    subshell: "4d-".parse().unwrap(),
+                    electrons: 4,
+                },
+                SubshellOccupation {
+                    subshell: "4d".parse().unwrap(),
+                    electrons: 3,
+                },
+            ],
+            3,
+        );
+        let generator = v2_generator(subshells.clone());
+
+        let mut row = vec![0i32; generator.layout().row_len()];
+        generator
+            .parse_csf_v2_into(&line1, &line2, &line3, &mut row)
+            .unwrap();
+
+        // Row length is 4*3+2 = 14.
+        assert_eq!(row.len(), 14);
+        assert_eq!(subshells.len(), 3);
+
+        // 4d- (index 1, base 4): closed subshell (occupation == capacity),
+        // so the generator never prints its state — MISSING, not V1's
+        // line2 back-fill of the neighboring coupling.
+        assert_eq!(row[4], 4); // occupation
+        assert_eq!(row[5], MISSING); // no printed 2J
+        assert_eq!(row[6], MISSING); // no printed seniority
+
+        // 4d (index 2, base 8, last occupied position): total 2J is a
+        // separate global column, never folded into this subshell's slot.
+        assert_eq!(row[8], 3); // occupation
+        assert_eq!(row[10], MISSING); // no printed seniority for a single hole
+        assert_eq!(row[11], MISSING); // last position: 2K boundary never printed
+
+        let total_index = generator.layout().total_two_j_index().unwrap();
+        assert_eq!(row[total_index], 3);
+    }
+
+    #[test]
+    fn parse_csf_v2_into_reads_parity_byte() {
+        let subshells = vec!["5s".to_string()];
+        let generator = v2_generator(subshells);
+        let mut row = vec![0i32; generator.layout().row_len()];
+
+        generator
+            .parse_csf_v2_into("  5s ( 1)", "", "        3+", &mut row)
+            .unwrap();
+        assert_eq!(row[row.len() - 1], 1);
+
+        let error = generator
+            .parse_csf_v2_into("  5s ( 1)", "", "        3x", &mut row)
+            .unwrap_err();
+        assert!(error.to_string().contains("invalid parity byte"));
+    }
+
+    #[test]
+    fn parse_csf_v2_into_keeps_printed_seniority() {
+        // 4f(4) at 2J=4 (doubled: 8) is only reachable with seniority 2 or 4
+        // (the design doc §2.2 collision sample); seniority occupies the
+        // fixed field offsets 3-4 (`kopp1`'s "s;"), J right-aligned in the
+        // remaining 9-wide field.
+        let subshells = vec!["4f".to_string()];
+        let generator = v2_generator(subshells);
+        let mut row = vec![0i32; generator.layout().row_len()];
+
+        generator
+            .parse_csf_v2_into("  4f ( 4)", "   2;   4", "        4+", &mut row)
+            .unwrap();
+
+        assert_eq!(row[0], 4); // occupation
+        assert_eq!(row[1], 8); // 2J = 4 -> 8
+        assert_eq!(row[2], 2); // seniority kept, not discarded like V1
+    }
+
+    #[test]
+    fn parse_csf_v2_into_errors_where_v1_silently_recovers() {
+        let subshells = vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()];
+        let generator = v2_generator(subshells);
+        let mut row = vec![0i32; generator.layout().row_len()];
+
+        // (a) Coupling line too short to slice with the fixed 4/5 offsets.
+        assert!(
+            generator
+                .parse_csf_v2_into("  5s ( 2)  4d-( 4)  4d ( 6)", "", "  4-", &mut row)
+                .is_err()
+        );
+
+        // (b) Unparsable line2 J value must propagate, not become printed 0.
+        assert!(
+            generator
+                .parse_csf_v2_into(
+                    "  5s ( 2)  4d-( 4)  4d ( 6)",
+                    "         garbage         ",
+                    "                        4-  ",
+                    &mut row
+                )
+                .is_err()
+        );
+
+        // (c) Unparsable line3 coupling value must propagate.
+        assert!(
+            generator
+                .parse_csf_v2_into(
+                    "  5s ( 2)  4d-( 4)  4d ( 6)",
+                    "                   3/2      ",
+                    "                garbage4-  ",
+                    &mut row
+                )
+                .is_err()
+        );
+
+        // (d) Orbital missing from the peel map must error, not warn-and-skip.
+        let missing_generator = v2_generator(vec!["5s".to_string()]);
+        let mut missing_row = vec![0i32; missing_generator.layout().row_len()];
+        assert!(
+            missing_generator
+                .parse_csf_v2_into("  6p ( 2)", "", "        0+", &mut missing_row)
+                .is_err()
+        );
+
+        // (e) Truncated/unparsable electron count must error, not become 0.
+        assert!(
+            generator
+                .parse_csf_v2_into("  5s (2  ", "", "                        0+", &mut row)
+                .is_err()
+        );
+
+        // (f) Out-of-Peel-order occupied subshells must error via validate_record.
+        let reordered_generator = v2_generator(vec!["4d-".to_string(), "5s".to_string()]);
+        let mut reordered_row = vec![0i32; reordered_generator.layout().row_len()];
+        assert!(
+            reordered_generator
+                .parse_csf_v2_into(
+                    "  5s ( 2)  4d-( 4)",
+                    "",
+                    "           0+",
+                    &mut reordered_row
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parse_csf_v2_into_rejects_zero_electron_count() {
+        // V1 accepts an explicit "( 0)" occupation and zero-fills the triplet;
+        // V2 requires validate_record's occupation >= 1 instead.
+        let generator = v2_generator(vec!["5s".to_string()]);
+        let mut row = vec![0i32; generator.layout().row_len()];
+        let error = generator
+            .parse_csf_v2_into("  5s ( 0)", "", "        0+", &mut row)
+            .unwrap_err();
+        assert!(error.to_string().contains("outside 1"));
+    }
+
+    #[test]
+    fn v2_rejects_normalize() {
+        use crate::descriptor_schema::{DescriptorLayout, output_schema};
+        let layout = DescriptorLayout::new(DescriptorVersion::V2, 2);
+        assert!(output_schema(layout, true).is_err());
+    }
+
+    #[test]
+    fn text_and_complete_producers_agree_on_v2() {
+        use crate::complete_csf::CompleteCsfFile;
+        use crate::descriptor_v2::encode_v2;
+        use std::io::Cursor;
+
+        // The shared fixture (`tests/fixtures/complete.csf`) prints a state
+        // outside GRASP's real state tables (see descriptor_v2.rs test
+        // comments), so build a physically legal multi-record file with the
+        // generator instead, then compare the two V2 producers row for row.
+        use crate::csf_generation::{GenerationRequest, SubshellOccupation, generate_csfs};
+        let request = GenerationRequest {
+            core_subshells: Vec::new(),
+            configuration: vec![
+                SubshellOccupation {
+                    subshell: "4f-".parse().unwrap(),
+                    electrons: 3,
+                },
+                SubshellOccupation {
+                    subshell: "4f".parse().unwrap(),
+                    electrons: 4,
+                },
+            ],
+            min_two_j: 1,
+            max_two_j: 5,
+        };
+        let generated = generate_csfs(&request).unwrap();
+        let mut text = Vec::new();
+        generated.write_to(&mut text).unwrap();
+        let parsed = CompleteCsfFile::parse_reader(Cursor::new(text)).unwrap();
+
+        let generator = v2_generator(parsed.subshells.clone());
+        for record in &parsed.records {
+            let (line1, line2, line3) = format_record_for_test(&parsed, record);
+            let mut text_row = vec![0i32; generator.layout().row_len()];
+            generator
+                .parse_csf_v2_into(&line1, &line2, &line3, &mut text_row)
+                .unwrap();
+
+            let mut complete_row = vec![0i32; generator.layout().row_len()];
+            encode_v2(&parsed, record, &mut complete_row).unwrap();
+
+            assert_eq!(text_row, complete_row);
+        }
+    }
+
+    fn format_record_for_test(
+        file: &crate::complete_csf::CompleteCsfFile,
+        record: &crate::complete_csf::CsfRecord,
+    ) -> (String, String, String) {
+        let mut buffer = Vec::new();
+        file.write_record_to(record, &mut buffer).unwrap();
+        let text = String::from_utf8(buffer).unwrap();
+        let mut lines = text.lines();
+        (
+            lines.next().unwrap().to_owned(),
+            lines.next().unwrap().to_owned(),
+            lines.next().unwrap().to_owned(),
+        )
     }
 }

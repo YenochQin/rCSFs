@@ -6,6 +6,7 @@ from ._types import (
     ConversionStats,
     CsfGenerationStats,
     CsfHeaderData,
+    CsfRestoreStats,
     DescriptorGenerationStats,
     InteractionHamiltonian,
     InteractionMethod,
@@ -51,7 +52,16 @@ def py_generate_descriptors_from_parquet(
     num_workers: int | None = None,
     normalize: bool = False,
     compression: str | None = None,
+    *,
+    descriptor_version: int = 1,
+    header_path: str | None = None,
 ) -> DescriptorGenerationStats: ...
+def py_restore_csfs_from_descriptors(
+    descriptor_parquet: str,
+    header_path: str,
+    output: str,
+    indices: list[int] | None = None,
+) -> CsfRestoreStats: ...
 def py_read_peel_subshells(header_path: str) -> list[str]: ...
 def generate_csfs_from_transcript(
     transcript: str,

@@ -521,6 +521,7 @@ fn test_parallel_conversion_rejects_zero_workers() {
 fn test_descriptor_parallel_rejects_zero_workers() {
     use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
     use _rcsfs::csfs_descriptor::parquet_batch::generate_descriptors_from_parquet_parallel;
+    use _rcsfs::descriptor_schema::DescriptorVersion;
 
     let input_path = temp_dir().join("test_descriptor_zero_workers.csf");
     let parquet_path = temp_dir().join("test_descriptor_zero_workers.parquet");
@@ -536,6 +537,8 @@ fn test_descriptor_parallel_rejects_zero_workers() {
         vec!["5s".to_string()],
         Some(0),
         false,
+        DescriptorVersion::V1,
+        None,
         None,
     );
 
@@ -551,12 +554,58 @@ fn test_descriptor_parallel_rejects_zero_workers() {
 }
 
 #[test]
+fn test_v2_descriptor_generation_rejects_invalid_rows_without_output() {
+    use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
+    use _rcsfs::csfs_descriptor::parquet_batch::{
+        generate_descriptors_from_parquet, generate_descriptors_from_parquet_parallel,
+    };
+    use _rcsfs::descriptor_schema::DescriptorVersion;
+
+    let input_path = temp_dir().join("test_v2_invalid_row.csf");
+    let parquet_path = temp_dir().join("test_v2_invalid_row.parquet");
+    let sequential_path = temp_dir().join("test_v2_invalid_row_seq.parquet");
+    let parallel_path = temp_dir().join("test_v2_invalid_row_par.parquet");
+    create_minimal_csf(&input_path);
+    convert_csfs_to_parquet(&input_path, &parquet_path, 256, 1000)
+        .expect("Fixture conversion should succeed");
+    let wrong_peels = vec!["9s".to_string(); 6];
+
+    let sequential = generate_descriptors_from_parquet(
+        &parquet_path,
+        &sequential_path,
+        Some(wrong_peels.clone()),
+        None,
+        false,
+        DescriptorVersion::V2,
+        None,
+    );
+    let parallel = generate_descriptors_from_parquet_parallel(
+        &parquet_path,
+        &parallel_path,
+        wrong_peels,
+        Some(2),
+        false,
+        DescriptorVersion::V2,
+        None,
+        None,
+    );
+
+    assert!(sequential.is_err());
+    assert!(parallel.is_err());
+    assert!(!sequential_path.exists());
+    assert!(!parallel_path.exists());
+    cleanup_test_file(&input_path);
+    cleanup_test_file(&parquet_path);
+}
+
+#[test]
 fn test_descriptor_parallel_matches_sequential_outputs() {
     use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
     use _rcsfs::csfs_descriptor::parquet_batch::{
         generate_descriptors_from_parquet, generate_descriptors_from_parquet_parallel,
         read_peel_subshells_from_header,
     };
+    use _rcsfs::descriptor_schema::DescriptorVersion;
 
     let input_path = temp_dir().join("test_descriptor_consistency.csf");
     let parquet_path = temp_dir().join("test_descriptor_consistency.parquet");
@@ -583,6 +632,7 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
         Some(peel_subshells.clone()),
         None,
         false,
+        DescriptorVersion::V1,
         None,
     )
     .expect("Sequential raw descriptor generation should succeed");
@@ -592,6 +642,8 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
         peel_subshells.clone(),
         Some(2),
         false,
+        DescriptorVersion::V1,
+        None,
         None,
     )
     .expect("Parallel raw descriptor generation should succeed");
@@ -602,6 +654,7 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
         Some(peel_subshells.clone()),
         None,
         true,
+        DescriptorVersion::V1,
         None,
     )
     .expect("Sequential normalized descriptor generation should succeed");
@@ -611,6 +664,8 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
         peel_subshells,
         Some(2),
         true,
+        DescriptorVersion::V1,
+        None,
         None,
     )
     .expect("Parallel normalized descriptor generation should succeed");
@@ -808,6 +863,7 @@ fn test_large_file_integrity() {
 fn test_encoding_policy_normalized_plain_raw_dictionary() {
     use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
     use _rcsfs::csfs_descriptor::parquet_batch::generate_descriptors_from_parquet_parallel;
+    use _rcsfs::descriptor_schema::DescriptorVersion;
     use parquet::basic::Encoding;
     use parquet::file::reader::{FileReader, SerializedFileReader};
 
@@ -827,7 +883,9 @@ fn test_encoding_policy_normalized_plain_raw_dictionary() {
         vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()],
         Some(1),
         false, // normalize=false
-        None,  // compression default
+        DescriptorVersion::V1,
+        None,
+        None, // compression default
     )
     .expect("Raw descriptor generation should succeed");
 
@@ -853,6 +911,8 @@ fn test_encoding_policy_normalized_plain_raw_dictionary() {
         vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()],
         Some(1),
         true, // normalize=true
+        DescriptorVersion::V1,
+        None,
         None, // compression default
     )
     .expect("Normalized descriptor generation should succeed");

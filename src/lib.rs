@@ -14,6 +14,8 @@ pub mod csfs_conversion;
 pub mod csfs_descriptor;
 pub mod csfs_memory;
 pub mod descriptor_normalization;
+pub mod descriptor_schema;
+pub mod descriptor_v2;
 pub mod interaction;
 mod interaction_py;
 

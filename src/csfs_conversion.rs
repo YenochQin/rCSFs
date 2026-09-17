@@ -789,6 +789,7 @@ pub fn get_parquet_metadata(
         .map(|column| format!("{:?}", column.compression()))
         .unwrap_or_else(|| "Unknown".to_string());
     let created_by = metadata.file_metadata().created_by().unwrap_or("Unknown");
+    let key_value_metadata = metadata.file_metadata().key_value_metadata();
 
     // 创建 Python 字典并返回
     Python::attach(|py| {
@@ -799,6 +800,14 @@ pub fn get_parquet_metadata(
         dict.set_item("num_columns", num_columns)?;
         dict.set_item("compression", compression)?;
         dict.set_item("created_by", created_by)?;
+
+        let kv_dict = PyDict::new(py);
+        if let Some(entries) = key_value_metadata {
+            for entry in entries {
+                kv_dict.set_item(&entry.key, entry.value.as_deref())?;
+            }
+        }
+        dict.set_item("key_value_metadata", kv_dict)?;
 
         Ok(dict.into())
     })

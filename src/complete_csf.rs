@@ -294,6 +294,27 @@ impl CompleteCsfFile {
         Ok(())
     }
 
+    /// Build an empty file ready to receive records via
+    /// [`Self::append_generated_record`].
+    ///
+    /// Used by V2 descriptor restoration (`descriptor_v2::restore_file`): the
+    /// arena fields are private and `append_generated_record` is crate-only,
+    /// so rebuilding a [`CompleteCsfFile`] from decoded rows must happen
+    /// inside this crate.
+    pub(crate) fn new_for_restore(
+        header_lines: [String; HEADER_LINE_COUNT],
+        subshells: Vec<String>,
+    ) -> Self {
+        Self {
+            header_lines,
+            subshells,
+            records: Vec::new(),
+            occupied_subshells: Vec::new(),
+            intermediate_couplings: Vec::new(),
+            blocks: Vec::new(),
+        }
+    }
+
     /// Append directly from the generator's integer buffers, without text I/O.
     pub(crate) fn append_generated_record(
         &mut self,
@@ -301,6 +322,18 @@ impl CompleteCsfFile {
         couplings: &[IntermediateCoupling],
         total_two_j: u16,
         parity: Parity,
+    ) -> Result<()> {
+        self.append_restored_record(occupied, couplings, total_two_j, parity, false)
+    }
+
+    /// Append a decoded record, optionally preserving an explicit source block boundary.
+    pub(crate) fn append_restored_record(
+        &mut self,
+        occupied: &[OccupiedSubshell],
+        couplings: &[IntermediateCoupling],
+        total_two_j: u16,
+        parity: Parity,
+        force_new_block: bool,
     ) -> Result<()> {
         let record = CsfRecord {
             occupied_start: u64::try_from(self.occupied_subshells.len())?,
@@ -313,10 +346,11 @@ impl CompleteCsfFile {
         self.records.try_reserve(1)?;
         self.occupied_subshells.try_reserve(occupied.len())?;
         self.intermediate_couplings.try_reserve(couplings.len())?;
-        if self
-            .blocks
-            .last()
-            .is_none_or(|block| block.total_two_j != total_two_j || block.parity != parity)
+        if force_new_block
+            || self
+                .blocks
+                .last()
+                .is_none_or(|block| block.total_two_j != total_two_j || block.parity != parity)
         {
             self.blocks.try_reserve(1)?;
             self.blocks.push(SymmetryBlock {

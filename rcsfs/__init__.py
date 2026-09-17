@@ -61,6 +61,7 @@ from ._types import (
     CsfGenerationStats,
     CsfHeaderData,
     CsfHeaderInfo,
+    CsfRestoreStats,
     DescriptorGenerationStats,
     InteractionBlockStats,
     InteractionHamiltonian,
@@ -92,6 +93,9 @@ from ._rcsfs import (
 )
 from ._rcsfs import (
     py_read_peel_subshells as _read_peel_subshells,
+)
+from ._rcsfs import (
+    py_restore_csfs_from_descriptors as _restore_csfs_from_descriptors,
 )
 from ._rcsfs import read_csfs_arrow as _read_csfs_arrow
 from ._rcsfs import select_interacting_csfs as _select_interacting_csfs
@@ -233,6 +237,9 @@ def generate_descriptors_from_parquet(
     num_workers: int | None = None,
     normalize: bool = False,
     compression: str | None = None,
+    *,
+    descriptor_version: int = 1,
+    header_path: str | Path | None = None,
 ) -> DescriptorGenerationStats:
     """
     Generate CSF descriptors from a parquet file using parallel processing.
@@ -259,7 +266,20 @@ def generate_descriptors_from_parquet(
             denominators (default: False). When True, each descriptor triplet
             [n_i, 2Q_i, 2J_cum,i] is normalized by [g_i, n_i*(g_i-n_i),
             min(prefix_i, 2J_target+suffix_i)] respectively, where 2J_target is
-            read from the final coupling value of each individual CSF.
+            read from the final coupling value of each individual CSF. V2
+            descriptors do not support normalization (raises if both
+            ``descriptor_version=2`` and ``normalize=True``).
+        descriptor_version: ``1`` (legacy dense triplet, default) or ``2``
+            (four-channel per-subshell: occupation, printed 2J, seniority,
+            printed coupling 2K; plus global ``total_two_j``/``parity``
+            columns). V2 uses named columns (``sub{i}_n``, ``sub{i}_2j``,
+            ``sub{i}_v``, ``sub{i}_2k``, ``total_two_j``, ``parity``) rather
+            than positional ``col_{i}`` columns.
+        header_path: Path to the source ``{stem}_header.toml``. When given,
+            its SHA-256 is recorded in the output Parquet's key-value
+            metadata as ``source_header_sha256``, binding the descriptor
+            file to the exact header it was generated from. Auto-detected
+            from ``input_parquet`` when omitted.
         compression: Parquet compression codec (default: ``zstd-3``). Accepted values:
             ``"none"``/``"uncompressed"``, ``"snappy"``, ``"zstd"``, ``"zstd-N"``
             (N in 1..=22). Pass ``"none"`` to maximize writer throughput when disk
@@ -273,7 +293,10 @@ def generate_descriptors_from_parquet(
         - csf_count: Number of CSFs processed
         - descriptor_count: Number of descriptors generated
         - orbital_count: Number of orbitals
-        - descriptor_size: Size of each descriptor (3 * orbital_count)
+        - descriptor_size: Size of each descriptor (3 * orbital_count for V1,
+          4 * orbital_count + 2 for V2)
+        - descriptor_version: The version tag written (1 or 2)
+        - channels_per_subshell: 3 for V1, 4 for V2
 
     Examples:
         >>> # Basic usage with peel_subshells from header
@@ -342,7 +365,45 @@ def generate_descriptors_from_parquet(
         peel_subshells=peel_subshells,
         num_workers=num_workers,
         normalize=normalize,
+        descriptor_version=descriptor_version,
+        header_path=str(header_path) if header_path is not None else None,
         compression=compression,
+    )
+
+
+def restore_csfs_from_descriptors(
+    descriptor_parquet: str | Path,
+    header_path: str | Path,
+    output: str | Path,
+    indices: list[int] | None = None,
+) -> CsfRestoreStats:
+    """
+    Restore a CSF text file from a V2 descriptor Parquet file.
+
+    The descriptor Parquet must carry ``descriptor_version=2`` key-value
+    metadata (written by :func:`generate_descriptors_from_parquet` with
+    ``descriptor_version=2``). ``header_path`` must be the exact
+    ``{stem}_header.toml`` the descriptors were generated from; if the
+    descriptor file recorded a ``source_header_sha256``, it is verified
+    against this file's bytes before anything is written.
+
+    Args:
+        descriptor_parquet: Path to a V2 descriptor Parquet file.
+        header_path: Path to the source ``{stem}_header.toml``.
+        output: Destination CSF text file. Must not alias either input.
+        indices: Optional 0-based row indices (in the descriptor file's own
+            row order) to restore, in the given order. Restores every row
+            when omitted.
+
+    Returns:
+        Dictionary with ``success``, ``output_file``, ``record_count`` and
+        ``output_bytes``.
+    """
+    return _restore_csfs_from_descriptors(
+        descriptor_parquet=str(descriptor_parquet),
+        header_path=str(header_path),
+        output=str(output),
+        indices=indices,
     )
 
 
@@ -553,6 +614,7 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     "get_parquet_info",
     # Batch descriptor generation
     "generate_descriptors_from_parquet",
+    "restore_csfs_from_descriptors",
     "read_peel_subshells",
     # Zero-first partition
     "partition_csfs",
@@ -568,6 +630,7 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     "ConversionStats",
     "ParquetInfo",
     "DescriptorGenerationStats",
+    "CsfRestoreStats",
     "PartitionStats",
     "CsfGenerationStats",
     "InteractionHamiltonian",

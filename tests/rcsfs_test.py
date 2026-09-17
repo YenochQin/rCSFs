@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from rcsfs import (
     generate_descriptors_from_parquet,
     get_parquet_info,
     read_peel_subshells,
+    restore_csfs_from_descriptors,
     select_interacting_csfs,
 )
 
@@ -16,7 +18,28 @@ SAMPLE_CSF = FIXTURES_DIR / "sample.csf"
 E1_CC1AS1_TRANSCRIPT = FIXTURES_DIR / "e1_cc1as1.rcsfgenerate"
 
 
-def test_end_to_end_public_python_api(tmp_path: Path) -> None:
+def test_descriptor_compression_keeps_legacy_positional_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import rcsfs
+
+    calls: dict[str, object] = {}
+
+    def fake_generate(**kwargs: object) -> dict[str, object]:
+        calls.update(kwargs)
+        return {"success": True}
+
+    monkeypatch.setattr(rcsfs, "_generate_descriptors_from_parquet", fake_generate)
+    result = rcsfs.generate_descriptors_from_parquet(
+        "input.parquet", "output.parquet", ["1s"], None, False, "snappy"
+    )
+    assert result["success"] is True
+    assert calls["compression"] == "snappy"
+    assert calls["descriptor_version"] == 1
+
+
+@pytest.mark.parametrize("descriptor_version", [1, 2])
+def test_end_to_end_public_python_api(tmp_path: Path, descriptor_version: int) -> None:
     csf_parquet = tmp_path / "sample.parquet"
 
     stats = convert_csfs(SAMPLE_CSF, csf_parquet, chunk_size=90, num_workers=2)
@@ -41,16 +64,28 @@ def test_end_to_end_public_python_api(tmp_path: Path) -> None:
         peel_subshells=peel_subshells,
         num_workers=2,
         normalize=False,
+        descriptor_version=descriptor_version,
+        header_path=stats["header_file"],
     )
 
+    expected_channels = 3 if descriptor_version == 1 else 4
+    expected_size = expected_channels * len(peel_subshells) + (
+        0 if descriptor_version == 1 else 2
+    )
     assert descriptor_stats["success"] is True
     assert descriptor_stats["csf_count"] == stats["csf_count"]
     assert descriptor_stats["descriptor_count"] == stats["csf_count"]
-    assert descriptor_stats["descriptor_size"] == 3 * len(peel_subshells)
+    assert descriptor_stats["descriptor_size"] == expected_size
+    assert descriptor_stats["descriptor_version"] == descriptor_version
+    assert descriptor_stats["channels_per_subshell"] == expected_channels
 
     descriptor_info = get_parquet_info(descriptor_parquet)
     assert descriptor_info["num_rows"] == stats["csf_count"]
     assert "ZSTD" in descriptor_info["compression"]
+    kv = descriptor_info["key_value_metadata"]
+    assert kv["descriptor_version"] == str(descriptor_version)
+    assert kv["channels_per_subshell"] == str(expected_channels)
+    assert "source_header_sha256" in kv
 
 
 def test_select_interacting_csfs_public_api_is_explicitly_non_exact(
@@ -278,3 +313,78 @@ def test_generated_descriptors_match_text_pipeline(
             tomllib.loads(direct_path.with_suffix(".toml").read_text())["subshells"]
             == shells
         )
+
+
+def test_restore_csfs_cli_roundtrip(tmp_path: Path) -> None:
+    """V2 descriptors round-trip through `rcsfs restore-csfs` byte for byte.
+
+    Built from a generator transcript rather than `fixtures/complete.csf`:
+    that fixture predates `validate_record` and prints a seniority digit for
+    a many-electron manifold GRASP's own state table never labels, so it is
+    not a legal V2 record.
+    """
+    from rcsfs import cli
+
+    transcript = "* ! Orbital order\n0\n2p(2,*)\n\n3s,3p,3d\n0,4\n2\nn\n"
+    source = tmp_path / "generated.c"
+    generation_stats = generate_csfs_from_transcript(transcript, source, threads=2)
+    assert generation_stats["success"] is True
+    source_lines = source.read_text().splitlines()
+    source_lines.insert(8, " *")
+    source.write_text("\n".join(source_lines) + "\n")
+
+    csf_parquet = tmp_path / "complete.parquet"
+    stats = convert_csfs(source, csf_parquet, num_workers=2)
+    assert stats["success"] is True
+    header_path = Path(stats["header_file"])
+    peel_subshells = read_peel_subshells(header_path)
+    _ = shutil.copyfile(header_path, csf_parquet.with_name("complete_header.toml"))
+
+    descriptor_parquet = tmp_path / "complete_desc.parquet"
+    descriptor_stats = generate_descriptors_from_parquet(
+        csf_parquet,
+        descriptor_parquet,
+        peel_subshells=peel_subshells,
+        descriptor_version=2,
+    )
+    assert descriptor_stats["success"] is True
+
+    parquet_info = get_parquet_info(descriptor_parquet)
+    kv = parquet_info["key_value_metadata"]
+    assert kv["descriptor_version"] == "2"
+    assert kv["channels_per_subshell"] == "4"
+    assert set(kv) >= {
+        "descriptor_version",
+        "channels_per_subshell",
+        "subshell_count",
+        "peel_subshells",
+        "missing_sentinel",
+        "normalized",
+        "feature_columns",
+        "global_columns",
+        "source_header_sha256",
+        "source_header_filename",
+    }
+
+    restored = tmp_path / "restored.c"
+    exit_code = cli.main(
+        [
+            "restore-csfs",
+            "--descriptors",
+            str(descriptor_parquet),
+            "--header",
+            str(header_path),
+            "--output",
+            str(restored),
+        ]
+    )
+    assert exit_code == 0
+    assert restored.read_bytes() == source.read_bytes()
+
+    # Direct API call, restoring a subset by index, still matches source order.
+    subset_restored = tmp_path / "restored_subset.c"
+    subset_stats = restore_csfs_from_descriptors(
+        descriptor_parquet, header_path, subset_restored, indices=[1]
+    )
+    assert subset_stats["success"] is True
+    assert subset_stats["record_count"] == 1

@@ -62,6 +62,7 @@ class ParquetInfo(TypedDict):
     num_columns: int
     compression: str
     created_by: str
+    key_value_metadata: dict[str, str | None]
 
 
 class DescriptorGenerationStats(TypedDict):
@@ -74,6 +75,17 @@ class DescriptorGenerationStats(TypedDict):
     descriptor_count: int
     orbital_count: int
     descriptor_size: int
+    descriptor_version: int
+    channels_per_subshell: int
+
+
+class CsfRestoreStats(TypedDict):
+    """Statistics returned from restoring CSFs out of a V2 descriptor file."""
+
+    success: bool
+    output_file: str
+    record_count: int
+    output_bytes: int
 
 
 class PartitionStats(TypedDict):

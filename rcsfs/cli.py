@@ -19,6 +19,7 @@ from . import (
     generate_descriptors_from_parquet,
     partition_csfs,
     read_peel_subshells,
+    restore_csfs_from_descriptors,
     select_interacting_csfs,
 )
 from ._types import InteractionHamiltonian, InteractionMethod
@@ -36,7 +37,19 @@ class GenDescriptorsArgs(Protocol):
     header: Path
     num_workers: int | None
     normalize: bool
+    descriptor_version: int
     compression: str | None
+    json: bool
+
+
+class RestoreCsfsArgs(Protocol):
+    """Parsed arguments for the ``restore-csfs`` subcommand."""
+
+    command: Literal["restore-csfs"]
+    descriptors: Path
+    header: Path
+    output: Path
+    indices: list[int] | None
     json: bool
 
 
@@ -83,7 +96,13 @@ class InteractingArgs(Protocol):
     json: bool
 
 
-type CliArgs = GenDescriptorsArgs | ZeroFirstArgs | CsfsGenerateArgs | InteractingArgs
+type CliArgs = (
+    GenDescriptorsArgs
+    | ZeroFirstArgs
+    | CsfsGenerateArgs
+    | InteractingArgs
+    | RestoreCsfsArgs
+)
 
 
 #: CLI spellings accepted for each domain Hamiltonian value.
@@ -156,7 +175,17 @@ def build_parser() -> argparse.ArgumentParser:
     _ = gen_descriptors.add_argument(
         "--normalize",
         action="store_true",
-        help="Normalize descriptor values.",
+        help="Normalize descriptor values. Not supported with --descriptor-version 2.",
+    )
+    _ = gen_descriptors.add_argument(
+        "--descriptor-version",
+        type=int,
+        choices=[1, 2],
+        default=1,
+        help=(
+            "Descriptor format version: 1 (legacy dense triplet, default) or "
+            "2 (four-channel per-subshell plus total_two_j/parity globals)."
+        ),
     )
     _ = gen_descriptors.add_argument(
         "--compression",
@@ -348,6 +377,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print selection statistics as JSON.",
     )
 
+    restore_csfs = subparsers.add_parser(
+        "restore-csfs",
+        help="Restore a CSF text file from a V2 descriptor Parquet file.",
+        description=(
+            "Rebuild a CSF text file from a V2 descriptor Parquet file and its "
+            "source {stem}_header.toml. The header path must be explicit and "
+            "exact; if the descriptor file recorded source_header_sha256, it is "
+            "verified against this file before anything is written."
+        ),
+    )
+    _ = restore_csfs.add_argument(
+        "--descriptors", required=True, type=Path, help="V2 descriptor Parquet file."
+    )
+    _ = restore_csfs.add_argument(
+        "--header", required=True, type=Path, help="Source {stem}_header.toml file."
+    )
+    _ = restore_csfs.add_argument(
+        "--output", required=True, type=Path, help="Destination CSF text file."
+    )
+    _ = restore_csfs.add_argument(
+        "--indices",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Optional 0-based row indices to restore, in the given order.",
+    )
+    _ = restore_csfs.add_argument(
+        "--json",
+        action="store_true",
+        help="Print restoration statistics as JSON.",
+    )
+
     return parser
 
 
@@ -370,6 +431,56 @@ def _print_gen_descriptors_summary(
     descriptor_count = stats.get("descriptor_count")
     if descriptor_count is not None:
         print(f"descriptor_count: {descriptor_count}")
+
+
+def _write_gen_descriptors_sidecar(
+    output_parquet: Path,
+    stats: Mapping[str, object],
+    peel_subshells: list[str],
+    normalize: bool,
+) -> None:
+    """Write the `{descriptor_stem}.toml` mirror of the Parquet KV metadata.
+
+    This is the plan D5 layer-3 sidecar for tools that read TOML without
+    opening the Parquet file. `gen-descriptors` previously wrote none of
+    this; `csfsgenerate --generate-descriptors` already writes an equivalent
+    file via `_generate_outputs`, and reuses the same `format_version` key
+    for the descriptor version tag rather than introducing a second key.
+    """
+    sidecar = output_parquet.with_suffix(".toml")
+    descriptor_version = stats.get("descriptor_version", 1)
+    _ = sidecar.write_text(
+        f'format_version = {descriptor_version}\nencoding = "parquet"\n'
+        f"normalized = {str(normalize).lower()}\n"
+        f"record_count = {stats.get('descriptor_count', 0)}\n"
+        f"subshells = {json.dumps(peel_subshells)}\n",
+        encoding="utf-8",
+    )
+
+
+def _validate_gen_descriptors_sidecar_path(
+    input_parquet: Path, output_parquet: Path, header_path: Path
+) -> None:
+    """Reject a sidecar path that aliases an input or the Parquet output."""
+    sidecar = output_parquet.with_suffix(".toml")
+    for label, path in (
+        ("input Parquet", input_parquet),
+        ("output Parquet", output_parquet),
+        ("header", header_path),
+    ):
+        aliases = sidecar.resolve() == path.resolve()
+        if not aliases and sidecar.exists() and path.exists():
+            aliases = sidecar.samefile(path)
+        if aliases:
+            raise ValueError(f"descriptor sidecar aliases {label}: {sidecar}")
+
+
+def _print_restore_csfs_summary(stats: Mapping[str, object]) -> None:
+    output_file = stats.get("output_file", "")
+    print(f"Restored CSFs: {output_file}")
+    record_count = stats.get("record_count")
+    if record_count is not None:
+        print(f"record_count: {record_count}")
 
 
 def _print_zero_first_summary(stats: Mapping[str, object]) -> None:
@@ -674,11 +785,14 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
             }
         staged_header = parquet_dir / f"{csf.stem}_header.toml"
         shells = read_peel_subshells(staged_header)
+        descriptor_version = 1  # csfsgenerate does not yet expose V2 (plan step 13)
         result = generate_descriptors_from_parquet(
             parquet,
             descriptors,
             peel_subshells=shells,
             normalize=args.normalize,
+            descriptor_version=descriptor_version,
+            header_path=staged_header,
             compression="zstd",
         )
         if result.get("success") is not True:
@@ -821,20 +935,72 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
     return 0 if stats.get("success") is True else 1
 
 
+def _run_restore_csfs(args: RestoreCsfsArgs) -> int:
+    try:
+        stats = restore_csfs_from_descriptors(
+            args.descriptors,
+            args.header,
+            args.output,
+            indices=args.indices,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        if args.json:
+            json.dump(
+                {"success": False, "error": str(exc)},
+                sys.stdout,
+                indent=2,
+                sort_keys=True,
+            )
+            _ = sys.stdout.write("\n")
+        else:
+            print(f"CSF restoration failed: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        json.dump(stats, sys.stdout, indent=2, sort_keys=True)
+        _ = sys.stdout.write("\n")
+    else:
+        _print_restore_csfs_summary(stats)
+
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = _parse_args(parser, argv)
 
     if args.command == "gen-descriptors":
-        peel_subshells = read_peel_subshells(args.header)
-        stats = generate_descriptors_from_parquet(
-            args.input_parquet,
-            args.output_parquet,
-            peel_subshells=peel_subshells,
-            num_workers=args.num_workers,
-            normalize=args.normalize,
-            compression=args.compression,
-        )
+        try:
+            _validate_gen_descriptors_sidecar_path(
+                args.input_parquet, args.output_parquet, args.header
+            )
+            peel_subshells = read_peel_subshells(args.header)
+            stats = generate_descriptors_from_parquet(
+                args.input_parquet,
+                args.output_parquet,
+                peel_subshells=peel_subshells,
+                num_workers=args.num_workers,
+                normalize=args.normalize,
+                descriptor_version=args.descriptor_version,
+                header_path=args.header,
+                compression=args.compression,
+            )
+        except (OSError, ValueError) as exc:
+            if args.json:
+                json.dump(
+                    {"success": False, "error": str(exc)},
+                    sys.stdout,
+                    indent=2,
+                    sort_keys=True,
+                )
+                _ = sys.stdout.write("\n")
+            else:
+                print(f"Descriptor generation failed: {exc}", file=sys.stderr)
+            return 1
+        if stats.get("success") is True:
+            _write_gen_descriptors_sidecar(
+                args.output_parquet, stats, peel_subshells, normalize=args.normalize
+            )
         if args.json:
             json.dump(stats, sys.stdout, indent=2, sort_keys=True)
             _ = sys.stdout.write("\n")
@@ -851,6 +1017,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "interacting":
         return _run_interacting(args)
+
+    if args.command == "restore-csfs":
+        return _run_restore_csfs(args)
 
     return _run_zero_first(args)
 

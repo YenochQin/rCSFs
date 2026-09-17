@@ -6,7 +6,7 @@ use anyhow::{Result, bail, ensure};
 
 use crate::complete_csf::SubshellState;
 
-pub(super) fn subshell_states(two_j: u16, electrons: u8) -> Result<Vec<SubshellState>> {
+pub(crate) fn subshell_states(two_j: u16, electrons: u8) -> Result<Vec<SubshellState>> {
     let capacity = two_j + 1;
     ensure!(
         u16::from(electrons) <= capacity,

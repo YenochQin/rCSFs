@@ -5,11 +5,13 @@ import pytest
 
 
 def test_gen_descriptors_reads_header_and_prints_summary(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     from rcsfs import cli
 
+    monkeypatch.chdir(tmp_path)
     calls: dict[str, object] = {}
 
     def fake_read_peel_subshells(header_path: Path) -> list[str]:
@@ -22,6 +24,8 @@ def test_gen_descriptors_reads_header_and_prints_summary(
         peel_subshells: list[str],
         num_workers: int | None = None,
         normalize: bool = False,
+        descriptor_version: int = 1,
+        header_path: Path | None = None,
         compression: str | None = None,
     ) -> dict[str, object]:
         calls["input_parquet"] = input_parquet
@@ -29,12 +33,16 @@ def test_gen_descriptors_reads_header_and_prints_summary(
         calls["peel_subshells"] = peel_subshells
         calls["num_workers"] = num_workers
         calls["normalize"] = normalize
+        calls["descriptor_version"] = descriptor_version
+        calls["header_path"] = header_path
         calls["compression"] = compression
         return {
             "success": True,
             "input_file": str(input_parquet),
             "output_file": str(output_parquet),
             "descriptor_count": 12,
+            "descriptor_version": descriptor_version,
+            "channels_per_subshell": 3,
         }
 
     monkeypatch.setattr(cli, "read_peel_subshells", fake_read_peel_subshells)
@@ -65,6 +73,7 @@ def test_gen_descriptors_reads_header_and_prints_summary(
         "peel_subshells": ["5s", "4d-", "4d"],
         "num_workers": 2,
         "normalize": True,
+        "descriptor_version": 1,
         "compression": None,
     }
 
@@ -73,6 +82,18 @@ def test_gen_descriptors_reads_header_and_prints_summary(
         "Generated normalized descriptors: descriptors.parquet\ndescriptor_count: 12\n"
     )
     assert captured.err == ""
+
+    sidecar = tmp_path / "descriptors.toml"
+    assert sidecar.exists()
+    import tomllib
+
+    assert tomllib.loads(sidecar.read_text()) == {
+        "format_version": 1,
+        "encoding": "parquet",
+        "normalized": True,
+        "record_count": 12,
+        "subshells": ["5s", "4d-", "4d"],
+    }
 
 
 def test_gen_descriptors_returns_failure_exit_code_and_prints_error(
@@ -110,6 +131,7 @@ def test_gen_descriptors_returns_failure_exit_code_and_prints_error(
 
 
 def test_gen_descriptors_can_print_json(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -117,6 +139,7 @@ def test_gen_descriptors_can_print_json(
 
     from rcsfs import cli
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "read_peel_subshells", lambda header_path: ["5s"])
     monkeypatch.setattr(
         cli,
@@ -126,6 +149,8 @@ def test_gen_descriptors_can_print_json(
             "input_file": "csf.parquet",
             "output_file": "descriptors.parquet",
             "descriptor_count": 12,
+            "descriptor_version": 1,
+            "channels_per_subshell": 3,
         },
     )
 
@@ -146,7 +171,168 @@ def test_gen_descriptors_can_print_json(
         "input_file": "csf.parquet",
         "output_file": "descriptors.parquet",
         "descriptor_count": 12,
+        "descriptor_version": 1,
+        "channels_per_subshell": 3,
     }
+
+
+def test_gen_descriptors_passes_descriptor_version_and_header(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rcsfs import cli
+
+    monkeypatch.chdir(tmp_path)
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "read_peel_subshells", lambda header_path: ["5s"])
+    monkeypatch.setattr(
+        cli,
+        "generate_descriptors_from_parquet",
+        lambda *a, **kw: (
+            calls.update(kw),
+            {
+                "success": True,
+                "descriptor_count": 1,
+                "descriptor_version": kw["descriptor_version"],
+                "channels_per_subshell": 4,
+            },
+        )[1],
+    )
+
+    exit_code = cli.main(
+        [
+            "gen-descriptors",
+            "csf.parquet",
+            "descriptors.parquet",
+            "--header",
+            "csf_header.toml",
+            "--descriptor-version",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls["descriptor_version"] == 2
+    assert calls["header_path"] == Path("csf_header.toml")
+
+    sidecar = tmp_path / "descriptors.toml"
+    import tomllib
+
+    assert tomllib.loads(sidecar.read_text())["format_version"] == 2
+
+
+def test_gen_descriptors_rejects_sidecar_that_aliases_header(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from rcsfs import cli
+
+    header = tmp_path / "calculation_header.toml"
+    original = "source header metadata\n"
+    header.write_text(original)
+    called = False
+
+    def unexpected_generate(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal called
+        called = True
+        return {"success": True}
+
+    monkeypatch.setattr(cli, "generate_descriptors_from_parquet", unexpected_generate)
+    exit_code = cli.main(
+        [
+            "gen-descriptors",
+            str(tmp_path / "calculation.parquet"),
+            str(tmp_path / "calculation_header.parquet"),
+            "--header",
+            str(header),
+            "--descriptor-version",
+            "2",
+        ]
+    )
+
+    assert exit_code == 1
+    assert called is False
+    assert header.read_text() == original
+    assert "descriptor sidecar aliases header" in capsys.readouterr().err
+
+
+def test_restore_csfs_invokes_restore_and_prints_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from rcsfs import cli
+
+    calls: dict[str, object] = {}
+
+    def fake_restore(descriptor_parquet, header_path, output, indices=None):
+        calls["descriptor_parquet"] = descriptor_parquet
+        calls["header_path"] = header_path
+        calls["output"] = output
+        calls["indices"] = indices
+        return {
+            "success": True,
+            "output_file": str(output),
+            "record_count": 5,
+            "output_bytes": 123,
+        }
+
+    monkeypatch.setattr(cli, "restore_csfs_from_descriptors", fake_restore)
+
+    exit_code = cli.main(
+        [
+            "restore-csfs",
+            "--descriptors",
+            "desc.parquet",
+            "--header",
+            "desc_header.toml",
+            "--output",
+            "restored.c",
+            "--indices",
+            "0",
+            "2",
+        ]
+    )
+
+    assert exit_code == 0
+    assert calls == {
+        "descriptor_parquet": Path("desc.parquet"),
+        "header_path": Path("desc_header.toml"),
+        "output": Path("restored.c"),
+        "indices": [0, 2],
+    }
+    captured = capsys.readouterr()
+    assert captured.out == "Restored CSFs: restored.c\nrecord_count: 5\n"
+    assert captured.err == ""
+
+
+def test_restore_csfs_reports_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from rcsfs import cli
+
+    def fake_restore(*args: object, **kwargs: object) -> None:
+        raise ValueError("header hash mismatch")
+
+    monkeypatch.setattr(cli, "restore_csfs_from_descriptors", fake_restore)
+
+    exit_code = cli.main(
+        [
+            "restore-csfs",
+            "--descriptors",
+            "desc.parquet",
+            "--header",
+            "desc_header.toml",
+            "--output",
+            "restored.c",
+        ]
+    )
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert captured.err == "CSF restoration failed: header hash mismatch\n"
 
 
 def test_interacting_defaults_to_rcsf_out_and_eight_threads(

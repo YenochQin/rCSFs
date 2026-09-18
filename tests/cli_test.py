@@ -62,6 +62,8 @@ def test_gen_descriptors_reads_header_and_prints_summary(
             "--num-workers",
             "2",
             "--normalize",
+            "--descriptor-version",
+            "1",
         ]
     )
 

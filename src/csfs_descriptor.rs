@@ -1839,7 +1839,7 @@ use pyo3::prelude::*;
     normalize=false,
     compression=None,
     *,
-    descriptor_version=1,
+    descriptor_version=2,
     header_path=None
 ))]
 #[allow(clippy::too_many_arguments)] // PyO3 exposes one argument per Python parameter.

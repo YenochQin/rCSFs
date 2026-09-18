@@ -105,12 +105,12 @@ print(info)
 peel_subshells = read_peel_subshells(stats["header_file"])
 print(peel_subshells[:6])
 
-# 4. Generate descriptor parquet
+# 4. Generate descriptor parquet (descriptor_version=2 by default)
 desc_stats = generate_descriptors_from_parquet(
     csf_parquet,
     desc_parquet,
     peel_subshells=peel_subshells,
-    normalize=True,
+    header_path=stats["header_file"],
 )
 print(desc_stats)
 
@@ -193,35 +193,89 @@ Typical output:
 
 ### 3. Generate descriptor Parquet
 
-`generate_descriptors_from_parquet(...)` reads the converted CSF Parquet file and writes a descriptor table with columns:
+`generate_descriptors_from_parquet(...)` reads the converted CSF Parquet file and writes a
+descriptor table. There are two descriptor formats, selected with `descriptor_version`:
+
+#### V2 (default)
+
+Four integer channels per peel subshell, in named columns:
 
 ```text
-col_0, col_1, ..., col_N
+sub{i}_n, sub{i}_2j, sub{i}_v, sub{i}_2k   (occupation, printed 2J, seniority, printed coupling 2K)
 ```
 
-Descriptor layout is flattened by orbital:
+plus two global columns:
+
+```text
+total_two_j, parity   (parity is +1/-1)
+```
+
+A value GRASP never printed for that record is `-1` (`MISSING`), distinct from a printed `0`.
+V2 always writes `Int32` columns and does **not** support `normalize=True`.
+
+When `header_path` is given (or auto-detected next to `input_parquet`), its SHA-256 is recorded
+in the output Parquet's key-value metadata as `source_header_sha256`, binding the descriptor
+file to the exact header it was generated from. `get_parquet_info(...)` returns this and the
+rest of the format contract (`descriptor_version`, `channels_per_subshell`, `peel_subshells`,
+`feature_columns`, `global_columns`, `missing_sentinel`, `normalized`) under
+`key_value_metadata`.
+
+#### V1 (legacy)
+
+Positional columns `col_0, col_1, ..., col_N`, flattened by orbital as a dense triplet:
 
 ```text
 [n_i, 2Q_i, 2J_cum,i] for each peel subshell
 ```
 
-Notes:
+Pass `descriptor_version=1` explicitly to get this format. Raw V1 descriptors are `Int32`;
+`normalize=True` (V1-only) writes `Float32` columns instead.
 
-- Raw descriptors are written as `Int32` columns.
-- Normalized descriptors are written as `Float32` columns.
-- Output Parquet uses ZSTD compression.
+Output Parquet uses ZSTD compression in both formats.
 
 Example:
 
 ```python
 from rcsfs import generate_descriptors_from_parquet
 
+# V2 (default)
 stats = generate_descriptors_from_parquet(
     "output.parquet",
     "descriptors.parquet",
     peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
     num_workers=8,
-    normalize=False,
+    header_path="output_header.toml",
+)
+
+# V1, with normalization
+stats_v1 = generate_descriptors_from_parquet(
+    "output.parquet",
+    "descriptors_v1.parquet",
+    peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
+    num_workers=8,
+    normalize=True,
+    descriptor_version=1,
+)
+```
+
+### 3a. Restore CSFs from a V2 descriptor file
+
+`restore_csfs_from_descriptors(...)` rebuilds a CSF text file from a V2 descriptor Parquet file
+and its source `{stem}_header.toml`. If the descriptor file recorded a `source_header_sha256`,
+the header is verified against it before anything is written — a mismatch means the header was
+regenerated or edited since the descriptors were produced.
+
+```python
+from rcsfs import restore_csfs_from_descriptors
+
+stats = restore_csfs_from_descriptors(
+    "descriptors.parquet",
+    "output_header.toml",
+    "restored.c",
+)
+# Restore only a subset, in a given order:
+stats = restore_csfs_from_descriptors(
+    "descriptors.parquet", "output_header.toml", "subset.c", indices=[0, 5, 12],
 )
 ```
 
@@ -240,6 +294,13 @@ Returned metadata includes:
 - `num_rows`
 - `num_columns`
 - `compression`
+- `created_by`
+- `key_value_metadata` — a `dict[str, str | None]` of the Parquet file's key-value metadata.
+  For a V2 descriptor file this carries the full format contract: `descriptor_version`,
+  `channels_per_subshell`, `subshell_count`, `peel_subshells`, `missing_sentinel`,
+  `normalized`, `feature_columns`, `global_columns`, `source_header_sha256`,
+  `source_header_filename`. Empty for files that carry no key-value metadata (e.g. plain
+  CSF Parquet or V1 descriptor files).
 
 ### 5. Parse and reproduce a CSF with the complete integer representation
 
@@ -338,7 +399,7 @@ below for generating a full CSF list from Python.
 ## Command Line Interface
 
 Installing `rcsfs` also installs an `rcsfs` console script (`uv run rcsfs ...`)
-with four subcommands.
+with five subcommands.
 
 ### `rcsfs csfsgenerate` — interactively generate a new CSF list
 
@@ -436,14 +497,41 @@ normalize = false
 Run it with `uv run rcsfs csfsgenerate --config generation.toml`. By default
 only the CSF text is written. With `generate_descriptors = true`, the command
 also writes the CSF Parquet and header TOML, followed by descriptor Parquet and
-its TOML sidecar. Descriptor CSV output is not supported.
+its TOML sidecar. Descriptor CSV output is not supported. `csfsgenerate`
+currently always writes **V1** descriptors regardless of the library-wide V2
+default described below; use `rcsfs gen-descriptors` for V2 output from an
+already-generated CSF Parquet file.
 
 ### `rcsfs gen-descriptors` — descriptor Parquet from a CSF Parquet file
 
 ```bash
+# V2 (default)
+uv run rcsfs gen-descriptors csf.parquet descriptors.parquet --header csf_header.toml
+
+# V1, with normalization
 uv run rcsfs gen-descriptors csf.parquet descriptors.parquet \
-  --header csf_header.toml --normalize
+  --header csf_header.toml --descriptor-version 1 --normalize
 ```
+
+`--descriptor-version {1,2}` selects the format (default: `2`); `--normalize` is V1-only and
+errors if combined with `--descriptor-version 2`. This command also writes a
+`{output_stem}.toml` sidecar mirroring the descriptor version and subshell list, for tools
+that read TOML without opening the Parquet file.
+
+### `rcsfs restore-csfs` — rebuild a CSF text file from V2 descriptors
+
+```bash
+uv run rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
+  --output restored.c
+
+# Restore only a subset, in a given order
+uv run rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
+  --output subset.c --indices 0 5 12
+```
+
+`--header` must be the exact `{stem}_header.toml` the descriptors were generated from. If the
+descriptor file recorded `source_header_sha256`, it is verified against this file before
+anything is written.
 
 ### `rcsfs zero-first` — reorder a CSF list into zero-order + first-order space
 
@@ -503,10 +591,11 @@ rather than treated as an identity selection.
 | `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | Convert CSF text to Parquet |
 | `get_parquet_info(input_path)` | Inspect Parquet metadata |
 | `read_peel_subshells(header_path)` | Read peel subshells from header TOML |
-| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False)` | Generate descriptor Parquet from converted CSFs |
+| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False, compression=None, *, descriptor_version=2, header_path=None)` | Generate descriptor Parquet from converted CSFs; `descriptor_version=2` (default) writes named columns, `1` writes the legacy `col_{i}` layout and is required for `normalize=True` |
+| `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | Rebuild a CSF text file from a V2 descriptor Parquet file and its source header TOML |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | Reorder a CSF list into zero-order + first-order space per symmetry block |
 | `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | Write a conservative, non-exact upper bound of interacting candidates; returned stats always include `exact=False` |
-| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` |
+| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` (always writes V1 descriptors) |
 
 ## Input Format
 

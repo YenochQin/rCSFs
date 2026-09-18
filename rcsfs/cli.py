@@ -181,10 +181,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--descriptor-version",
         type=int,
         choices=[1, 2],
-        default=1,
+        default=2,
         help=(
-            "Descriptor format version: 1 (legacy dense triplet, default) or "
-            "2 (four-channel per-subshell plus total_two_j/parity globals)."
+            "Descriptor format version: 2 (default; four-channel per-subshell "
+            "plus total_two_j/parity globals) or 1 (legacy dense triplet)."
         ),
     )
     _ = gen_descriptors.add_argument(

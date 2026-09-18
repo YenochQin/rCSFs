@@ -238,7 +238,7 @@ def generate_descriptors_from_parquet(
     normalize: bool = False,
     compression: str | None = None,
     *,
-    descriptor_version: int = 1,
+    descriptor_version: int = 2,
     header_path: str | Path | None = None,
 ) -> DescriptorGenerationStats:
     """
@@ -266,15 +266,16 @@ def generate_descriptors_from_parquet(
             denominators (default: False). When True, each descriptor triplet
             [n_i, 2Q_i, 2J_cum,i] is normalized by [g_i, n_i*(g_i-n_i),
             min(prefix_i, 2J_target+suffix_i)] respectively, where 2J_target is
-            read from the final coupling value of each individual CSF. V2
-            descriptors do not support normalization (raises if both
-            ``descriptor_version=2`` and ``normalize=True``).
-        descriptor_version: ``1`` (legacy dense triplet, default) or ``2``
-            (four-channel per-subshell: occupation, printed 2J, seniority,
-            printed coupling 2K; plus global ``total_two_j``/``parity``
-            columns). V2 uses named columns (``sub{i}_n``, ``sub{i}_2j``,
-            ``sub{i}_v``, ``sub{i}_2k``, ``total_two_j``, ``parity``) rather
-            than positional ``col_{i}`` columns.
+            read from the final coupling value of each individual CSF.
+            Normalization is V1-only: it raises if the effective
+            ``descriptor_version`` is ``2`` (the default), so pass
+            ``descriptor_version=1`` explicitly to normalize.
+        descriptor_version: ``2`` (default; four-channel per-subshell:
+            occupation, printed 2J, seniority, printed coupling 2K; plus
+            global ``total_two_j``/``parity`` columns) or ``1`` (legacy
+            dense triplet). V2 uses named columns (``sub{i}_n``,
+            ``sub{i}_2j``, ``sub{i}_v``, ``sub{i}_2k``, ``total_two_j``,
+            ``parity``) rather than positional ``col_{i}`` columns.
         header_path: Path to the source ``{stem}_header.toml``. When given,
             its SHA-256 is recorded in the output Parquet's key-value
             metadata as ``source_header_sha256``, binding the descriptor
@@ -316,12 +317,13 @@ def generate_descriptors_from_parquet(
         >>> descriptor_cols = [col for col in df.columns if col.startswith("col_")]
         >>> descriptors = df[descriptor_cols].to_numpy()  # Shape: (n_csfs, descriptor_size)
 
-        >>> # With normalization
+        >>> # With normalization (V1-only; explicit descriptor_version=1 required)
         >>> stats = generate_descriptors_from_parquet(
         ...     "csfs_data.parquet",
         ...     "descriptors_normalized.parquet",
         ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s'],
         ...     normalize=True,
+        ...     descriptor_version=1,
         ... )
 
         >>> # With custom worker count for large files

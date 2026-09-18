@@ -35,7 +35,7 @@ def test_descriptor_compression_keeps_legacy_positional_slot(
     )
     assert result["success"] is True
     assert calls["compression"] == "snappy"
-    assert calls["descriptor_version"] == 1
+    assert calls["descriptor_version"] == 2
 
 
 @pytest.mark.parametrize("descriptor_version", [1, 2])
@@ -233,6 +233,7 @@ def test_normalize_path_tolerates_normalization_errors(tmp_path: Path) -> None:
         peel_subshells=bad_subshells,
         num_workers=2,
         normalize=True,
+        descriptor_version=1,
     )
 
     assert normalized_stats["success"] is True
@@ -281,6 +282,10 @@ def test_generated_descriptors_match_text_pipeline(
             work / "features.parquet",
             shells,
             normalize=normalize,
+            # csfsgenerate --generate-descriptors still hardcodes V1
+            # (plan step 13 is deferred); match it here so the two
+            # pipelines are directly comparable.
+            descriptor_version=1,
         )
         assert derived["success"], derived
         lines = iter(["*", *transcript.splitlines()[1:]])

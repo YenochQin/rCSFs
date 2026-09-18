@@ -94,12 +94,12 @@ print(info)
 peel_subshells = read_peel_subshells(stats["header_file"])
 print(peel_subshells[:6])
 
-# 4. 生成描述符 parquet
+# 4. 生成描述符 parquet（默认 descriptor_version=2）
 desc_stats = generate_descriptors_from_parquet(
     csf_parquet,
     desc_parquet,
     peel_subshells=peel_subshells,
-    normalize=True,
+    header_path=stats["header_file"],
 )
 print(desc_stats)
 
@@ -182,35 +182,88 @@ peel_subshells = read_peel_subshells("output_header.toml")
 
 ### 3. 生成描述符 Parquet
 
-`generate_descriptors_from_parquet(...)` 会读取转换后的 CSF Parquet，并输出描述符表，列名格式为：
+`generate_descriptors_from_parquet(...)` 会读取转换后的 CSF Parquet，并输出描述符表。
+通过 `descriptor_version` 可选择两种格式：
+
+#### V2（默认）
+
+每个 peel subshell 对应四个整数列（具名列）：
 
 ```text
-col_0, col_1, ..., col_N
+sub{i}_n, sub{i}_2j, sub{i}_v, sub{i}_2k   （占据数、打印的 2J、seniority、打印的耦合 2K）
 ```
 
-描述符按轨道展开，结构为：
+外加两个全局列：
+
+```text
+total_two_j, parity   （parity 取值 +1/-1）
+```
+
+GRASP 未打印的字段值为 `-1`（`MISSING`），与显式打印的 `0` 区分。V2 始终写为 `Int32` 列，
+**不支持** `normalize=True`。
+
+当提供 `header_path`（或从 `input_parquet` 同目录自动检测）时，其 SHA-256 会记录在输出
+Parquet 的 key-value metadata 的 `source_header_sha256` 字段中，将描述符文件与生成它的确切
+header 文件绑定。`get_parquet_info(...)` 会在 `key_value_metadata` 中返回该哈希以及完整的
+格式约定（`descriptor_version`、`channels_per_subshell`、`peel_subshells`、
+`feature_columns`、`global_columns`、`missing_sentinel`、`normalized`）。
+
+#### V1（旧版）
+
+列名为位置式 `col_0, col_1, ..., col_N`，按轨道展开为稠密三元组：
 
 ```text
 [n_i, 2Q_i, 2J_cum,i]
 ```
 
-补充说明：
+显式传入 `descriptor_version=1` 即可使用该格式。原始 V1 描述符写为 `Int32` 列；
+`normalize=True`（仅 V1 支持）会写为 `Float32` 列。
 
-- 原始描述符写为 `Int32` 列。
-- 归一化描述符写为 `Float32` 列。
-- 输出 Parquet 使用 ZSTD 压缩。
+两种格式的输出 Parquet 均使用 ZSTD 压缩。
 
 示例：
 
 ```python
 from rcsfs import generate_descriptors_from_parquet
 
+# V2（默认）
 stats = generate_descriptors_from_parquet(
     "output.parquet",
     "descriptors.parquet",
     peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
     num_workers=8,
-    normalize=False,
+    header_path="output_header.toml",
+)
+
+# V1，附加归一化
+stats_v1 = generate_descriptors_from_parquet(
+    "output.parquet",
+    "descriptors_v1.parquet",
+    peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
+    num_workers=8,
+    normalize=True,
+    descriptor_version=1,
+)
+```
+
+### 3a. 从 V2 描述符还原 CSF
+
+`restore_csfs_from_descriptors(...)` 会根据 V2 描述符 Parquet 文件及其来源
+`{stem}_header.toml` 重建 CSF 文本文件。如果描述符文件记录了 `source_header_sha256`，
+在写出任何内容之前会先校验该 header 是否与之匹配——不匹配意味着 header 在生成描述符之后
+被重新生成或修改过。
+
+```python
+from rcsfs import restore_csfs_from_descriptors
+
+stats = restore_csfs_from_descriptors(
+    "descriptors.parquet",
+    "output_header.toml",
+    "restored.c",
+)
+# 只还原指定索引的子集，按给定顺序：
+stats = restore_csfs_from_descriptors(
+    "descriptors.parquet", "output_header.toml", "subset.c", indices=[0, 5, 12],
 )
 ```
 
@@ -229,6 +282,12 @@ info = get_parquet_info("output.parquet")
 - `num_rows`
 - `num_columns`
 - `compression`
+- `created_by`
+- `key_value_metadata` —— `dict[str, str | None]`，Parquet 文件的 key-value metadata。
+  对 V2 描述符文件而言，包含完整的格式约定：`descriptor_version`、`channels_per_subshell`、
+  `subshell_count`、`peel_subshells`、`missing_sentinel`、`normalized`、`feature_columns`、
+  `global_columns`、`source_header_sha256`、`source_header_filename`。对不带 key-value
+  metadata 的文件（如普通 CSF Parquet 或 V1 描述符文件）该字典为空。
 
 ### 5. 使用完整整数表示解析和还原 CSF
 
@@ -295,11 +354,11 @@ uv run cargo run --release --example generate_csfs -- \
 
 ## 命令行工具
 
-安装 `rcsfs` 会同时安装一个 `rcsfs` 命令行脚本（`uv run rcsfs ...`），提供四个子命令。
+安装 `rcsfs` 会同时安装一个 `rcsfs` 命令行脚本（`uv run rcsfs ...`），提供五个子命令。
 
 ### `rcsfs csfsgenerate` —— 生成新的 CSF 列表
 
-除了交互式问答外，也可以使用 TOML 配置进行可复现的批处理。默认只生成 CSF 文本；将 `generate_descriptors` 设为 `true` 后，还会生成 CSF Parquet、header TOML、描述符 Parquet 和描述符 TOML sidecar。CSV 描述符输出不再支持。
+除了交互式问答外，也可以使用 TOML 配置进行可复现的批处理。默认只生成 CSF 文本；将 `generate_descriptors` 设为 `true` 后，还会生成 CSF Parquet、header TOML、描述符 Parquet 和描述符 TOML sidecar。CSV 描述符输出不再支持。**`csfsgenerate` 目前始终写出 V1 描述符**，与库级别默认的 V2 无关（暂缓实现；参见设计文档的迁移计划）；需要 V2 输出时请改用已生成好的 CSF Parquet 配合 `gen-descriptors`。
 
 ```toml
 [generate]
@@ -325,9 +384,31 @@ normalize = false
 ### `rcsfs gen-descriptors` —— 从 CSF Parquet 生成描述符 Parquet
 
 ```bash
+# V2（默认）
+uv run rcsfs gen-descriptors csf.parquet descriptors.parquet --header csf_header.toml
+
+# V1，附加归一化
 uv run rcsfs gen-descriptors csf.parquet descriptors.parquet \
-  --header csf_header.toml --normalize
+  --header csf_header.toml --descriptor-version 1 --normalize
 ```
+
+`--descriptor-version {1,2}` 选择格式（默认 `2`）；`--normalize` 仅 V1 支持，与
+`--descriptor-version 2` 同时使用会报错。该命令还会写出 `{output_stem}.toml` sidecar，
+镜像描述符版本与轨道列表，供不打开 Parquet 文件的工具读取。
+
+### `rcsfs restore-csfs` —— 从 V2 描述符还原 CSF 文本文件
+
+```bash
+uv run rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
+  --output restored.c
+
+# 只还原指定索引的子集，按给定顺序
+uv run rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
+  --output subset.c --indices 0 5 12
+```
+
+`--header` 必须是生成该描述符文件时使用的确切 `{stem}_header.toml`。如果描述符文件记录了
+`source_header_sha256`，写出任何内容之前会先与该文件校验一致性。
 
 ### `rcsfs zero-first` —— 将 CSF 列表重排为零级 + 一级空间
 
@@ -363,10 +444,11 @@ uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
 | `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | 将 CSF 文本转换为 Parquet |
 | `get_parquet_info(input_path)` | 读取 Parquet 元数据 |
 | `read_peel_subshells(header_path)` | 从头文件 TOML 中提取 peel subshells |
-| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False)` | 从转换后的 CSF 数据生成描述符 Parquet |
+| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False, compression=None, *, descriptor_version=2, header_path=None)` | 从转换后的 CSF 数据生成描述符 Parquet；`descriptor_version=2`（默认）写具名列，`1` 写旧版 `col_{i}` 列且是 `normalize=True` 的前提 |
+| `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | 根据 V2 描述符 Parquet 文件及其来源 header TOML 重建 CSF 文本文件 |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | 按对称性分块将 CSF 列表重排为零级 + 一级空间 |
 | `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | 写出保守且非精确的相互作用候选上界；统计固定包含 `exact=False` |
-| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | 从内存中的 `rcsfgenerate.log` 格式 transcript 生成 CSF；`rcsfs csfsgenerate` 的底层实现 |
+| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | 从内存中的 `rcsfgenerate.log` 格式 transcript 生成 CSF；`rcsfs csfsgenerate` 的底层实现（始终写出 V1 描述符） |
 
 ## 输入数据格式
 

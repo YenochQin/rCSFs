@@ -8,6 +8,8 @@
 mod occupations;
 mod pipeline;
 mod states;
+#[allow(dead_code)] // Phase 4 owns the public transaction/CLI wiring.
+pub(crate) mod streaming;
 
 pub use occupations::{
     EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, OccupationMode, Orbital,
@@ -133,6 +135,120 @@ pub struct GenerationRequest {
     pub max_two_j: u16,
 }
 
+/// One generated CSF backed by the generator's reusable integer buffers.
+///
+/// The slices remain valid only for the duration of [`GeneratedRecordSink::push`].
+/// Sinks that retain records must copy or encode them before returning. Keeping this
+/// contract explicit prevents the recursive generator from depending on any output
+/// representation such as [`CompleteCsfFile`] or an Arrow writer.
+#[derive(Clone, Copy)]
+pub(crate) struct GeneratedRecordRef<'a> {
+    pub(crate) occupied: &'a [OccupiedSubshell],
+    pub(crate) couplings: &'a [IntermediateCoupling],
+    pub(crate) total_two_j: u16,
+    pub(crate) parity: Parity,
+}
+
+/// Receives generated CSFs in their compact integer representation.
+///
+/// This is the seam between angular-momentum recursion and storage. A sink may
+/// append to an in-memory file, encode a disk segment, or collect test records;
+/// it must preserve a record before [`Self::push`] returns if it needs it later.
+pub(crate) trait GeneratedRecordSink {
+    fn push(&mut self, record: GeneratedRecordRef<'_>) -> Result<()>;
+}
+
+/// The compatibility adapter used by the existing in-memory API.
+pub(crate) struct CompleteCsfSink<'a> {
+    output: &'a mut CompleteCsfFile,
+}
+
+impl<'a> CompleteCsfSink<'a> {
+    pub(crate) fn new(output: &'a mut CompleteCsfFile) -> Self {
+        Self { output }
+    }
+}
+
+impl GeneratedRecordSink for CompleteCsfSink<'_> {
+    fn push(&mut self, record: GeneratedRecordRef<'_>) -> Result<()> {
+        self.output.append_generated_record(
+            record.occupied,
+            record.couplings,
+            record.total_two_j,
+            record.parity,
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BufferedGeneratedRecord {
+    occupied: Vec<OccupiedSubshell>,
+    couplings: Vec<IntermediateCoupling>,
+    total_two_j: u16,
+    parity: Parity,
+}
+
+impl BufferedGeneratedRecord {
+    fn copy_from(record: GeneratedRecordRef<'_>) -> Result<Self> {
+        let mut occupied = Vec::new();
+        occupied.try_reserve(record.occupied.len())?;
+        occupied.extend_from_slice(record.occupied);
+        let mut couplings = Vec::new();
+        couplings.try_reserve(record.couplings.len())?;
+        couplings.extend_from_slice(record.couplings);
+        Ok(Self {
+            occupied,
+            couplings,
+            total_two_j: record.total_two_j,
+            parity: record.parity,
+        })
+    }
+
+    fn as_ref(&self) -> GeneratedRecordRef<'_> {
+        GeneratedRecordRef {
+            occupied: &self.occupied,
+            couplings: &self.couplings,
+            total_two_j: self.total_two_j,
+            parity: self.parity,
+        }
+    }
+}
+
+#[derive(Default)]
+struct BufferedRecordSink {
+    records: Vec<BufferedGeneratedRecord>,
+}
+
+impl GeneratedRecordSink for BufferedRecordSink {
+    fn push(&mut self, record: GeneratedRecordRef<'_>) -> Result<()> {
+        self.records.try_reserve(1)?;
+        self.records
+            .push(BufferedGeneratedRecord::copy_from(record)?);
+        Ok(())
+    }
+}
+
+struct PreparedGeneration {
+    header_lines: [String; 5],
+    subshells: Vec<String>,
+    choices: Vec<Vec<SubshellState>>,
+    occupied: Vec<OccupiedSubshell>,
+    parity: Parity,
+}
+
+impl PreparedGeneration {
+    fn empty_file(&self) -> CompleteCsfFile {
+        CompleteCsfFile {
+            header_lines: self.header_lines.clone(),
+            subshells: self.subshells.clone(),
+            records: Vec::new(),
+            occupied_subshells: Vec::new(),
+            intermediate_couplings: Vec::new(),
+            blocks: Vec::new(),
+        }
+    }
+}
+
 /// Enumerate new CSFs without invoking Fortran or constructing text records.
 ///
 /// An impossible target or empty occupation configuration yields an empty
@@ -143,6 +259,49 @@ pub fn generate_csfs(request: &GenerationRequest) -> Result<CompleteCsfFile> {
 }
 
 fn generate_csfs_impl(request: &GenerationRequest, branch_count: usize) -> Result<CompleteCsfFile> {
+    let prepared = prepare_generation(request)?;
+    let mut output = prepared.empty_file();
+    if prepared.occupied.is_empty() {
+        return Ok(output);
+    }
+    {
+        let mut sink = CompleteCsfSink::new(&mut output);
+        generate_prepared_records(
+            &prepared,
+            request.min_two_j,
+            request.max_two_j,
+            branch_count,
+            &mut sink,
+        )?;
+    }
+    Ok(output)
+}
+
+/// Generate one occupation configuration directly into a storage sink.
+///
+/// This preserves [`generate_csfs`]'s state-table and block traversal while
+/// avoiding construction of a [`CompleteCsfFile`]. It is crate-visible for
+/// range writers; public callers retain the compatibility API above.
+#[allow(dead_code)] // Used by the staged range writer before Phase 4 exposes it.
+pub(crate) fn generate_records_into(
+    request: &GenerationRequest,
+    branch_count: usize,
+    sink: &mut impl GeneratedRecordSink,
+) -> Result<()> {
+    let prepared = prepare_generation(request)?;
+    if prepared.occupied.is_empty() {
+        return Ok(());
+    }
+    generate_prepared_records(
+        &prepared,
+        request.min_two_j,
+        request.max_two_j,
+        branch_count,
+        sink,
+    )
+}
+
+fn prepare_generation(request: &GenerationRequest) -> Result<PreparedGeneration> {
     ensure!(
         request.min_two_j <= request.max_two_j,
         "minimum 2J exceeds maximum 2J"
@@ -209,7 +368,7 @@ fn generate_csfs_impl(request: &GenerationRequest, branch_count: usize) -> Resul
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    let mut output = CompleteCsfFile {
+    Ok(PreparedGeneration {
         header_lines: [
             "Core subshells:".into(),
             header_orbitals(&core_labels),
@@ -218,22 +377,28 @@ fn generate_csfs_impl(request: &GenerationRequest, branch_count: usize) -> Resul
             "CSF(s):".into(),
         ],
         subshells,
-        records: Vec::new(),
-        occupied_subshells: Vec::new(),
-        intermediate_couplings: Vec::new(),
-        blocks: Vec::new(),
-    };
-    if occupied.is_empty() {
-        return Ok(output);
-    }
+        choices,
+        occupied,
+        parity,
+    })
+}
+
+fn generate_prepared_records(
+    prepared: &PreparedGeneration,
+    min_two_j: u16,
+    max_two_j: u16,
+    branch_count: usize,
+    sink: &mut impl GeneratedRecordSink,
+) -> Result<()> {
     // Prefixes follow the serial state-table traversal. Each subtree is disjoint;
     // indexed collection preserves that order independently of worker completion.
-    let combinations = choices
+    let combinations = prepared
+        .choices
         .iter()
         .fold(1usize, |n, states| n.saturating_mul(states.len()));
     if branch_count > 1 && combinations >= 64 {
         let mut prefixes = vec![Vec::new()];
-        for states in &choices {
+        for states in &prepared.choices {
             if prefixes.len() >= branch_count {
                 break;
             }
@@ -248,72 +413,59 @@ fn generate_csfs_impl(request: &GenerationRequest, branch_count: usize) -> Resul
                 })
                 .collect();
         }
-        for target in (request.min_two_j..=request.max_two_j).step_by(2) {
+        for target in (min_two_j..=max_two_j).step_by(2) {
             let branches = prefixes
                 .par_iter()
                 .map(|prefix| {
-                    let mut chunk = CompleteCsfFile {
-                        header_lines: output.header_lines.clone(),
-                        subshells: output.subshells.clone(),
-                        records: Vec::new(),
-                        occupied_subshells: Vec::new(),
-                        intermediate_couplings: Vec::new(),
-                        blocks: Vec::new(),
-                    };
+                    let mut branch_sink = BufferedRecordSink::default();
                     let mut selected = vec![
                         SubshellState {
                             two_j: 0,
                             seniority: None
                         };
-                        occupied.len()
+                        prepared.occupied.len()
                     ];
                     selected[..prefix.len()].copy_from_slice(prefix);
                     let mut generator = Generator {
-                        choices: &choices,
+                        choices: &prepared.choices,
                         selected,
-                        cumulative: vec![0; occupied.len()],
-                        occupied: occupied.clone(),
+                        cumulative: vec![0; prepared.occupied.len()],
+                        occupied: prepared.occupied.clone(),
                         printed_couplings: Vec::with_capacity(MAX_OCCUPIED_SUBSHELLS),
-                        parity,
-                        output: &mut chunk,
+                        parity: prepared.parity,
+                        sink: &mut branch_sink,
                     };
                     generator.select_states(prefix.len(), target)?;
-                    Ok(chunk)
+                    Ok(branch_sink.records)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            for chunk in branches {
-                for record in &chunk.records {
-                    output.append_generated_record(
-                        chunk.occupied(record)?,
-                        chunk.couplings(record)?,
-                        record.total_two_j,
-                        record.parity,
-                    )?;
+            for branch in branches {
+                for record in &branch {
+                    sink.push(record.as_ref())?;
                 }
             }
         }
-        return Ok(output);
+        return Ok(());
     }
     let mut generator = Generator {
-        choices: &choices,
+        choices: &prepared.choices,
         selected: vec![
             SubshellState {
                 two_j: 0,
                 seniority: None
             };
-            occupied.len()
+            prepared.occupied.len()
         ],
-        cumulative: vec![0; occupied.len()],
-        occupied,
+        cumulative: vec![0; prepared.occupied.len()],
+        occupied: prepared.occupied.clone(),
         printed_couplings: Vec::with_capacity(MAX_OCCUPIED_SUBSHELLS),
-        parity,
-
-        output: &mut output,
+        parity: prepared.parity,
+        sink,
     };
-    for target in (request.min_two_j..=request.max_two_j).step_by(2) {
+    for target in (min_two_j..=max_two_j).step_by(2) {
         generator.select_states(0, target)?;
     }
-    Ok(output)
+    Ok(())
 }
 
 /// Generate independent occupation configurations in parallel.
@@ -382,7 +534,7 @@ fn printable_j(two_j: u16) -> bool {
     }
 }
 
-struct Generator<'a> {
+struct Generator<'a, S: GeneratedRecordSink> {
     choices: &'a [Vec<SubshellState>],
     selected: Vec<SubshellState>,
     cumulative: Vec<u16>,
@@ -390,10 +542,10 @@ struct Generator<'a> {
     printed_couplings: Vec<IntermediateCoupling>,
     parity: Parity,
 
-    output: &'a mut CompleteCsfFile,
+    sink: &'a mut S,
 }
 
-impl Generator<'_> {
+impl<S: GeneratedRecordSink> Generator<'_, S> {
     fn select_states(&mut self, index: usize, target: u16) -> Result<()> {
         if index == self.selected.len() {
             self.cumulative[0] = self.selected[0].two_j;
@@ -460,11 +612,65 @@ impl Generator<'_> {
                 });
             }
         }
-        self.output.append_generated_record(
-            &self.occupied,
-            &self.printed_couplings,
-            target,
-            self.parity,
-        )
+        self.sink.push(GeneratedRecordRef {
+            occupied: &self.occupied,
+            couplings: &self.printed_couplings,
+            total_two_j: target,
+            parity: self.parity,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn four_d_shell_request() -> GenerationRequest {
+        GenerationRequest {
+            core_subshells: Vec::new(),
+            configuration: ["3d", "4d", "5d", "6d"]
+                .into_iter()
+                .map(|label| SubshellOccupation {
+                    subshell: label.parse().unwrap(),
+                    electrons: 3,
+                })
+                .collect(),
+            min_two_j: 0,
+            max_two_j: 4,
+        }
+    }
+
+    fn buffered_records(file: &CompleteCsfFile) -> Result<Vec<BufferedGeneratedRecord>> {
+        file.records
+            .iter()
+            .map(|record| {
+                Ok(BufferedGeneratedRecord {
+                    occupied: file.occupied(record)?.to_vec(),
+                    couplings: file.couplings(record)?.to_vec(),
+                    total_two_j: record.total_two_j,
+                    parity: record.parity,
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn generated_record_sink_matches_complete_csf_adapter() {
+        let request = four_d_shell_request();
+        for branch_count in [1, 4] {
+            let prepared = prepare_generation(&request).unwrap();
+            let mut sink = BufferedRecordSink::default();
+            generate_prepared_records(
+                &prepared,
+                request.min_two_j,
+                request.max_two_j,
+                branch_count,
+                &mut sink,
+            )
+            .unwrap();
+
+            let complete = generate_csfs_impl(&request, branch_count).unwrap();
+            assert_eq!(sink.records, buffered_records(&complete).unwrap());
+        }
     }
 }

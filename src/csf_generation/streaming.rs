@@ -11,7 +11,8 @@ use arrow::array::{Array, Int32Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ipc::reader::FileReader;
-use arrow_ipc::writer::FileWriter;
+use arrow_ipc::writer::{FileWriter, IpcWriteOptions};
+use arrow_ipc::{CompressionType, MetadataVersion};
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
@@ -21,11 +22,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use super::{
     EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, GeneratedRecordRef,
-    GeneratedRecordSink, GenerationRequest, Parity, Subshell, enumerate_occupations,
+    GeneratedRecordSink, GenerationOptions, GenerationRequest, Parity, ResourceBudget,
+    ResourcePermit, ResourceStats, SegmentCompression, Subshell,
+    enumerate_occupations_with_budget,
     generate_records_into,
 };
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
@@ -35,13 +40,145 @@ use crate::descriptor_schema::{
 };
 use crate::descriptor_v2::write_feature_row;
 
-const DEFAULT_CONFIGURATIONS_PER_RANGE: usize = 4_096;
-const DEFAULT_ROWS_PER_BATCH: usize = 8_192;
-const DEFAULT_ROWS_PER_SEGMENT: usize = 131_072;
 const DEFAULT_DEDUP_BUCKET_COUNT: usize = 256;
 const DEFAULT_DEDUP_MAX_ROWS_PER_BUCKET: usize = 65_536;
 const DEDUP_RECURSIVE_BUCKET_COUNT: usize = 16;
 const MAX_DEDUP_SPLIT_DEPTH: usize = 16;
+
+const PROGRESS_REPORT_INTERVAL: Duration = Duration::from_secs(2);
+
+/// A coarse stage measurement exposed through the disk-generation result.
+///
+/// Byte counters describe files observed at the stage boundary. They are
+/// logical file bytes, not a claim about physical device I/O or page-cache
+/// traffic.
+#[derive(Clone, Debug)]
+pub(crate) struct StageStats {
+    pub(crate) name: &'static str,
+    pub(crate) elapsed_millis: u128,
+    pub(crate) cpu_millis: Option<u128>,
+    pub(crate) input_records: usize,
+    pub(crate) output_records: usize,
+    pub(crate) input_bytes: u64,
+    pub(crate) output_bytes: u64,
+}
+
+#[derive(Debug)]
+struct StageTimer {
+    wall: Instant,
+    cpu_millis: Option<u128>,
+}
+
+impl StageTimer {
+    fn start() -> Self {
+        Self {
+            wall: Instant::now(),
+            cpu_millis: process_cpu_millis(),
+        }
+    }
+
+    fn finish(
+        self,
+        name: &'static str,
+        input_records: usize,
+        output_records: usize,
+        input_bytes: u64,
+        output_bytes: u64,
+    ) -> StageStats {
+        let cpu_millis = process_cpu_millis()
+            .zip(self.cpu_millis)
+            .map(|(end, start)| end.saturating_sub(start));
+        StageStats {
+            name,
+            elapsed_millis: self.wall.elapsed().as_millis(),
+            cpu_millis,
+            input_records,
+            output_records,
+            input_bytes,
+            output_bytes,
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_cpu_millis() -> Option<u128> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: getrusage initializes the rusage structure when it returns 0.
+    let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if result != 0 {
+        return None;
+    }
+    // SAFETY: the successful getrusage call initialized `usage`.
+    let usage = unsafe { usage.assume_init() };
+    let user_micros = u128::try_from(usage.ru_utime.tv_sec)
+        .ok()?
+        .checked_mul(1_000_000)?
+        .checked_add(u128::try_from(usage.ru_utime.tv_usec).ok()?)?;
+    let system_micros = u128::try_from(usage.ru_stime.tv_sec)
+        .ok()?
+        .checked_mul(1_000_000)?
+        .checked_add(u128::try_from(usage.ru_stime.tv_usec).ok()?)?;
+    Some((user_micros + system_micros) / 1_000)
+}
+
+#[cfg(not(unix))]
+fn process_cpu_millis() -> Option<u128> {
+    None
+}
+
+#[derive(Debug)]
+struct RangeProgress {
+    total: usize,
+    started: AtomicUsize,
+    completed: AtomicUsize,
+    records: AtomicUsize,
+    last_report: Mutex<Instant>,
+}
+
+impl RangeProgress {
+    fn new(total: usize) -> Self {
+        Self {
+            total,
+            started: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
+            records: AtomicUsize::new(0),
+            last_report: Mutex::new(Instant::now() - PROGRESS_REPORT_INTERVAL),
+        }
+    }
+
+    fn range_started(&self) {
+        self.started.fetch_add(1, Ordering::Relaxed);
+        self.report(false);
+    }
+
+    fn range_completed(&self, records: usize) {
+        self.completed.fetch_add(1, Ordering::Relaxed);
+        self.records.fetch_add(records, Ordering::Relaxed);
+        self.report(false);
+    }
+
+    fn finish(&self) {
+        self.report(true);
+    }
+
+    fn report(&self, force: bool) {
+        let Ok(mut last_report) = self.last_report.lock() else {
+            return;
+        };
+        if !force && last_report.elapsed() < PROGRESS_REPORT_INTERVAL {
+            return;
+        }
+        *last_report = Instant::now();
+        eprintln!(
+            "Range progress: started {}/{}; completed {}/{}; generated {} CSFs",
+            self.started.load(Ordering::Relaxed),
+            self.total,
+            self.completed.load(Ordering::Relaxed),
+            self.total,
+            self.records.load(Ordering::Relaxed),
+        );
+    }
+}
 
 /// A deterministic, contiguous slice of enumerated configurations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,29 +188,9 @@ pub(crate) struct GenerationRange {
     pub(crate) end_configuration: usize,
 }
 
-/// Bounded-buffer settings for the internal streaming path.
-///
-/// These are crate-visible until Phase 4 introduces the small public
-/// `GenerationOptions` interface.  Each setting is validated before any
-/// segment is written, so an invalid plan cannot leave a partial final file.
-#[derive(Clone, Debug)]
-pub(crate) struct StreamingGenerationOptions {
-    pub(crate) threads: Option<usize>,
-    pub(crate) configurations_per_range: usize,
-    pub(crate) rows_per_batch: usize,
-    pub(crate) rows_per_segment: usize,
-}
-
-impl Default for StreamingGenerationOptions {
-    fn default() -> Self {
-        Self {
-            threads: None,
-            configurations_per_range: DEFAULT_CONFIGURATIONS_PER_RANGE,
-            rows_per_batch: DEFAULT_ROWS_PER_BATCH,
-            rows_per_segment: DEFAULT_ROWS_PER_SEGMENT,
-        }
-    }
-}
+/// Compatibility alias for the pre-P1 name used by the Rust maintenance
+/// tests. New production code passes the shared [`GenerationOptions`] directly.
+pub(crate) type StreamingGenerationOptions = GenerationOptions;
 
 /// One finalized Arrow IPC segment.  The file carries V2 columns followed by
 /// `range_ordinal` and `local_ordinal`; the latter two are storage ordering
@@ -99,6 +216,9 @@ pub(crate) struct SegmentGeneration {
     pub(crate) segments: Vec<DescriptorSegment>,
     pub(crate) unique_occupations: usize,
     pub(crate) record_count: usize,
+    pub(crate) stage_stats: Vec<StageStats>,
+    pub(crate) budget: ResourceBudget,
+    pub(crate) resource_stats: ResourceStats,
 }
 
 /// Result of the ordered segment merge.
@@ -146,6 +266,8 @@ pub(crate) struct DeduplicatedSegments {
     pub(crate) duplicate_count: usize,
     pub(crate) hash_collision_count: usize,
     pub(crate) block_lengths: Vec<usize>,
+    pub(crate) temporary_bytes_written: u64,
+    pub(crate) budget: ResourceBudget,
 }
 
 /// Results from the disk generation pipeline before the caller publishes its
@@ -159,6 +281,8 @@ pub(crate) struct DiskGenerationStats {
     pub(crate) block_count: usize,
     pub(crate) csf_bytes: u64,
     pub(crate) descriptor_bytes: u64,
+    pub(crate) stage_stats: Vec<StageStats>,
+    pub(crate) resource_stats: ResourceStats,
 }
 
 /// Generate, exactly de-duplicate and restore a V2 descriptor through private
@@ -175,6 +299,32 @@ pub(crate) fn generate_disk_outputs_from_transcript(
     scratch_dir: &Path,
     threads: Option<usize>,
 ) -> Result<DiskGenerationStats> {
+    let options = GenerationOptions::from_api(threads, None, Some(scratch_dir.to_path_buf()))?;
+    generate_disk_outputs_from_transcript_with_options(
+        transcript,
+        csf_output,
+        csf_parquet_output,
+        descriptor_output,
+        header_output,
+        &options,
+    )
+}
+
+/// Disk generation entry point with the shared execution options.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn generate_disk_outputs_from_transcript_with_options(
+    transcript: &str,
+    csf_output: &Path,
+    csf_parquet_output: &Path,
+    descriptor_output: &Path,
+    header_output: &Path,
+    options: &GenerationOptions,
+) -> Result<DiskGenerationStats> {
+    options.validate()?;
+    let scratch_dir = options
+        .scratch_dir
+        .as_deref()
+        .context("disk generation requires a scratch directory")?;
     ensure!(
         !csf_output.exists()
             && !csf_parquet_output.exists()
@@ -187,6 +337,7 @@ pub(crate) fn generate_disk_outputs_from_transcript(
         "disk generation scratch directory already exists: {}",
         scratch_dir.display()
     );
+    let mut stage_stats = Vec::new();
     eprintln!("Parsing transcript and enumerating configurations...");
     let request = ExcitationRequest::from_transcript(transcript)?;
     fs::create_dir(scratch_dir).with_context(|| {
@@ -196,39 +347,79 @@ pub(crate) fn generate_disk_outputs_from_transcript(
         )
     })?;
     eprintln!("Generating CSFs and V2 descriptors to disk segments...");
-    let generated = generate_v2_descriptor_segments(
-        &request,
-        scratch_dir,
-        &StreamingGenerationOptions {
-            threads,
-            ..StreamingGenerationOptions::default()
-        },
-    )?;
-    eprintln!("Generated {} CSFs across {} symmetry blocks", generated.record_count, count_blocks(&generated.segments));
+    let generated = generate_v2_descriptor_segments(&request, scratch_dir, options)?;
+    stage_stats.extend(generated.stage_stats.iter().cloned());
+    eprintln!(
+        "Generated {} CSFs across {} symmetry blocks",
+        generated.record_count,
+        count_blocks(&generated.segments)
+    );
     print_j_value_summary(&generated.segments);
 
     eprintln!("Deduplicating descriptor segments...");
+    let dedup_timer = StageTimer::start();
+    let generated_bytes = generated
+        .segments
+        .iter()
+        .try_fold(0u64, |total, segment| total.checked_add(segment.byte_count))
+        .context("generated segment byte count overflow")?;
     let deduplicated = deduplicate_v2_descriptor_segments(
         &generated,
         &scratch_dir.join("dedup"),
         &DeduplicationOptions::default(),
     )?;
-    eprintln!("Deduplicated: {} unique CSFs ({} duplicates removed)", deduplicated.unique_count, deduplicated.duplicate_count);
+    let dedup_bytes = deduplicated.temporary_bytes_written;
+    stage_stats.push(dedup_timer.finish(
+        "deduplication",
+        generated.record_count,
+        deduplicated.unique_count,
+        generated_bytes,
+        dedup_bytes,
+    ));
+    eprintln!(
+        "Deduplicated: {} unique CSFs ({} duplicates removed)",
+        deduplicated.unique_count, deduplicated.duplicate_count
+    );
 
     eprintln!("Writing generation header...");
     let header_lines = generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
     write_generation_header(header_output, header_lines.clone(), &deduplicated)?;
 
     eprintln!("Merging deduplicated segments to final descriptor Parquet...");
+    let merge_timer = StageTimer::start();
     merge_v2_deduplicated_segments(&deduplicated, descriptor_output)?;
+    let descriptor_bytes = fs::metadata(descriptor_output)?.len();
+    stage_stats.push(merge_timer.finish(
+        "descriptor_merge",
+        deduplicated.unique_count,
+        deduplicated.unique_count,
+        dedup_bytes,
+        descriptor_bytes,
+    ));
 
     eprintln!("Restoring CSF text and Parquet outputs...");
+    let restore_timer = StageTimer::start();
+    let _restore_permit =
+        parquet_writer_permit(&generated.budget, generated.layout, "CSF restore")?;
     crate::csfs_descriptor::restore_v2_descriptor_parquet_to_outputs(
         descriptor_output,
         header_output,
         csf_output,
         Some(csf_parquet_output),
     )?;
+    let csf_bytes = fs::metadata(csf_output)?.len();
+    let csf_parquet_bytes = fs::metadata(csf_parquet_output)?.len();
+    stage_stats.push(
+        restore_timer.finish(
+            "csf_restore",
+            deduplicated.unique_count,
+            deduplicated.unique_count,
+            descriptor_bytes,
+            csf_bytes
+                .checked_add(csf_parquet_bytes)
+                .context("restored output byte count overflow")?,
+        ),
+    );
     eprintln!("Generation complete!");
     Ok(DiskGenerationStats {
         unique_occupations: generated.unique_occupations,
@@ -236,8 +427,12 @@ pub(crate) fn generate_disk_outputs_from_transcript(
         unique_count: deduplicated.unique_count,
         duplicate_count: deduplicated.duplicate_count,
         block_count: deduplicated.block_lengths.len(),
-        csf_bytes: fs::metadata(csf_output)?.len(),
-        descriptor_bytes: fs::metadata(descriptor_output)?.len(),
+        csf_bytes,
+        descriptor_bytes,
+        stage_stats,
+        resource_stats: generated
+            .budget
+            .snapshot(generated.resource_stats.occupation_bytes),
     })
 }
 
@@ -293,8 +488,20 @@ pub(crate) fn generate_v2_descriptor_segments(
     scratch_dir: &Path,
     options: &StreamingGenerationOptions,
 ) -> Result<SegmentGeneration> {
-    validate_options(options)?;
-    let occupations = enumerate_occupations(request)?;
+    options.validate()?;
+    let enumerate_timer = StageTimer::start();
+    let (occupations, occupation_charge) =
+        enumerate_occupations_with_budget(request, Some(&options.budget))?;
+    let occupation_bytes = occupation_charge
+        .as_ref()
+        .map_or(0, |charge| charge.bytes());
+    let enumeration_stats = enumerate_timer.finish(
+        "enumeration",
+        0,
+        occupations.configurations.len(),
+        0,
+        occupation_bytes,
+    );
     ensure!(
         !occupations.configurations.is_empty(),
         "occupation enumeration produced no configurations"
@@ -322,6 +529,8 @@ pub(crate) fn generate_v2_descriptor_segments(
             ranges_root.display()
         )
     })?;
+    let generation_timer = StageTimer::start();
+    let progress = Arc::new(RangeProgress::new(ranges.len()));
 
     let run_range = || {
         ranges
@@ -338,6 +547,7 @@ pub(crate) fn generate_v2_descriptor_segments(
                     &global_indices,
                     &ranges_root,
                     options,
+                    &progress,
                 )
             })
             .collect::<Result<Vec<_>>>()
@@ -350,6 +560,7 @@ pub(crate) fn generate_v2_descriptor_segments(
             .install(run_range)?,
         None => run_range()?,
     };
+    progress.finish();
 
     let mut segments = Vec::new();
     let mut record_count = 0usize;
@@ -363,6 +574,15 @@ pub(crate) fn generate_v2_descriptor_segments(
         record_count > 0,
         "no CSFs generated for the requested 2J range"
     );
+    let segment_bytes = segments
+        .iter()
+        .try_fold(0u64, |total, segment| total.checked_add(segment.byte_count))
+        .context("generated segment byte count overflow")?;
+    // The occupation arena is no longer needed once all range workers have
+    // completed. Release its reservation before later stages acquire bucket
+    // and merge buffers.
+    drop(occupation_charge);
+    let resource_stats = options.budget.snapshot(occupation_bytes);
     Ok(SegmentGeneration {
         layout,
         peel_subshells,
@@ -371,6 +591,18 @@ pub(crate) fn generate_v2_descriptor_segments(
         segments,
         unique_occupations: occupations.configurations.len(),
         record_count,
+        stage_stats: vec![
+            enumeration_stats,
+            generation_timer.finish(
+                "csf_generation",
+                occupations.configurations.len(),
+                record_count,
+                0,
+                segment_bytes,
+            ),
+        ],
+        budget: options.budget.clone(),
+        resource_stats,
     })
 }
 
@@ -394,6 +626,8 @@ pub(crate) fn merge_v2_descriptor_segments(
         output_path.display()
     );
     let schema = output_schema(generated.layout, false)?;
+    let _memory_permit =
+        parquet_writer_permit(&generated.budget, generated.layout, "descriptor merge")?;
     let properties = WriterProperties::builder()
         .set_compression(
             crate::csfs_descriptor::parquet_batch::parse_compression(None)
@@ -487,6 +721,7 @@ pub(crate) fn deduplicate_v2_descriptor_segments(
     let mut unique_count = 0usize;
     let mut duplicate_count = 0usize;
     let mut hash_collision_count = 0usize;
+    let mut temporary_bytes_written = 0u64;
     let mut block_lengths = Vec::with_capacity(blocks.len());
 
     for (&key, segments) in &mut blocks {
@@ -500,11 +735,12 @@ pub(crate) fn deduplicate_v2_descriptor_segments(
         fs::create_dir(&block_dir).with_context(|| {
             format!("failed to create bucket directory {}", block_dir.display())
         })?;
-        let mut buckets = BucketWriters::new(
+        let mut buckets = BucketWriters::new_with_budget(
             &block_dir,
             "root",
             options.bucket_count,
             generated.layout.row_len(),
+            Some(&generated.budget),
         )?;
         let mut ordinal = 0u64;
         for segment in segments.iter().copied() {
@@ -525,8 +761,12 @@ pub(crate) fn deduplicate_v2_descriptor_segments(
             "source segments contain {ordinal} rows, expected {expected_rows}"
         );
         let bucket_files = buckets.finish()?;
+        temporary_bytes_written = temporary_bytes_written
+            .checked_add(bucket_files_size(&bucket_files)?)
+            .context("de-duplication bucket byte count overflow")?;
         let bitset_path = block_dir.join("survivors.bitset");
-        let mut bitset = SurvivorBitset::new(bitset_path, expected_rows)?;
+        let mut bitset =
+            SurvivorBitset::new_with_budget(bitset_path, expected_rows, Some(&generated.budget))?;
         let mut block_stats = DeduplicationStats::default();
         for bucket in bucket_files {
             process_bucket(
@@ -536,6 +776,7 @@ pub(crate) fn deduplicate_v2_descriptor_segments(
                 0,
                 &mut bitset,
                 &mut block_stats,
+                &generated.budget,
             )?;
         }
         ensure!(
@@ -552,6 +793,9 @@ pub(crate) fn deduplicate_v2_descriptor_segments(
             "de-duplication counts are inconsistent"
         );
         let file = bitset.finish()?;
+        temporary_bytes_written = temporary_bytes_written
+            .checked_add(fs::metadata(&file.path)?.len())
+            .context("survivor bitset byte count overflow")?;
         generated_count = generated_count
             .checked_add(block_stats.generated_count)
             .context("generated descriptor count overflow")?;
@@ -582,6 +826,8 @@ pub(crate) fn deduplicate_v2_descriptor_segments(
         duplicate_count,
         hash_collision_count,
         block_lengths,
+        temporary_bytes_written,
+        budget: generated.budget.clone(),
     })
 }
 
@@ -597,6 +843,11 @@ pub(crate) fn merge_v2_deduplicated_segments(
         output_path.display()
     );
     let schema = output_schema(deduplicated.layout, false)?;
+    let _memory_permit = parquet_writer_permit(
+        &deduplicated.budget,
+        deduplicated.layout,
+        "deduplicated descriptor merge",
+    )?;
     let mut metadata = output_kv_metadata(
         deduplicated.layout,
         &deduplicated.peel_subshells,
@@ -702,18 +953,36 @@ struct SurvivorBitset {
     path: PathBuf,
     bit_len: usize,
     bytes: Vec<u8>,
+    _memory_permit: Option<ResourcePermit>,
 }
 
 impl SurvivorBitset {
     fn new(path: PathBuf, bit_len: usize) -> Result<Self> {
+        Self::new_with_budget(path, bit_len, None)
+    }
+
+    fn new_with_budget(
+        path: PathBuf,
+        bit_len: usize,
+        budget: Option<&ResourceBudget>,
+    ) -> Result<Self> {
         let byte_len = bit_len
             .checked_add(7)
             .context("survivor bitset size overflow")?
             / 8;
+        let memory_permit = budget
+            .map(|budget| {
+                budget.try_reserve(
+                    u64::try_from(byte_len).context("survivor bitset bytes exceed u64")?,
+                    "survivor bitset",
+                )
+            })
+            .transpose()?;
         Ok(Self {
             path,
             bit_len,
             bytes: vec![0; byte_len],
+            _memory_permit: memory_permit,
         })
     }
 
@@ -735,6 +1004,7 @@ impl SurvivorBitset {
             path: file.path.clone(),
             bit_len: file.bit_len,
             bytes,
+            _memory_permit: None,
         })
     }
 
@@ -787,6 +1057,7 @@ struct DeduplicationStats {
     unique_count: usize,
     duplicate_count: usize,
     hash_collision_count: usize,
+    temporary_bytes_written: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -800,10 +1071,34 @@ struct BucketWriters {
     writers: Vec<BufWriter<File>>,
     files: Vec<BucketFile>,
     record_buffer: Vec<u8>,
+    _memory_permit: Option<ResourcePermit>,
 }
 
 impl BucketWriters {
     fn new(directory: &Path, label: &str, count: usize, row_len: usize) -> Result<Self> {
+        Self::new_with_budget(directory, label, count, row_len, None)
+    }
+
+    fn new_with_budget(
+        directory: &Path,
+        label: &str,
+        count: usize,
+        row_len: usize,
+        budget: Option<&ResourceBudget>,
+    ) -> Result<Self> {
+        let buffer_bytes = count
+            .checked_mul(8 * 1024)
+            .and_then(|value| value.checked_add(bucket_record_byte_len(row_len).ok()?))
+            .context("de-duplication bucket writer memory byte count overflow")?;
+        let memory_permit = budget
+            .map(|budget| {
+                budget.try_reserve(
+                    u64::try_from(buffer_bytes)
+                        .context("de-duplication bucket writer bytes exceed u64")?,
+                    "de-duplication bucket writers",
+                )
+            })
+            .transpose()?;
         let mut writers = Vec::with_capacity(count);
         let mut files = Vec::with_capacity(count);
         for index in 0..count {
@@ -824,6 +1119,7 @@ impl BucketWriters {
             writers,
             files,
             record_buffer: Vec::with_capacity(bucket_record_byte_len(row_len)?),
+            _memory_permit: memory_permit,
         })
     }
 
@@ -868,6 +1164,14 @@ impl BucketWriters {
             .filter(|bucket| bucket.record_count > 0)
             .collect())
     }
+}
+
+fn bucket_files_size(files: &[BucketFile]) -> Result<u64> {
+    files.iter().try_fold(0u64, |total, bucket| {
+        total
+            .checked_add(fs::metadata(&bucket.path)?.len())
+            .context("bucket byte count overflow")
+    })
 }
 
 struct BucketReader {
@@ -928,9 +1232,10 @@ fn process_bucket(
     depth: usize,
     bitset: &mut SurvivorBitset,
     stats: &mut DeduplicationStats,
+    budget: &ResourceBudget,
 ) -> Result<()> {
     if bucket.record_count <= max_rows_per_bucket {
-        return deduplicate_bucket(bucket, row_len, bitset, stats);
+        return deduplicate_bucket(bucket, row_len, bitset, stats, budget, max_rows_per_bucket);
     }
     ensure!(
         depth < MAX_DEDUP_SPLIT_DEPTH,
@@ -945,11 +1250,12 @@ fn process_bucket(
             split_directory.display()
         )
     })?;
-    let mut children = BucketWriters::new(
+    let mut children = BucketWriters::new_with_budget(
         &split_directory,
         "child",
         DEDUP_RECURSIVE_BUCKET_COUNT,
         row_len,
+        Some(budget),
     )?;
     let mut reader = BucketReader::open(&bucket, row_len)?;
     let mut row = Vec::with_capacity(row_len);
@@ -959,7 +1265,12 @@ fn process_bucket(
     }
     fs::remove_file(&bucket.path)
         .with_context(|| format!("failed to remove split bucket {}", bucket.path.display()))?;
-    for child in children.finish()? {
+    let child_files = children.finish()?;
+    stats.temporary_bytes_written = stats
+        .temporary_bytes_written
+        .checked_add(bucket_files_size(&child_files)?)
+        .context("recursive bucket byte count overflow")?;
+    for child in child_files {
         process_bucket(
             child,
             row_len,
@@ -967,6 +1278,7 @@ fn process_bucket(
             depth + 1,
             bitset,
             stats,
+            budget,
         )?;
     }
     Ok(())
@@ -977,7 +1289,18 @@ fn deduplicate_bucket(
     row_len: usize,
     bitset: &mut SurvivorBitset,
     stats: &mut DeduplicationStats,
+    budget: &ResourceBudget,
+    max_rows_per_bucket: usize,
 ) -> Result<()> {
+    let row_bytes = max_rows_per_bucket
+        .checked_mul(row_len)
+        .and_then(|value| value.checked_mul(std::mem::size_of::<i32>()))
+        .and_then(|value| value.checked_add(max_rows_per_bucket.checked_mul(64)?))
+        .context("de-duplication bucket memory byte count overflow")?;
+    let _memory_permit = budget.try_reserve(
+        u64::try_from(row_bytes).context("de-duplication bucket bytes exceed u64")?,
+        "de-duplication bucket",
+    )?;
     let mut reader = BucketReader::open(&bucket, row_len)?;
     let mut rows_by_hash = HashMap::<[u8; 16], Vec<Vec<i32>>>::new();
     let mut row = Vec::with_capacity(row_len);
@@ -1097,7 +1420,8 @@ fn count_blocks(segments: &[DescriptorSegment]) -> usize {
 fn print_j_value_summary(segments: &[DescriptorSegment]) {
     let mut blocks = BTreeMap::<(u16, bool), usize>::new();
     for segment in segments {
-        *blocks.entry(block_key(segment.total_two_j, segment.parity))
+        *blocks
+            .entry(block_key(segment.total_two_j, segment.parity))
             .or_insert(0) += segment.record_count;
     }
 
@@ -1207,17 +1531,29 @@ fn generate_range_segments(
     global_indices: &HashMap<Subshell, u16>,
     ranges_root: &Path,
     options: &StreamingGenerationOptions,
+    progress: &RangeProgress,
 ) -> Result<RangeResult> {
+    progress.range_started();
     let range_dir = ranges_root.join(format!("range-{:06}", range.ordinal));
     fs::create_dir(&range_dir)
         .with_context(|| format!("failed to create range directory {}", range_dir.display()))?;
     let mut writer = RangeSegmentWriter::new(range.ordinal, layout, range_dir, options)?;
-    let branch_count = if rayon::current_num_threads() > 1 {
-        rayon::current_num_threads().saturating_mul(4)
-    } else {
-        1
-    };
+    // Keep recursion on the range worker. The old nested collector retained
+    // complete branch CSF vectors and could exhaust a caller-supplied budget
+    // before the segment writer had a chance to flush.
+    let branch_count = 1;
     for configuration in &configurations[range.start_configuration..range.end_configuration] {
+        let configuration_bytes = configuration
+            .occupations
+            .len()
+            .checked_mul(std::mem::size_of::<super::SubshellOccupation>())
+            .and_then(|value| value.checked_add(4096))
+            .context("generation configuration byte count overflow")?;
+        let _configuration_permit = options.budget.try_reserve(
+            u64::try_from(configuration_bytes)
+                .context("generation configuration bytes exceed u64")?,
+            "generation configuration copy",
+        )?;
         let generation_request = GenerationRequest {
             core_subshells: core_subshells.to_vec(),
             configuration: configuration.occupations.clone(),
@@ -1229,7 +1565,9 @@ fn generate_range_segments(
             DescriptorBatchSink::new(layout, peel_subshells, local_to_global, &mut writer);
         generate_records_into(&generation_request, branch_count, &mut sink)?;
     }
-    writer.finish()
+    let result = writer.finish()?;
+    progress.range_completed(result.record_count);
+    Ok(result)
 }
 
 fn local_to_global_indices(
@@ -1321,6 +1659,7 @@ struct RangeSegmentWriter {
     range_dir: PathBuf,
     rows_per_batch: usize,
     rows_per_segment: usize,
+    budget: ResourceBudget,
     blocks: BTreeMap<(u16, bool), BlockSegmentWriter>,
 }
 
@@ -1338,6 +1677,7 @@ impl RangeSegmentWriter {
             range_dir,
             rows_per_batch: options.rows_per_batch,
             rows_per_segment: options.rows_per_segment,
+            budget: options.budget.clone(),
             blocks: BTreeMap::new(),
         })
     }
@@ -1360,6 +1700,7 @@ impl RangeSegmentWriter {
                 self.range_dir.clone(),
                 self.rows_per_batch,
                 self.rows_per_segment,
+                self.budget.clone(),
             )
         });
         writer.push(row)
@@ -1391,6 +1732,7 @@ struct BlockSegmentWriter {
     range_dir: PathBuf,
     rows_per_batch: usize,
     rows_per_segment: usize,
+    budget: ResourceBudget,
     next_part: u32,
     next_local_ordinal: u64,
     current: Option<OpenSegment>,
@@ -1404,6 +1746,7 @@ struct OpenSegment {
     columns: Vec<Vec<i32>>,
     local_ordinals: Vec<u64>,
     writer: FileWriter<BufWriter<File>>,
+    _memory_permit: ResourcePermit,
 }
 
 impl BlockSegmentWriter {
@@ -1417,6 +1760,7 @@ impl BlockSegmentWriter {
         range_dir: PathBuf,
         rows_per_batch: usize,
         rows_per_segment: usize,
+        budget: ResourceBudget,
     ) -> Self {
         Self {
             range_ordinal,
@@ -1427,6 +1771,7 @@ impl BlockSegmentWriter {
             range_dir,
             rows_per_batch,
             rows_per_segment,
+            budget,
             next_part: 0,
             next_local_ordinal: 0,
             current: None,
@@ -1501,9 +1846,32 @@ impl BlockSegmentWriter {
             .create_new(true)
             .open(&path)
             .with_context(|| format!("failed to create segment {}", path.display()))?;
-        let columns = (0..self.row_len)
-            .map(|_| Vec::with_capacity(self.rows_per_batch))
-            .collect();
+        let row_bytes = self
+            .rows_per_batch
+            .checked_mul(self.row_len)
+            .and_then(|value| value.checked_mul(std::mem::size_of::<i32>()))
+            .context("descriptor batch byte count overflow")?;
+        let ordinal_bytes = self
+            .rows_per_batch
+            .checked_mul(std::mem::size_of::<u64>())
+            .context("descriptor ordinal byte count overflow")?;
+        // Arrow arrays are materialized while a batch is flushed, so reserve
+        // space for both the mutable column buffers and the temporary arrays.
+        let managed_bytes = row_bytes
+            .checked_add(ordinal_bytes)
+            .and_then(|value| value.checked_mul(2))
+            .and_then(|value| value.checked_add(4096))
+            .context("descriptor batch managed byte count overflow")?;
+        let memory_permit = self.budget.try_reserve(
+            u64::try_from(managed_bytes).context("descriptor batch bytes exceed u64")?,
+            "descriptor generation batch",
+        )?;
+        let mut columns = Vec::with_capacity(self.row_len);
+        for _ in 0..self.row_len {
+            let mut column = Vec::new();
+            column.try_reserve_exact(self.rows_per_batch)?;
+            columns.push(column);
+        }
         let local_ordinals = Vec::with_capacity(self.rows_per_batch);
         let writer = FileWriter::try_new_buffered(file, self.schema.as_ref())
             .with_context(|| format!("failed to open Arrow segment {}", path.display()))?;
@@ -1514,6 +1882,7 @@ impl BlockSegmentWriter {
             columns,
             local_ordinals,
             writer,
+            _memory_permit: memory_permit,
         });
         Ok(())
     }
@@ -1591,6 +1960,27 @@ fn segment_schema(layout: DescriptorLayout) -> Result<SchemaRef> {
         false,
     )));
     Ok(Arc::new(Schema::new(fields)))
+}
+
+fn parquet_writer_permit(
+    budget: &ResourceBudget,
+    layout: DescriptorLayout,
+    label: &str,
+) -> Result<ResourcePermit> {
+    // ArrowReader/ArrowWriter may hold more than one record batch while
+    // encoding a row group. Reserve a conservative fixed batch allowance so a
+    // low explicit budget fails before the writer allocates unbounded buffers.
+    let bytes = layout
+        .row_len()
+        .checked_mul(8_192)
+        .and_then(|value| value.checked_mul(std::mem::size_of::<i32>()))
+        .and_then(|value| value.checked_mul(2))
+        .and_then(|value| value.checked_add(1 << 20))
+        .context("Parquet writer managed byte count overflow")?;
+    budget.try_reserve(
+        u64::try_from(bytes).context("Parquet writer bytes exceed u64")?,
+        label,
+    )
 }
 
 fn block_key(total_two_j: u16, parity: Parity) -> (u16, bool) {
@@ -1833,7 +2223,7 @@ fn copy_surviving_segment_to_parquet(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::csf_generation::generate_csfs;
+    use crate::csf_generation::{enumerate_occupations, generate_csfs};
     use crate::descriptor_v2::write_feature_row;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1992,6 +2382,7 @@ mod tests {
                     configurations_per_range: 1,
                     rows_per_batch: 2,
                     rows_per_segment: 3,
+                    ..StreamingGenerationOptions::default()
                 },
             )
             .unwrap();
@@ -2055,6 +2446,7 @@ mod tests {
                 configurations_per_range: 1,
                 rows_per_batch: 2,
                 rows_per_segment: 3,
+                ..StreamingGenerationOptions::default()
             },
         )
         .unwrap();
@@ -2096,6 +2488,7 @@ mod tests {
                 configurations_per_range: 1,
                 rows_per_batch: 2,
                 rows_per_segment: 3,
+                ..StreamingGenerationOptions::default()
             },
         )
         .unwrap();
@@ -2122,6 +2515,9 @@ mod tests {
                 .collect(),
             unique_occupations: generated.unique_occupations,
             record_count: generated.record_count + duplicate.record_count,
+            stage_stats: generated.stage_stats.clone(),
+            budget: generated.budget.clone(),
+            resource_stats: generated.resource_stats.clone(),
         };
         let deduplicated = deduplicate_v2_descriptor_segments(
             &duplicated,
@@ -2160,7 +2556,8 @@ mod tests {
         let bucket = buckets.finish().unwrap().pop().unwrap();
         let mut bitset = SurvivorBitset::new(root.join("survivors.bitset"), 4).unwrap();
         let mut stats = DeduplicationStats::default();
-        deduplicate_bucket(bucket, 6, &mut bitset, &mut stats).unwrap();
+        let budget = ResourceBudget::unlimited();
+        deduplicate_bucket(bucket, 6, &mut bitset, &mut stats, &budget, 4).unwrap();
         assert_eq!(stats.generated_count, 4);
         assert_eq!(stats.unique_count, 3);
         assert_eq!(stats.duplicate_count, 1);
@@ -2186,6 +2583,7 @@ mod tests {
                 configurations_per_range: 1,
                 rows_per_batch: 2,
                 rows_per_segment: 3,
+                ..StreamingGenerationOptions::default()
             },
         )
         .unwrap();

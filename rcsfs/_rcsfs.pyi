@@ -77,6 +77,7 @@ def generate_disk_outputs_from_transcript(
     header_output: str,
     scratch_dir: str,
     threads: int | None = None,
+    memory_budget_mib: int | None = None,
 ) -> CsfGenerationStats: ...
 def select_interacting_csfs(
     reference_csf: str,

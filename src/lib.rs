@@ -1,7 +1,7 @@
 use arrow::record_batch::RecordBatchIterator;
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyDictMethods};
+use pyo3::types::{PyDict, PyDictMethods, PyList, PyListMethods};
 use pyo3_arrow::PyRecordBatchReader;
 use std::path::Path;
 
@@ -397,7 +397,7 @@ fn generate_csfs_from_transcript(
 /// disk pipeline.  Python owns the final multi-file transaction and optional
 /// CSF-three-line Parquet conversion.
 #[pyfunction]
-#[pyo3(signature = (transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None))]
+#[pyo3(signature = (transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None, memory_budget_mib=None))]
 #[allow(clippy::too_many_arguments)]
 fn generate_disk_outputs_from_transcript(
     py: Python,
@@ -408,20 +408,31 @@ fn generate_disk_outputs_from_transcript(
     header_output: String,
     scratch_dir: String,
     threads: Option<usize>,
+    memory_budget_mib: Option<usize>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     if matches!(threads, Some(0)) {
         return Err(PyValueError::new_err("threads must be greater than 0"));
     }
+    if matches!(memory_budget_mib, Some(0)) {
+        return Err(PyValueError::new_err(
+            "memory_budget_mib must be greater than 0",
+        ));
+    }
+    let options = crate::csf_generation::GenerationOptions::from_api(
+        threads,
+        memory_budget_mib,
+        Some(Path::new(&scratch_dir).to_path_buf()),
+    )
+    .map_err(|error| PyValueError::new_err(format!("invalid generation options: {error:#}")))?;
     let stats = py
         .detach(|| {
-            crate::csf_generation::streaming::generate_disk_outputs_from_transcript(
+            crate::csf_generation::streaming::generate_disk_outputs_from_transcript_with_options(
                 &transcript,
                 Path::new(&csf_output),
                 Path::new(&csf_parquet_output),
                 Path::new(&descriptor_output),
                 Path::new(&header_output),
-                Path::new(&scratch_dir),
-                threads,
+                &options,
             )
         })
         .map_err(|error| PyIOError::new_err(format!("{error:#}")))?;
@@ -439,5 +450,31 @@ fn generate_disk_outputs_from_transcript(
     output.set_item("block_count", stats.block_count)?;
     output.set_item("csf_bytes", stats.csf_bytes)?;
     output.set_item("descriptor_bytes", stats.descriptor_bytes)?;
+    let resource_stats = PyDict::new(py);
+    resource_stats.set_item("memory_budget_mib", stats.resource_stats.memory_budget_mib)?;
+    resource_stats.set_item("budget_bytes", stats.resource_stats.budget_bytes)?;
+    resource_stats.set_item(
+        "peak_managed_bytes",
+        stats.resource_stats.peak_managed_bytes,
+    )?;
+    resource_stats.set_item(
+        "current_managed_bytes",
+        stats.resource_stats.current_managed_bytes,
+    )?;
+    resource_stats.set_item("occupation_bytes", stats.resource_stats.occupation_bytes)?;
+    output.set_item("resource_stats", resource_stats)?;
+    let stage_stats = PyList::empty(py);
+    for stage in stats.stage_stats {
+        let item = PyDict::new(py);
+        item.set_item("name", stage.name)?;
+        item.set_item("elapsed_millis", stage.elapsed_millis)?;
+        item.set_item("cpu_millis", stage.cpu_millis)?;
+        item.set_item("input_records", stage.input_records)?;
+        item.set_item("output_records", stage.output_records)?;
+        item.set_item("input_bytes", stage.input_bytes)?;
+        item.set_item("output_bytes", stage.output_bytes)?;
+        stage_stats.append(item)?;
+    }
+    output.set_item("stage_stats", stage_stats)?;
     Ok(output.into())
 }

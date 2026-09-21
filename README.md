@@ -436,7 +436,8 @@ record_count: 452373
 block_count: 7
 ```
 
-Flags: `--generate-descriptors`, `--normalize`, `--threads N`, `--json`.
+Flags: `--generate-descriptors`, `--normalize`, `--threads N`,
+`--memory-budget-mib MiB`, `--json`.
 
 For reproducible batch runs, use a TOML configuration instead of the interactive
 dialog. `generate_descriptors` defaults to `false`; when enabled, generation
@@ -497,10 +498,17 @@ normalize = false
 Run it with `uv run rcsfs csfsgenerate --config generation.toml`. By default
 only the CSF text is written. With `generate_descriptors = true`, the command
 also writes the CSF Parquet and header TOML, followed by descriptor Parquet and
-its TOML sidecar. Descriptor CSV output is not supported. `csfsgenerate`
-currently always writes **V1** descriptors regardless of the library-wide V2
-default described below; use `rcsfs gen-descriptors` for V2 output from an
-already-generated CSF Parquet file.
+its TOML sidecar. Descriptor CSV output is not supported. TOML/config
+descriptor runs select the disk backend by default and write reversible **V2**
+descriptors. Add
+`memory_budget_mib = <MiB>` under `[generate]`, or pass
+`--memory-budget-mib`, to enforce the managed-memory budget for disk generation.
+With `--json`, the result also contains per-stage wall/CPU timing and logical
+byte counters in `stage_stats`, together with managed-memory counters in
+`resource_stats`. The memory budget does not cap RSS, allocator overhead, or
+thread stacks.
+The interactive in-memory compatibility path remains separate and still emits
+legacy V1 descriptors; it is not the bounded disk path described here.
 
 ### `rcsfs gen-descriptors` — descriptor Parquet from a CSF Parquet file
 
@@ -514,7 +522,8 @@ uv run rcsfs gen-descriptors csf.parquet descriptors.parquet \
 ```
 
 `--descriptor-version {1,2}` selects the format (default: `2`); `--normalize` is V1-only and
-errors if combined with `--descriptor-version 2`. This command also writes a
+errors if combined with `--descriptor-version 2`. The TOML/config transcript
+generation path uses V2 and does not silently fall back to V1. This command also writes a
 `{output_stem}.toml` sidecar mirroring the descriptor version and subshell list, for tools
 that read TOML without opening the Parquet file.
 
@@ -595,7 +604,8 @@ rather than treated as an identity selection.
 | `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | Rebuild a CSF text file from a V2 descriptor Parquet file and its source header TOML |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | Reorder a CSF list into zero-order + first-order space per symmetry block |
 | `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | Write a conservative, non-exact upper bound of interacting candidates; returned stats always include `exact=False` |
-| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` (always writes V1 descriptors) |
+| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` |
+| `generate_disk_outputs_from_transcript(transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None, *, memory_budget_mib=None)` | Generate staged CSF and reversible V2 outputs with managed-memory accounting |
 
 ## Input Format
 

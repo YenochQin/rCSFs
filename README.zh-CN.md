@@ -358,7 +358,7 @@ uv run cargo run --release --example generate_csfs -- \
 
 ### `rcsfs csfsgenerate` —— 生成新的 CSF 列表
 
-除了交互式问答外，也可以使用 TOML 配置进行可复现的批处理。默认只生成 CSF 文本；将 `generate_descriptors` 设为 `true` 后，还会生成 CSF Parquet、header TOML、描述符 Parquet 和描述符 TOML sidecar。CSV 描述符输出不再支持。**`csfsgenerate` 目前始终写出 V1 描述符**，与库级别默认的 V2 无关（暂缓实现；参见设计文档的迁移计划）；需要 V2 输出时请改用已生成好的 CSF Parquet 配合 `gen-descriptors`。
+除了交互式问答外，也可以使用 TOML 配置进行可复现的批处理。默认只生成 CSF 文本；将 `generate_descriptors` 设为 `true` 后，还会生成 CSF Parquet、header TOML、描述符 Parquet 和描述符 TOML sidecar。CSV 描述符输出不再支持。TOML/config 描述符运行默认使用 disk backend，直接写出可逆的 **V2 描述符**，不会自动回退到 V1；V2 不支持 `normalize=true`。可在 `[generate]` 中设置 `memory_budget_mib`，或使用 `--memory-budget-mib`，限制受管内存预算。使用 `--json` 时还会返回阶段耗时、逻辑字节数和资源统计。交互式 in-memory 兼容路径仍使用旧 V1，不属于这条受管磁盘路径。
 
 ```toml
 [generate]
@@ -448,7 +448,8 @@ uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
 | `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | 根据 V2 描述符 Parquet 文件及其来源 header TOML 重建 CSF 文本文件 |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | 按对称性分块将 CSF 列表重排为零级 + 一级空间 |
 | `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | 写出保守且非精确的相互作用候选上界；统计固定包含 `exact=False` |
-| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | 从内存中的 `rcsfgenerate.log` 格式 transcript 生成 CSF；`rcsfs csfsgenerate` 的底层实现（始终写出 V1 描述符） |
+| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | 从内存中的 `rcsfgenerate.log` 格式 transcript 生成 CSF；`rcsfs csfsgenerate` 的内存路径底层实现 |
+| `generate_disk_outputs_from_transcript(transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None, *, memory_budget_mib=None)` | 生成暂存的 CSF 和可逆 V2 输出，并返回阶段及受管内存统计 |
 
 ## 输入数据格式
 

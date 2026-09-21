@@ -58,6 +58,8 @@ from ._types import (
     ConversionStats,
     CsfBlockInfo,
     CsfDataStats,
+    CsfGenerationResourceStats,
+    CsfGenerationStageStats,
     CsfGenerationStats,
     CsfHeaderData,
     CsfHeaderInfo,
@@ -611,12 +613,17 @@ def generate_disk_outputs_from_transcript(
     header_output: str | Path,
     scratch_dir: str | Path,
     threads: int | None = None,
+    *,
+    memory_budget_mib: int | None = None,
 ) -> CsfGenerationStats:
     """Generate staged CSF and reversible V2 descriptors with bounded memory.
 
     This lower-level API intentionally writes only to caller-owned staging
     paths. The CLI uses it inside its output transaction before it publishes
     the CSF text, CSF Parquet, header and descriptor artifacts together.
+    ``memory_budget_mib`` is a managed-memory accounting limit for occupation,
+    generation-batch, de-duplication, bitset, and writer reservations. It does
+    not cap process RSS, allocator overhead, or thread stacks.
     """
     from ._rcsfs import generate_disk_outputs_from_transcript as native_generate
 
@@ -628,6 +635,7 @@ def generate_disk_outputs_from_transcript(
         header_output=str(header_output),
         scratch_dir=str(scratch_dir),
         threads=threads,
+        memory_budget_mib=memory_budget_mib,
     )
 
 
@@ -664,6 +672,8 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     "CsfRestoreStats",
     "PartitionStats",
     "CsfGenerationStats",
+    "CsfGenerationResourceStats",
+    "CsfGenerationStageStats",
     "InteractionHamiltonian",
     "InteractionMethod",
     "InteractionBlockStats",

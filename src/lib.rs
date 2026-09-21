@@ -113,7 +113,7 @@ fn read_csfs_arrow(
                 strict,
             )
         })
-        .map_err(|error| PyIOError::new_err(error.to_string()))?;
+        .map_err(|error| PyIOError::new_err(format!("{error:#}")))?;
 
     let header_info = PyDict::new(py);
     header_info.set_item("header_lines", &header_data.header_info.header_lines)?;
@@ -319,7 +319,7 @@ fn partition_csfs(
         Err(e) => {
             let d = PyDict::new(py);
             d.set_item("success", false)?;
-            d.set_item("error", e.to_string())?;
+            d.set_item("error", format!("{e:#}"))?;
             Ok(d.into())
         }
     }
@@ -387,7 +387,7 @@ fn generate_csfs_from_transcript(
         Err(e) => {
             let d = PyDict::new(py);
             d.set_item("success", false)?;
-            d.set_item("error", e.to_string())?;
+            d.set_item("error", format!("{e:#}"))?;
             Ok(d.into())
         }
     }
@@ -424,7 +424,7 @@ fn generate_disk_outputs_from_transcript(
                 threads,
             )
         })
-        .map_err(|error| PyIOError::new_err(error.to_string()))?;
+        .map_err(|error| PyIOError::new_err(format!("{error:#}")))?;
     let output = PyDict::new(py);
     output.set_item("success", true)?;
     output.set_item("output_file", csf_output)?;

@@ -155,6 +155,53 @@ class CsfGenerationPlanStats(TypedDict):
     unsplittable_records: int
 
 
+class CsfGenerationEstimateBytes(TypedDict):
+    """Estimated size of one path of a disk generation run, in bytes.
+
+    ``scratch_peak`` covers the Arrow segments, de-duplication buckets, the
+    recursive repartition allowance and the survivor bitsets, which coexist.
+    ``staged_outputs`` is the set the CLI publishes from, and it exists at the
+    same time as the published files because publication copies.
+    ``required_*`` are those values with the model's safety margin applied.
+    """
+
+    segments: int
+    root_buckets: int
+    recursive_buckets: int
+    survivor_bitsets: int
+    scratch_peak: int
+    descriptor: int
+    csf_text: int
+    csf_parquet: int
+    staged_outputs: int
+    required_scratch: int
+    required_output: int
+
+
+class CsfGenerationEstimate(TypedDict):
+    """Counted workload and capacity estimate for a transcript.
+
+    Produced without creating a scratch directory or writing any output. Every
+    estimate is an upper bound derived from the ratios listed in
+    ``assumptions``; the ratios come from the registered benchmark inputs and
+    the unmeasured terms are assumed conservatively rather than as zero.
+    """
+
+    success: bool
+    unique_occupations: int
+    pre_deduplication_records: int
+    peel_subshells: int
+    v2_columns: int
+    enumeration_millis: int
+    planning_millis: int
+    plan_stats: CsfGenerationPlanStats
+    bytes: CsfGenerationEstimateBytes
+    assumptions: list[str]
+    #: ``"restart"``: scratch is not bound to an input hash or format version,
+    #: so a failed run cannot continue from it.
+    failure_recovery: Literal["restart"]
+
+
 class CsfGenerationStats(TypedDict):
     """Statistics returned from transcript-driven CSF generation."""
 

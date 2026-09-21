@@ -208,3 +208,88 @@ def test_extension_positional_signature(tmp_path: Path) -> None:
         generate_csfs_from_transcript(
             transcript, str(tmp_path / "other.c"), descriptor_path=None
         )
+
+
+def test_estimate_only_reports_capacity_without_writing(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    config = config_file(tmp_path)
+    assert cli.main(["csfsgenerate", "--config", str(config), "--estimate-only", "--json"]) == 0
+    payload = json.loads(capfd.readouterr().out)
+    assert payload["success"] is True
+    assert payload["estimate_only"] is True
+    # An estimate must not create scratch, staging or output files.
+    assert set(tmp_path.iterdir()) == {config}
+    assert payload["unique_occupations"] == payload["plan_stats"]["unique_occupations"]
+    assert payload["pre_deduplication_records"] > 0
+    assert payload["bytes"]["required_scratch"] > payload["bytes"]["scratch_peak"]
+    assert payload["bytes"]["required_output"] > payload["bytes"]["staged_outputs"]
+    assert payload["assumptions"]
+    # Scratch is not bound to an input hash or format version, so a failed run
+    # cannot be resumed from it.
+    assert payload["failure_recovery"] == "restart"
+    assert payload["space_checks"]
+
+
+def test_estimate_matches_the_run_it_predicts(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    config = config_file(tmp_path)
+    assert cli.main(["csfsgenerate", "--config", str(config), "--estimate-only", "--json"]) == 0
+    estimate = json.loads(capfd.readouterr().out)
+    assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 0
+    generated = json.loads(capfd.readouterr().out)
+    assert estimate["plan_stats"]["task_count"] == generated["plan_stats"]["task_count"]
+    assert estimate["pre_deduplication_records"] == generated["generated_count"]
+    assert (
+        estimate["plan_stats"]["estimated_total_records"]
+        == generated["plan_stats"]["estimated_total_records"]
+    )
+
+
+def test_estimate_only_rejects_the_in_memory_path(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """An estimate describes the disk path; asking for it elsewhere is an error."""
+    config = config_file(tmp_path)
+    assert (
+        cli.main(
+            [
+                "csfsgenerate",
+                "--config",
+                str(config),
+                "--estimate-only",
+                "--generation-storage",
+                "memory",
+            ]
+        )
+        == 1
+    )
+    captured = capfd.readouterr()
+    assert "estimate_only covers the disk descriptor path" in captured.err
+    assert set(tmp_path.iterdir()) == {config}
+
+
+def test_destination_space_check_refuses_an_impossible_requirement(
+    tmp_path: Path,
+) -> None:
+    """A destination that cannot hold the artifacts is refused, not discovered late."""
+    estimate = {"bytes": {"staged_outputs": 10, "required_output": 100}}
+    with pytest.raises(ValueError, match="Not enough free space"):
+        cli._check_destination_space(estimate, {tmp_path / "out.c": 1 << 62})
+
+
+def test_destination_space_check_reports_an_unreadable_directory(
+    tmp_path: Path,
+) -> None:
+    """An unmeasurable destination is reported as unchecked rather than sufficient."""
+    estimate = {"bytes": {"staged_outputs": 10, "required_output": 100}}
+    checks = cli._check_destination_space(estimate, {tmp_path / "missing" / "out.c": 1})
+    assert checks == [
+        {
+            "path": str(tmp_path / "missing"),
+            "required_bytes": 10,
+            "free_bytes": None,
+            "sufficient": None,
+        }
+    ]

@@ -19,7 +19,7 @@ const MANIFEST: &str = include_str!("fixtures/transcripts.toml");
 
 /// Every fixture the manifest may reference, compiled in and also checked
 /// against the file on disk so a build-time snapshot cannot hide a drift.
-const FIXTURES: [(&str, &str); 2] = [
+const FIXTURES: [(&str, &str); 3] = [
     (
         "b1_cc1_5spdfg_3exc.rcsfgenerate",
         include_str!("fixtures/b1_cc1_5spdfg_3exc.rcsfgenerate"),
@@ -27,6 +27,10 @@ const FIXTURES: [(&str, &str); 2] = [
     (
         "b2_cc1_fullas_2exc.rcsfgenerate",
         include_str!("fixtures/b2_cc1_fullas_2exc.rcsfgenerate"),
+    ),
+    (
+        "b3_cc1_9spdfg_4exc.rcsfgenerate",
+        include_str!("fixtures/b3_cc1_9spdfg_4exc.rcsfgenerate"),
     ),
 ];
 
@@ -92,6 +96,18 @@ fn registered_benchmark_transcripts_match_their_manifest() {
             .unwrap_or_else(|error| panic!("{file} is not a valid transcript: {error:#}"));
         assert_eq!(request.min_two_j, 8);
         assert_eq!(request.max_two_j, 8);
+        // An entry without a registered total cannot serve as a baseline.
+        assert!(entry_integer(entry, "records", file) > 0);
+        // An entry marked `manual` is one whose enumeration is too expensive for
+        // the default suite. Its hash is checked above; its counts are verified
+        // by scripts/estimate_v2_generation.py, which counts without generating.
+        if entry
+            .get("manual")
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
         let occupations = enumerate_occupations(&request)
             .unwrap_or_else(|error| panic!("{file} failed to enumerate: {error:#}"));
         let registered = usize::try_from(entry_integer(entry, "unique_occupations", file)).unwrap();
@@ -100,8 +116,5 @@ fn registered_benchmark_transcripts_match_their_manifest() {
             registered,
             "{file} enumerated a different number of configurations"
         );
-        // The expensive totals are consumed by the benchmark script, but an
-        // entry without them cannot serve as a baseline at all.
-        assert!(entry_integer(entry, "records", file) > 0);
     }
 }

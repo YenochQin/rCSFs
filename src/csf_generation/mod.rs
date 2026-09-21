@@ -5,6 +5,7 @@
 //! splitting, multiple references and existing-list expansion are separate stages
 //! and are not inferred by this interface.
 
+pub(crate) mod capacity;
 mod occupations;
 mod options;
 mod pipeline;
@@ -22,9 +23,12 @@ pub use occupations::{
 pub(crate) use options::{
     GenerationOptions, ResourceBudget, ResourcePermit, ResourceStats, SegmentCompression,
 };
+pub(crate) use capacity::{
+    CapacityEstimate, SpaceCheck, estimate_capacity, preflight_run,
+};
 pub(crate) use planning::{
     GenerationPlan, PlanStats, PlannedTask, TaskSpan, estimate_workload, plan_generation,
-    report_plan,
+    report_plan, request_targets,
 };
 pub use pipeline::{
     TranscriptGenerationStats, WriteStats, generate_csfs_from_transcript, write_generated_csfs,

@@ -26,12 +26,30 @@ and expected counts by `tests/fixtures/transcripts.toml`:
 | --- | --- | --- |
 | B1 | `b1_cc1_5spdfg_3exc.rcsfgenerate` | 2.7M CSFs; the stage-mix baseline |
 | B2 | `b2_cc1_fullas_2exc.rcsfgenerate` | 560k CSFs; fast turnaround, wide active space |
+| B3 | `b3_cc1_9spdfg_4exc.rcsfgenerate` | 7.03M configurations / 5.81G CSFs; capacity acceptance only |
 
 `tests/benchmark_transcripts_test.rs` checks the hashes and the enumerated
 configuration counts on every `cargo test`. The 2J range, excitation count and
 record totals are cross-checked by `scripts/benchmark_v2_generation.py` against
 a real run, because generating millions of records does not belong in the
-default suite.
+default suite. B3 is marked `manual = true`: its hash is still checked, but its
+enumeration is too expensive for the default suite and its counts are verified
+by `scripts/estimate_v2_generation.py`, which counts without generating.
+
+## Capacity reports
+
+```bash
+source ../graspkit-tools/.venv/bin/activate
+python scripts/estimate_v2_generation.py tests/fixtures/b3_cc1_9spdfg_4exc.rcsfgenerate \
+  --threads 8 --destination . \
+  --output docs/benchmarks/<name>.json
+```
+
+The script verifies the transcript against the manifest, cross-checks the
+counted configuration and record totals against the registered ones, and reports
+the size of every path plus the free space of the destinations it is given. It
+creates no scratch and writes no artifact, so a full-scale input can be assessed
+without producing 5.8 billion CSFs.
 
 ## Running the disk-generation benchmark
 

@@ -17,7 +17,7 @@
   },
   "filesystem": {
     "free_bytes": 74561540096,
-    "path": "/var/folders/2z/35qt97v137g2b17wm7ns09cc0000gn/T",
+    "path": "<system-temp>",
     "total_bytes": 245107195904,
     "type": "apfs"
   },
@@ -522,7 +522,7 @@
       null
     ],
     "repeats": 3,
-    "scratch_root": "/var/folders/2z/35qt97v137g2b17wm7ns09cc0000gn/T",
+    "scratch_root": "<system-temp>",
     "scratch_sampling_interval_seconds": 0.2,
     "threads": [
       1,

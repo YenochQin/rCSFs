@@ -9,6 +9,8 @@ import pytest
 
 from rcsfs import (
     cli,
+    estimate_disk_generation,
+    generate_disk_outputs_from_transcript,
     get_parquet_info,
     read_peel_subshells,
     restore_csfs_from_descriptors,
@@ -270,26 +272,120 @@ def test_estimate_only_rejects_the_in_memory_path(
     assert set(tmp_path.iterdir()) == {config}
 
 
-def test_destination_space_check_refuses_an_impossible_requirement(
-    tmp_path: Path,
+def test_estimate_checks_every_volume_it_is_given(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    """A destination that cannot hold the artifacts is refused, not discovered late."""
-    estimate = {"bytes": {"staged_outputs": 10, "required_output": 100}}
-    with pytest.raises(ValueError, match="Not enough free space"):
-        cli._check_destination_space(estimate, {tmp_path / "out.c": 1 << 62})
+    """The estimate owns the space model, including the volumes the CLI adds."""
+    config = config_file(tmp_path)
+    transcript = "* ! Orbital order\n0\n1s(2,*)\n\n1s\n0,0\n0\nn\n"
+    report = estimate_disk_generation(
+        transcript,
+        scratch_dir=tmp_path,
+        staging_dir=tmp_path,
+        destinations={
+            "csf_text": tmp_path / "out.c",
+            "descriptor": tmp_path / "out_descriptors.parquet",
+        },
+    )
+    del capfd, config
+    checks = report["space_checks"]
+    # Scratch, staging and both destinations share one volume here, so they are
+    # checked as a single requirement rather than four independent ones.
+    assert len(checks) == 1
+    check = checks[0]
+    assert check["required_bytes"] >= report["bytes"]["required_scratch"]
+    assert check["free_bytes"] is not None
+    assert check["sufficient"] is True
 
 
-def test_destination_space_check_reports_an_unreadable_directory(
-    tmp_path: Path,
-) -> None:
-    """An unmeasurable destination is reported as unchecked rather than sufficient."""
-    estimate = {"bytes": {"staged_outputs": 10, "required_output": 100}}
-    checks = cli._check_destination_space(estimate, {tmp_path / "missing" / "out.c": 1})
-    assert checks == [
+def test_an_unmeasurable_volume_is_reported_as_unchecked(tmp_path: Path) -> None:
+    """An estimate reports what it found; refusing is the run's decision.
+
+    A volume this platform cannot measure must not be reported as sufficient
+    either, which is why `sufficient` is None rather than True.
+    """
+    transcript = "* ! Orbital order\n0\n1s(2,*)\n\n1s\n0,0\n0\nn\n"
+    absent = tmp_path / "absent" / "scratch"
+    report = estimate_disk_generation(transcript, scratch_dir=absent)
+    # The reported path is the directory the free-space figure would describe.
+    assert report["space_checks"] == [
         {
-            "path": str(tmp_path / "missing"),
-            "required_bytes": 10,
+            "path": str(absent.parent),
+            "required_bytes": report["bytes"]["required_scratch"],
             "free_bytes": None,
             "sufficient": None,
         }
     ]
+
+
+def test_the_run_api_carries_the_space_policy(tmp_path: Path) -> None:
+    """The generation API takes the opt-out the CLI flag maps onto.
+
+    The refusal itself is a Rust unit test over `check_space`: this platform
+    reports free space everywhere, so a Python test cannot construct the
+    unmeasurable or insufficient case without a dedicated filesystem.
+    """
+    transcript = "* ! Orbital order\n0\n1s(2,*)\n\n1s\n0,0\n0\nn\n"
+    stats = generate_disk_outputs_from_transcript(
+        transcript,
+        tmp_path / "out.c",
+        tmp_path / "out.parquet",
+        tmp_path / "out_descriptors.parquet",
+        tmp_path / "out_header.toml",
+        tmp_path / "scratch",
+        allow_unchecked_space=True,
+    )
+    assert stats["success"] is True
+
+
+def test_estimate_and_generation_reject_the_same_low_budget(tmp_path: Path) -> None:
+    """An estimate must not succeed where the run it predicts would fail.
+
+    The registered B2 input enumerates ~17 MiB of occupation arena, so a 1 MiB
+    budget rejects both at enumeration. Charging the estimate an unlimited arena
+    would have reported success for a run that cannot start.
+    """
+    transcript = (Path(__file__).parent / "fixtures" / "b2_cc1_fullas_2exc.rcsfgenerate").read_text()
+    with pytest.raises(OSError, match="memory budget exceeded"):
+        estimate_disk_generation(transcript, memory_budget_mib=1)
+    with pytest.raises(OSError, match="memory budget exceeded"):
+        generate_disk_outputs_from_transcript(
+            transcript,
+            tmp_path / "out.c",
+            tmp_path / "out.parquet",
+            tmp_path / "out_descriptors.parquet",
+            tmp_path / "out_header.toml",
+            tmp_path / "scratch",
+            memory_budget_mib=1,
+        )
+    # Neither attempt may leave an artifact behind. The API owns the scratch
+    # directory it was asked to create; the CLI removes its own on failure.
+    assert [
+        path
+        for path in tmp_path.iterdir()
+        if path.name != "scratch"
+    ] == []
+
+
+def test_cli_accepts_the_unchecked_space_opt_out(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The opt-out is plumbed through, not silently ignored."""
+    config = config_file(tmp_path)
+    assert (
+        cli.main(
+            [
+                "csfsgenerate",
+                "--config",
+                str(config),
+                "--estimate-only",
+                "--json",
+                "--allow-unchecked-space",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capfd.readouterr().out)
+    # Space is measurable here, so the checks still ran and still passed.
+    assert payload["space_checks"]
+    assert all(check["sufficient"] is True for check in payload["space_checks"])

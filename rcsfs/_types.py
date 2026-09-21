@@ -178,6 +178,17 @@ class CsfGenerationEstimateBytes(TypedDict):
     required_output: int
 
 
+class CsfGenerationSpaceCheck(TypedDict):
+    """One volume's requirement: the largest simultaneous sum of its contents."""
+
+    path: str
+    required_bytes: int
+    #: ``None`` when the platform did not report free space; the surrounding
+    #: call fails in that case unless unchecked space was accepted explicitly.
+    free_bytes: int | None
+    sufficient: bool | None
+
+
 class CsfGenerationEstimate(TypedDict):
     """Counted workload and capacity estimate for a transcript.
 
@@ -197,6 +208,9 @@ class CsfGenerationEstimate(TypedDict):
     plan_stats: CsfGenerationPlanStats
     bytes: CsfGenerationEstimateBytes
     assumptions: list[str]
+    #: One entry per volume the estimate was asked about, with the sum of the
+    #: requirements that coexist on it. Absent when no paths were supplied.
+    space_checks: NotRequired[list[CsfGenerationSpaceCheck]]
     #: ``"restart"``: scratch is not bound to an input hash or format version,
     #: so a failed run cannot continue from it.
     failure_recovery: Literal["restart"]

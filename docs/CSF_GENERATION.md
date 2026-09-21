@@ -278,11 +278,22 @@ they disagree.
 
 The same counts size the run. Before the first segment is written, the disk path
 estimates the Arrow segments, root and recursive de-duplication buckets, the
-survivor bitsets and the published artifacts, applies a 25% safety margin and
-checks the scratch and staging volumes; the CLI additionally checks each final
-destination, because publication copies the staged set into paths only the CLI
-knows. A run that cannot fit is refused while the scratch directory is still
-empty.
+survivor bitsets and the published artifacts and applies a 25% safety margin.
+
+Space is then checked **per volume, not per path**: requirements that share a
+filesystem are added together, because scratch and the staged set coexist during
+generation and the staged set coexists with its published copies during
+publication. Each volume is required to hold the larger of those two phases. The
+generation call checks the scratch and staging volumes; the CLI passes its final
+destinations to the estimate so one model covers all of them, since publication
+copies the staged set into paths only the CLI knows. A run that cannot fit is
+refused while the scratch directory is still empty.
+
+A volume the platform cannot measure fails the run rather than being skipped:
+`allow_unchecked_space=True` (CLI `--allow-unchecked-space`) is the explicit way
+to accept an unchecked pre-flight. This platform check is the only automatic
+probe; there is no Windows implementation, so a Windows run must pass the
+opt-out or run where free space can be measured.
 
 Every ratio comes from the registered B1/B2 runs and is reported in the result's
 `assumptions`, together with the quantities that were never measured — most
@@ -293,11 +304,21 @@ allowance. Ratios and their measured ranges are registered in
 [docs/benchmarks](benchmarks/README.md).
 
 `estimate_disk_generation` performs the same enumeration, counting and
-scheduling without creating scratch or writing anything, and the CLI exposes it
-as `csfsgenerate --estimate-only` (requires the disk descriptor path). The
-report's `failure_recovery` is `"restart"`: scratch is not bound to an input
-hash or a format version, so a failed run is restarted rather than resumed, and
-a pre-flight cannot promise otherwise.
+scheduling without creating scratch or writing anything, charges the same
+`memory_budget_mib` to the occupation arena (so a low budget fails the estimate
+exactly as it fails the run), and reports the space checks for the paths it is
+given. The CLI exposes it as `csfsgenerate --estimate-only` (requires the disk
+descriptor path). The report's `failure_recovery` is `"restart"`: scratch is not
+bound to an input hash or a format version, so a failed run is restarted rather
+than resumed, and a pre-flight cannot promise otherwise. The CLI removes the
+scratch directory it created whether generation succeeds or fails, so a retry
+does not collide with its own leftovers.
+
+The plan is also a partition of the work: a run asserts that the number of
+generated records equals the counted total, and every oversized configuration
+asserts that its tasks account for exactly the records counted for it. A
+scheduling mistake that drops work therefore fails the run instead of producing
+a shorter output file.
 
 Managed memory and RSS are reported separately. On B1/B2 the managed peak was
 29-88 MiB against 371-660 MiB of process RSS: the accounting covers the

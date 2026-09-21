@@ -79,11 +79,15 @@ def generate_disk_outputs_from_transcript(
     scratch_dir: str,
     threads: int | None = None,
     memory_budget_mib: int | None = None,
+    allow_unchecked_space: bool = False,
 ) -> CsfGenerationStats: ...
 def estimate_disk_generation(
     transcript: str,
     threads: int | None = None,
     memory_budget_mib: int | None = None,
+    scratch_dir: str | None = None,
+    staging_dir: str | None = None,
+    destinations: list[tuple[str, str]] | None = None,
 ) -> CsfGenerationEstimate: ...
 def select_interacting_csfs(
     reference_csf: str,

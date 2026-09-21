@@ -83,6 +83,7 @@ class CsfsGenerateArgs(Protocol):
     threads: int | None
     memory_budget_mib: int | None
     estimate_only: bool
+    allow_unchecked_space: bool
     generation_storage: Literal["memory", "disk"] | None
     scratch_dir: Path | None
     json: bool
@@ -333,6 +334,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Existing directory for disk-generation scratch data.",
+    )
+    _ = csfsgenerate.add_argument(
+        "--allow-unchecked-space",
+        action="store_true",
+        help=(
+            "Proceed when a volume's free space cannot be measured on this platform. "
+            "By default the run is refused instead of skipping the pre-flight."
+        ),
     )
     _ = csfsgenerate.add_argument(
         "--estimate-only",
@@ -814,67 +823,34 @@ def _print_csfsgenerate_summary(stats: Mapping[str, object]) -> None:
                     print(f"plan_estimated_records_per_task_{key}: {value}")
 
 
-def _estimate_bytes(estimate: Mapping[str, object], key: str) -> int:
-    """Read one byte estimate from a capacity report, rejecting a missing one."""
-    bytes_table = estimate.get("bytes")
-    if not isinstance(bytes_table, Mapping):
-        raise ValueError("Capacity estimate is missing its byte table")
-    value = cast(Mapping[str, object], bytes_table).get(key)
-    if not isinstance(value, int):
-        raise ValueError(f"Capacity estimate is missing the {key} byte count")
-    return value
+def _require_usable_space(
+    estimate: Mapping[str, object], *, allow_unchecked: bool
+) -> None:
+    """Refuse to start when the reported space checks are not a clearance.
 
-
-def _check_destination_space(
-    estimate: Mapping[str, object], destinations: Mapping[Path, int]
-) -> list[dict[str, object]]:
-    """Check each destination volume against its own share of the estimate.
-
-    Publication copies the staged set into its destinations, so those files
-    exist on top of everything the run already wrote. Only the destination that
-    receives each artifact is charged for it, which is why this is done here
-    rather than inside the generation call: the final paths are the CLI's.
+    Insufficient space always stops the run. A volume the platform cannot
+    measure stops it too unless the caller accepted an unchecked pre-flight, so
+    an unknown value is never read as sufficient by default.
     """
-    staged = _estimate_bytes(estimate, "staged_outputs")
-    required = _estimate_bytes(estimate, "required_output")
-    # Derive the model's safety margin from the report rather than repeating it.
-    margin_numerator = required
-    margin_denominator = max(staged, 1)
-    by_directory: dict[Path, int] = {}
-    for path, size in destinations.items():
-        parent = path.parent if path.parent != Path("") else Path(".")
-        by_directory[parent] = by_directory.get(parent, 0) + size
-    checks: list[dict[str, object]] = []
-    for directory, size in sorted(by_directory.items(), key=lambda item: str(item[0])):
-        needed = size * margin_numerator // margin_denominator
-        try:
-            free = shutil.disk_usage(directory).free
-        except OSError:
-            checks.append(
-                {
-                    "path": str(directory),
-                    "required_bytes": needed,
-                    "free_bytes": None,
-                    "sufficient": None,
-                }
-            )
+    checks = estimate.get("space_checks")
+    if not isinstance(checks, list):
+        return
+    for value in cast(list[object], checks):
+        if not isinstance(value, Mapping):
             continue
-        sufficient = free >= needed
-        checks.append(
-            {
-                "path": str(directory),
-                "required_bytes": needed,
-                "free_bytes": free,
-                "sufficient": sufficient,
-            }
-        )
-        if not sufficient:
+        check = cast(Mapping[str, object], value)
+        path = check.get("path")
+        required = check.get("required_bytes")
+        if check.get("sufficient") is False:
             raise ValueError(
-                f"Not enough free space for the published outputs at {directory}: "
-                f"{needed} bytes required (including the safety margin), "
-                f"{free} bytes available"
+                f"Not enough free space at {path}: the run needs {required} bytes "
+                f"(including the safety margin) and {check.get('free_bytes')} are available"
             )
-    return checks
+        if check.get("sufficient") is None and not allow_unchecked:
+            raise ValueError(
+                f"Cannot check free space at {path}: this platform does not report it. "
+                f"Pass --allow-unchecked-space to run without the pre-flight."
+            )
 
 
 def _print_estimate_summary(
@@ -959,26 +935,32 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
             "estimate_only covers the disk descriptor path; add --generate-descriptors"
         )
     if args.generation_storage == "disk":
+        scratch_base = args.scratch_dir if args.scratch_dir is not None else Path.cwd()
+        # The estimate run every check itself, from the same model the
+        # generation path uses: requirements that share a volume are added and
+        # each phase is compared by its maximum. Only the paths are the CLI's
+        # business -- scratch, the staging directory and each destination.
         estimate = dict(
             estimate_disk_generation(
                 transcript,
                 args.threads,
                 memory_budget_mib=args.memory_budget_mib,
+                scratch_dir=scratch_base,
+                staging_dir=Path.cwd(),
+                destinations={
+                    "csf_text": args.output,
+                    "csf_parquet": csf_parquet,
+                    "descriptor": descriptor_parquet,
+                    "metadata": metadata,
+                },
             )
         )
-        # The Rust pre-flight covers scratch and the staging volume; the final
-        # destinations are only known here, and publication copies into them.
-        destinations_by_path = {
-            args.output: _estimate_bytes(estimate, "csf_text"),
-            csf_parquet: _estimate_bytes(estimate, "csf_parquet"),
-            header: 0,
-            descriptor_parquet: _estimate_bytes(estimate, "descriptor"),
-            metadata: 0,
-        }
-        estimate["space_checks"] = _check_destination_space(estimate, destinations_by_path)
         if args.estimate_only:
             estimate["estimate_only"] = True
             return estimate
+        # The estimate only reports; a run has to decide. This is that decision,
+        # made before the staging directory or the scratch directory exist.
+        _require_usable_space(estimate, allow_unchecked=args.allow_unchecked_space)
         _print_estimate_summary(estimate, file=sys.stderr)
 
     # The existing converters truncate their destinations. Run them only in a
@@ -1010,19 +992,25 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
                 raise FileExistsError(
                     f"Disk-generation scratch already exists: {scratch}"
                 )
-            stats = dict(
-                generate_disk_outputs_from_transcript(
-                    transcript,
-                    csf,
-                    parquet,
-                    descriptors,
-                    staged_header,
-                    scratch,
-                    threads=args.threads,
-                    memory_budget_mib=args.memory_budget_mib,
+            # The scratch directory is this operation's own; remove it whether
+            # generation succeeded or failed, so a failed run can be retried
+            # instead of colliding with its own leftovers.
+            try:
+                stats = dict(
+                    generate_disk_outputs_from_transcript(
+                        transcript,
+                        csf,
+                        parquet,
+                        descriptors,
+                        staged_header,
+                        scratch,
+                        threads=args.threads,
+                        memory_budget_mib=args.memory_budget_mib,
+                        allow_unchecked_space=args.allow_unchecked_space,
+                    )
                 )
-            )
-            shutil.rmtree(scratch, ignore_errors=True)
+            finally:
+                shutil.rmtree(scratch, ignore_errors=True)
         else:
             stats = dict(
                 generate_csfs_from_transcript(

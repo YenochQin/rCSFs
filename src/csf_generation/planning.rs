@@ -96,12 +96,17 @@ pub(crate) struct PlannedTask {
     pub(crate) estimated_records: u64,
 }
 
-/// A task that stays above the size target because its configuration cannot be
-/// divided further by state prefix.
+/// A task that stays above the size target because the planner cannot divide it
+/// any further.
+///
+/// `target` is the 2J the work belongs to, or `None` when the whole
+/// configuration is indivisible — which happens when its intermediate
+/// couplings can exceed the output field, so no state-prefix count exists for
+/// it.
 #[derive(Clone, Debug)]
 pub(crate) struct UnsplittableWork {
     pub(crate) configuration: usize,
-    pub(crate) target: u16,
+    pub(crate) target: Option<u16>,
     pub(crate) estimated_records: u64,
 }
 
@@ -434,30 +439,60 @@ fn split_configuration(
         request.max_two_j,
     )?;
     let counter = PreparedCounter::new(&prepared);
-    ensure!(
-        counter.chain_count_is_exact(),
-        "configuration {index} with {records} estimated records needs an exact count \
-         before it can be split, but its intermediate couplings can exceed the output field"
-    );
+    // The dynamic program cannot see the generator's per-selection `FIRST`
+    // flag, so a configuration whose intermediate couplings can exceed the
+    // output field is counted by the generator instead. That configuration must
+    // still be scheduled: refusing it here would fail a plan the workload
+    // counter already accepted, so it is split by 2J target only and reported
+    // as a long tail rather than rejected.
+    let exact = counter.chain_count_is_exact();
+    let first_task = tasks.len();
     let mut pending: Vec<u16> = Vec::new();
     let mut pending_records = 0u64;
     for &target in targets {
-        let count = counter.count(target, &[])?;
+        let count = if exact {
+            counter.count(target, &[])?
+        } else {
+            count_configuration_records(
+                &occupations.core_subshells,
+                configuration,
+                request.min_two_j,
+                request.max_two_j,
+                &[target],
+            )?
+        };
         if count == 0 {
             continue;
         }
         if count > target_size {
             flush_targets(tasks, index, &mut pending, &mut pending_records)?;
-            split_target_by_prefix(
-                &prepared,
-                &counter,
-                index,
-                target,
-                count,
-                target_size,
-                tasks,
-                unsplittable,
-            )?;
+            if exact {
+                split_target_by_prefix(
+                    &prepared,
+                    &counter,
+                    index,
+                    target,
+                    count,
+                    target_size,
+                    tasks,
+                    unsplittable,
+                )?;
+            } else {
+                // One target cannot be divided further without prefix counts.
+                unsplittable.push(UnsplittableWork {
+                    configuration: index,
+                    target: Some(target),
+                    estimated_records: count,
+                });
+                tasks.push(PlannedTask {
+                    ordinal: 0,
+                    span: TaskSpan::Targets {
+                        configuration: index,
+                        targets: vec![target],
+                    },
+                    estimated_records: count,
+                });
+            }
             continue;
         }
         if pending_records.saturating_add(count) > target_size {
@@ -468,7 +503,20 @@ fn split_configuration(
             .checked_add(count)
             .context("configuration target estimate overflow")?;
     }
-    flush_targets(tasks, index, &mut pending, &mut pending_records)
+    flush_targets(tasks, index, &mut pending, &mut pending_records)?;
+    // Every record of an oversized configuration must end up in exactly one of
+    // its tasks. This is the boundary where a split can silently drop work:
+    // a group of merged prefixes that publishes only its last prefix, or a
+    // target that is counted but never scheduled.
+    let scheduled = tasks[first_task..]
+        .iter()
+        .try_fold(0u64, |total, task| total.checked_add(task.estimated_records))
+        .context("configuration schedule total overflow")?;
+    ensure!(
+        scheduled == records,
+        "configuration {index} scheduled {scheduled} records but was counted at {records}"
+    );
+    Ok(())
 }
 
 fn flush_targets(
@@ -530,7 +578,7 @@ fn split_target_by_prefix(
         // generated, so it becomes one whole-target task.
         unsplittable.push(UnsplittableWork {
             configuration,
-            target,
+            target: Some(target),
             estimated_records: count,
         });
         tasks.push(PlannedTask {
@@ -561,7 +609,13 @@ fn split_target_by_prefix(
             );
             pending_records = 0;
         }
-        pending = prefix_index;
+        // `pending` is the first prefix of the open group and must only move
+        // when a group starts. Advancing it on every prefix would publish a
+        // range that begins at the group's last prefix while claiming the
+        // records of all of them, silently dropping the earlier ones.
+        if pending_records == 0 {
+            pending = prefix_index;
+        }
         pending_records = pending_records
             .checked_add(prefix_records)
             .context("state-prefix record estimate overflow")?;
@@ -578,7 +632,7 @@ fn split_target_by_prefix(
             );
             unsplittable.push(UnsplittableWork {
                 configuration,
-                target,
+                target: Some(target),
                 estimated_records: pending_records,
             });
             pending = prefix_index + 1;
@@ -639,6 +693,96 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::csf_generation::Subshell;
+
+    /// A state-prefix split must cover every non-empty prefix exactly once for
+    /// *every* task size.
+    ///
+    /// Merging several small prefixes into one task is where a split can lose
+    /// records: a group published as `first..last` while claiming the records of
+    /// the whole group drops every prefix before the first. Sweeping the task
+    /// size exercises the merge, the single-prefix overflow and the whole-target
+    /// fallback against one counted total.
+    #[test]
+    fn a_state_prefix_split_covers_every_prefix_at_every_task_size() {
+        let configuration = [SubshellOccupation {
+            subshell: "5g".parse::<Subshell>().unwrap(),
+            electrons: 4,
+        }];
+        let prepared = prepare_configuration(&[], &configuration, 0, 0).unwrap();
+        let counter = PreparedCounter::new(&prepared);
+        assert!(counter.chain_count_is_exact());
+        let prefixes = state_prefixes(&prepared, 4);
+        assert!(prefixes.len() >= 4, "the split needs several prefixes");
+        let counts = prefixes
+            .iter()
+            .map(|prefix| counter.count(0, prefix).unwrap())
+            .collect::<Vec<_>>();
+        let total: u64 = counts.iter().sum();
+        assert!(total > 0);
+        // At least one task size must merge two non-empty prefixes, or the
+        // sweep would not exercise the path it exists to protect.
+        let mut merged = false;
+
+        for target_size in 1..=total {
+            let mut tasks = Vec::new();
+            let mut unsplittable = Vec::new();
+            split_target_by_prefix(
+                &prepared,
+                &counter,
+                0,
+                0,
+                total,
+                target_size,
+                &mut tasks,
+                &mut unsplittable,
+            )
+            .unwrap();
+
+            let scheduled = tasks
+                .iter()
+                .try_fold(0u64, |sum, task| sum.checked_add(task.estimated_records))
+                .unwrap();
+            assert_eq!(
+                scheduled, total,
+                "task size {target_size} scheduled {scheduled} of {total} records"
+            );
+
+            let mut covered = vec![0usize; prefixes.len()];
+            for task in &tasks {
+                let TaskSpan::StatePrefixes { branches, .. } = &task.span else {
+                    panic!("a prefix split must only emit prefix tasks");
+                };
+                for index in branches.clone() {
+                    covered[index] += 1;
+                }
+                if branches.len() > 1 {
+                    merged = true;
+                }
+            }
+            for (index, &count) in counts.iter().enumerate() {
+                if count > 0 {
+                    // A non-empty prefix that no task walks is work the plan
+                    // counted and then dropped.
+                    assert_eq!(
+                        covered[index], 1,
+                        "prefix {index} holds {count} records but was covered {} times \
+                         at task size {target_size}",
+                        covered[index]
+                    );
+                } else {
+                    // An empty prefix may fall inside a neighbouring group's
+                    // range; walking it emits nothing.
+                    assert!(
+                        covered[index] <= 1,
+                        "prefix {index} was covered {} times at task size {target_size}",
+                        covered[index]
+                    );
+                }
+            }
+        }
+        assert!(merged, "the sweep never merged two prefixes");
+    }
 
     /// The distribution summary is the reporting surface for the plan, so its
     /// percentiles have to stay on real samples rather than interpolations.

@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### V2 磁盘生成观测与资源预算（2026-09-21）
+
+- TOML/config `csfsgenerate` 的描述符生成默认选择磁盘路径并直接写可逆
+  V2；该路径不自动回退到 V1，V2 与 `normalize=true` 的组合会明确报错。
+  交互式 in-memory 兼容路径仍保留旧 V1 行为。
+- 增加 `stage_stats` 和 `resource_stats`：报告枚举、CSF 生成、去重、描述符
+  合并和 CSF 还原的阶段耗时、CPU 时间、记录数、逻辑字节数，以及受管内存
+  预算和峰值。
+- 增加统一的 `GenerationOptions` 和 `memory_budget_mib`（CLI
+  `--memory-budget-mib`、TOML `[generate]`、Python keyword-only API、PyO3
+  binding/stub），预算不足时返回明确错误。该预算是受管内存记账，不是 RSS
+  硬限制。
+- 增加 range started/completed/CSF 行数进度报告、V2 disk round-trip 与资源
+  预算回归测试，并保留 CLI JSON 的既有字段。
+
 ### Structural interaction upper bound (2026-09-15)
 
 - Add a Rust/Python `select_interacting_csfs` file API and a

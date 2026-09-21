@@ -6,14 +6,19 @@
 //! and are not inferred by this interface.
 
 mod occupations;
+mod options;
 mod pipeline;
 mod states;
 #[allow(dead_code)] // Phase 4 owns the public transaction/CLI wiring.
 pub(crate) mod streaming;
 
+pub(crate) use occupations::enumerate_occupations_with_budget;
 pub use occupations::{
     EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, OccupationMode, Orbital,
     ReferenceConfiguration, ReferenceSubshell, enumerate_occupations,
+};
+pub(crate) use options::{
+    GenerationOptions, ResourceBudget, ResourcePermit, ResourceStats, SegmentCompression,
 };
 pub use pipeline::{
     TranscriptGenerationStats, WriteStats, generate_csfs_from_transcript, write_generated_csfs,

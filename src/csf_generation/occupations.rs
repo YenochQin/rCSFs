@@ -12,7 +12,8 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use super::{Subshell, SubshellOccupation};
+use super::{ResourceBudget, ResourcePermit, Subshell, SubshellOccupation};
+use std::mem::size_of;
 
 const ORBITAL_LETTERS: &[u8] = b"spdfghiklmn";
 
@@ -395,9 +396,76 @@ pub struct EnumeratedOccupations {
     pub configurations: Vec<EnumeratedConfiguration>,
 }
 
+/// Charges the non-spillable occupation arena while it is being built.
+///
+/// The charge intentionally includes a small safety factor because reference
+/// lists are merged by cloning into a second vector before the old vectors are
+/// released.  It is released as one scoped reservation when the caller drops
+/// the returned guard after generation has finished consuming the occupations.
+pub(crate) struct EnumerationCharge {
+    permit: ResourcePermit,
+}
+
+impl EnumerationCharge {
+    fn new(budget: ResourceBudget) -> Result<Self> {
+        Ok(Self {
+            permit: budget.try_reserve(0, "occupation enumeration")?,
+        })
+    }
+
+    fn add_configuration(&mut self, occupation_capacity: usize, key_capacity: usize) -> Result<()> {
+        let bytes = size_of::<EnumeratedConfiguration>()
+            .checked_add(
+                occupation_capacity
+                    .checked_mul(size_of::<SubshellOccupation>())
+                    .context("occupation capacity byte count overflow")?,
+            )
+            .and_then(|total| {
+                total.checked_add(
+                    key_capacity
+                        .checked_mul(size_of::<(u8, u8, u8)>())
+                        .unwrap_or(usize::MAX),
+                )
+            })
+            .and_then(|total| total.checked_add(32))
+            .context("occupation configuration byte count overflow")?;
+        // Account for the source lists and the temporary merged output.  This
+        // is intentionally conservative; it protects the non-spillable path
+        // without claiming to be an operating-system RSS limit.
+        let bytes = u64::try_from(bytes)
+            .ok()
+            .and_then(|value| value.checked_mul(3))
+            .context("occupation configuration byte count exceeds u64")?;
+        let next = self
+            .permit
+            .bytes()
+            .checked_add(bytes)
+            .context("occupation memory accounting overflow")?;
+        self.permit
+            .resize(next, "occupation enumeration")
+            .with_context(|| {
+                format!("cannot retain another occupation configuration ({bytes} bytes)")
+            })
+    }
+
+    pub(crate) fn bytes(&self) -> u64 {
+        self.permit.bytes()
+    }
+}
+
 /// Enumerate all nonrelativistic occupations, split each into relativistic
 /// partners, and merge reference lists using GRASP's `TEST/LIKA` ordering.
 pub fn enumerate_occupations(request: &ExcitationRequest) -> Result<EnumeratedOccupations> {
+    let (occupations, _charge) = enumerate_occupations_with_budget(request, None)?;
+    Ok(occupations)
+}
+
+/// Enumerate occupations while charging the non-spillable configuration
+/// structure against a shared generation budget.
+pub(crate) fn enumerate_occupations_with_budget(
+    request: &ExcitationRequest,
+    budget: Option<&ResourceBudget>,
+) -> Result<(EnumeratedOccupations, Option<EnumerationCharge>)> {
     ensure!(
         request.min_two_j <= request.max_two_j,
         "minimum 2J exceeds maximum 2J"
@@ -479,18 +547,22 @@ pub fn enumerate_occupations(request: &ExcitationRequest) -> Result<EnumeratedOc
         })
         .flat_map(|&orbital| relativistic_partners(orbital))
         .collect::<Vec<_>>();
+    let mut charge = budget.cloned().map(EnumerationCharge::new).transpose()?;
     let mut lists = Vec::new();
     for reference in &request.references {
         let fields = fields_for_reference(reference, &slots, &active_max, &core_set)?;
-        let list = enumerate_reference(&fields, request.max_excitations)?;
+        let list = enumerate_reference(&fields, request.max_excitations, charge.as_mut())?;
         lists.push(list);
     }
     let configurations = merge_lists(lists);
-    Ok(EnumeratedOccupations {
-        core_subshells,
-        active_subshells,
-        configurations,
-    })
+    Ok((
+        EnumeratedOccupations {
+            core_subshells,
+            active_subshells,
+            configurations,
+        },
+        charge,
+    ))
 }
 
 fn active_limits(active: &[Orbital]) -> Result<HashMap<u8, u8>> {
@@ -621,6 +693,7 @@ struct Partial {
 fn enumerate_reference(
     fields: &[SlotField],
     max_excitations: u8,
+    mut charge: Option<&mut EnumerationCharge>,
 ) -> Result<Vec<EnumeratedConfiguration>> {
     let walk = Walk {
         fields,
@@ -634,7 +707,13 @@ fn enumerate_reference(
     };
     let mut occupations = vec![0u8; fields.len()];
     let mut output = Vec::new();
-    enumerate_nonrel(&walk, Partial::default(), &mut occupations, &mut output)?;
+    enumerate_nonrel(
+        &walk,
+        Partial::default(),
+        &mut occupations,
+        &mut output,
+        &mut charge,
+    )?;
     output.sort_by(|left, right| right.key.cmp(&left.key));
     Ok(output)
 }
@@ -644,6 +723,7 @@ fn enumerate_nonrel(
     partial: Partial,
     occupations: &mut [u8],
     output: &mut Vec<EnumeratedConfiguration>,
+    charge: &mut Option<&mut EnumerationCharge>,
 ) -> Result<()> {
     if partial.varupp > walk.max_excitations || partial.varned > walk.max_excitations {
         return Ok(());
@@ -653,7 +733,7 @@ fn enumerate_nonrel(
         // before it reaches GEN, so one reference configuration only ever
         // yields CSFs of its own parity.
         if partial.electrons == walk.electrons && partial.parity == walk.parity {
-            split_configuration(walk.fields, occupations, output)?;
+            split_configuration(walk.fields, occupations, output, charge)?;
         }
         return Ok(());
     }
@@ -684,6 +764,7 @@ fn enumerate_nonrel(
                     },
                     occupations,
                     output,
+                    charge,
                 )?;
             }
         }
@@ -735,6 +816,7 @@ fn split_configuration(
     fields: &[SlotField],
     occupations: &[u8],
     output: &mut Vec<EnumeratedConfiguration>,
+    charge: &mut Option<&mut EnumerationCharge>,
 ) -> Result<()> {
     let key = fields
         .iter()
@@ -742,8 +824,16 @@ fn split_configuration(
         .map(|(_, &occupation)| (occupation, 0, 0))
         .collect::<Vec<_>>();
     let mut branches = Vec::new();
-    split_branches(fields, occupations, 0, &mut branches, Vec::new(), key)
-        .with_context(|| "failed to split nonrelativistic occupation")?;
+    split_branches(
+        fields,
+        occupations,
+        0,
+        &mut branches,
+        Vec::new(),
+        key,
+        charge,
+    )
+    .with_context(|| "failed to split nonrelativistic occupation")?;
     output.extend(branches);
     Ok(())
 }
@@ -755,8 +845,12 @@ fn split_branches(
     output: &mut Vec<EnumeratedConfiguration>,
     current: Vec<SubshellOccupation>,
     mut key: Vec<(u8, u8, u8)>,
+    charge: &mut Option<&mut EnumerationCharge>,
 ) -> Result<()> {
     if index == fields.len() {
+        if let Some(charge) = charge.as_deref_mut() {
+            charge.add_configuration(current.capacity(), key.capacity())?;
+        }
         output.push(EnumeratedConfiguration {
             occupations: current,
             key,
@@ -766,7 +860,7 @@ fn split_branches(
     let field = fields[index];
     let occupation = occupations[index];
     if field.mode == OccupationMode::Closed {
-        return split_branches(fields, occupations, index + 1, output, current, key);
+        return split_branches(fields, occupations, index + 1, output, current, key, charge);
     }
     for (lower, upper) in split_occupation(field.orbital, occupation) {
         let mut next = current.clone();
@@ -797,7 +891,15 @@ fn split_branches(
         }
         key[index].1 = upper;
         key[index].2 = lower;
-        split_branches(fields, occupations, index + 1, output, next, key.clone())?;
+        split_branches(
+            fields,
+            occupations,
+            index + 1,
+            output,
+            next,
+            key.clone(),
+            charge,
+        )?;
     }
     Ok(())
 }

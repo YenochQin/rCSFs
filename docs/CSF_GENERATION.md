@@ -1,5 +1,11 @@
 # Fixed-configuration CSF generation
 
+For the planned V2 disk-generation performance work, see the
+[V2 descriptor and CSF generation performance implementation plan](CSF_V2_GENERATION_PERFORMANCE_PLAN.md).
+It records the current measurements, staged changes, and acceptance criteria.
+The disk path now accepts a managed memory budget and reports its accounting
+alongside the stage timings; the budget is not an operating-system RSS limit.
+
 `csf_generation::generate_csfs` is the first serial implementation in phase C.
 It creates new CSFs for **one explicit relativistic occupation configuration**.
 The implementation runs entirely in Rust and returns `CompleteCsfFile` directly;
@@ -9,8 +15,10 @@ This interface covers the subshell-state and coupling enumeration performed by
 `rcsfgenerate90/GEN`. The occupation stage above it — reference-configuration
 excitation rules, splitting an `nl` occupation between its two relativistic
 subshells, and multiple-reference merging — is `enumerate_occupations`.
-Expansion of an existing list remains to be implemented. Python bindings,
-parallel execution and descriptor derivation belong to later stages.
+Expansion of an existing list remains to be implemented. This fixed-configuration
+Rust API remains separate from the transcript CLI's disk pipeline, which now
+provides parallel range generation, V2 descriptor derivation, stage statistics,
+and an optional managed-memory budget as described below.
 
 ## Run the development example
 
@@ -200,20 +208,45 @@ temporary disk space for the complete output set.
 The descriptor sidecar schema is:
 
 ```toml
-format_version = 1
+format_version = 2
 encoding = "parquet"
 normalized = false
 record_count = 1
 subshells = ["1s"]
 ```
 
-`subshells` lists the final header's ordered peel subshells. Each contributes
-three consecutive columns: occupation, intermediate 2J, and coupling 2J.
-`record_count` is the descriptor Parquet row count. Parquet columns are `Int32`
-for raw values and `Float32` for normalized values, compressed with ZSTD level 3.
+For descriptor-producing TOML/config `csfsgenerate` runs (which default to the
+disk backend), `subshells` lists the final header's ordered peel
+subshells. Each contributes four consecutive V2 columns:
+`n` (occupation), `2j` (printed subshell state), `v` (seniority), and `2k`
+(printed intermediate coupling). The row then carries the global
+`total_two_j` and `parity` columns. An unoccupied slot is `[0, -1, -1, -1]`;
+`-1` is `MISSING` and distinguishes a value that GRASP did not print from an
+explicit zero. `record_count` is the descriptor Parquet row count. All V2
+columns are `Int32`, compressed with ZSTD level 3. V2 descriptors are
+reversible and normalization is rejected.
+
+For descriptor-producing TOML/config `csfsgenerate` runs, add the optional
+setting below to the `[generate]` table to reject runs whose managed
+occupation, batch, bucket, bitset, or writer reservations would exceed the
+requested budget. The interactive in-memory compatibility path is separate
+and does not use this disk budget:
+
+```toml
+memory_budget_mib = 8192
+```
+
+The CLI flag `--memory-budget-mib` overrides the TOML value. The returned JSON
+contains `stage_stats` for enumeration, generation, de-duplication, descriptor
+merge, and CSF restoration, plus `resource_stats.memory_budget_mib`,
+`budget_bytes`, `peak_managed_bytes`, `current_managed_bytes`, and
+`occupation_bytes`. The budget accounts for selected internal data structures;
+it is not an operating-system RSS limit.
 
 
-Descriptor columns and sidecar subshells follow the final CSF header, including
-zero triplets for absent orbitals. Raw and normalized values are checked against
-the existing text-to-Parquet descriptor pipeline. See
+Descriptor columns and sidecar subshells follow the final CSF header. The
+standalone `gen-descriptors` command still supports the legacy V1 layout only
+when `descriptor_version=1` is explicit; V1 normalization is also explicit.
+Raw V2 values are checked against the existing text-to-Parquet descriptor
+pipeline and can be restored to CSF text with the exact source header. See
 [local parallel measurements](benchmarks/rcsfgenerate_parallel_20260912.md).

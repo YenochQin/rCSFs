@@ -104,6 +104,28 @@ class PartitionStats(TypedDict):
     error: NotRequired[str]
 
 
+class CsfGenerationStageStats(TypedDict):
+    """Coarse logical measurements for one disk-generation stage."""
+
+    name: str
+    elapsed_millis: int
+    cpu_millis: int | None
+    input_records: int
+    output_records: int
+    input_bytes: int
+    output_bytes: int
+
+
+class CsfGenerationResourceStats(TypedDict):
+    """Managed-memory accounting for a generation run."""
+
+    memory_budget_mib: int | None
+    budget_bytes: int | None
+    peak_managed_bytes: int
+    current_managed_bytes: int
+    occupation_bytes: int
+
+
 class CsfGenerationStats(TypedDict):
     """Statistics returned from transcript-driven CSF generation."""
 
@@ -118,6 +140,8 @@ class CsfGenerationStats(TypedDict):
     duplicate_count: NotRequired[int]
     csf_bytes: NotRequired[int]
     descriptor_bytes: NotRequired[int]
+    stage_stats: NotRequired[list[CsfGenerationStageStats]]
+    resource_stats: NotRequired[CsfGenerationResourceStats]
     error: NotRequired[str]
 
 

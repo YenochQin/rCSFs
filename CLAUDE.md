@@ -149,8 +149,10 @@ basedpyright rcsfs/
 
 `rcsfs` only exposes function-based Python APIs today. `CSFProcessor` and `CSFDescriptorGenerator` are internal Rust types and are not importable from `rcsfs._rcsfs`.
 
-**`csfsgenerate` still always writes V1 descriptors** regardless of the library-wide V2
-default (deferred; see the design doc's migration plan). Use `gen-descriptors` for V2 output.
+TOML/config `csfsgenerate` runs select the disk backend by default and write
+reversible V2 descriptors. V1 remains available through the explicit
+`descriptor_version=1` option of the standalone `gen-descriptors` path, and the
+interactive in-memory descriptor path remains a legacy V1 compatibility path.
 
 ### Key Data Flow
 

@@ -79,6 +79,61 @@ def test_config_generation_rejects_v2_normalization_without_outputs(
     assert set(tmp_path.iterdir()) == {config}
 
 
+def test_config_generation_json_contains_stage_stats(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    config = config_file(tmp_path)
+    assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 0
+    payload = json.loads(capfd.readouterr().out)
+    assert payload["success"] is True
+    assert payload["resource_stats"]["memory_budget_mib"] is None
+    assert [stage["name"] for stage in payload["stage_stats"]] == [
+        "enumeration",
+        "csf_generation",
+        "deduplication",
+        "descriptor_merge",
+        "csf_restore",
+    ]
+
+
+def test_config_generation_reads_memory_budget(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    config = config_file(tmp_path)
+    config.write_text(
+        config.read_text().replace(
+            "[generate]\n", "[generate]\nmemory_budget_mib = 64\n", 1
+        )
+    )
+    assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 0
+    payload = json.loads(capfd.readouterr().out)
+    assert payload["resource_stats"]["memory_budget_mib"] == 64
+
+
+def test_cli_memory_budget_overrides_toml(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    config = config_file(tmp_path)
+    config.write_text(
+        config.read_text().replace(
+            "[generate]\n", "[generate]\nmemory_budget_mib = 64\n", 1
+        )
+    )
+    assert (
+        cli.main(
+            [
+                "csfsgenerate",
+                "--config",
+                str(config),
+                "--memory-budget-mib",
+                "1",
+            ]
+        )
+        == 1
+    )
+    assert "memory budget exceeded" in capfd.readouterr().err
+
+
 @pytest.mark.parametrize(
     "name",
     [

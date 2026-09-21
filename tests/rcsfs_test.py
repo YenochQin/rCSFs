@@ -394,7 +394,7 @@ def test_restore_csfs_cli_roundtrip(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("threads", [1, 2])
 def test_disk_generation_scratch_layout_and_v2_roundtrip(
-    tmp_path: Path, threads: int
+    tmp_path: Path, threads: int, capfd: pytest.CaptureFixture[str]
 ) -> None:
     transcript = "* ! Orbital order\n0\n2s(2,*)2p(1,*)\n\n3s,3p\n1,3\n1\nn\n"
     csf = tmp_path / "generated.c"
@@ -404,11 +404,33 @@ def test_disk_generation_scratch_layout_and_v2_roundtrip(
     scratch = tmp_path / "scratch"
 
     stats = generate_disk_outputs_from_transcript(
-        transcript, csf, csf_parquet, descriptors, header, scratch, threads=threads
+        transcript,
+        csf,
+        csf_parquet,
+        descriptors,
+        header,
+        scratch,
+        threads=threads,
+        memory_budget_mib=64,
     )
 
     assert stats["success"] is True
+    assert stats["resource_stats"]["memory_budget_mib"] == 64
+    assert stats["resource_stats"]["peak_managed_bytes"] <= 64 * 1024 * 1024
     assert stats["record_count"] > 0
+    assert "Range progress:" in capfd.readouterr().err
+    assert [stage["name"] for stage in stats["stage_stats"]] == [
+        "enumeration",
+        "csf_generation",
+        "deduplication",
+        "descriptor_merge",
+        "csf_restore",
+    ]
+    assert all(stage["elapsed_millis"] >= 0 for stage in stats["stage_stats"])
+    assert all(
+        stage["cpu_millis"] is None or stage["cpu_millis"] >= 0
+        for stage in stats["stage_stats"]
+    )
     assert list((scratch / "ranges").glob("range-*/*.arrow"))
     assert not (scratch / "ranges" / "ranges").exists()
     assert get_parquet_info(csf_parquet)["num_rows"] == stats["record_count"]
@@ -420,6 +442,23 @@ def test_disk_generation_scratch_layout_and_v2_roundtrip(
     restored_stats = restore_csfs_from_descriptors(descriptors, header, restored)
     assert restored_stats["record_count"] == stats["record_count"]
     assert restored.read_bytes() == csf.read_bytes()
+
+
+def test_disk_generation_rejects_budget_before_unbounded_bucket_buffers(
+    tmp_path: Path,
+) -> None:
+    transcript = "* ! Orbital order\n0\n1s(2,*)\n\n1s\n0,0\n0\nn\n"
+    with pytest.raises(OSError, match="memory budget exceeded"):
+        generate_disk_outputs_from_transcript(
+            transcript,
+            tmp_path / "generated.c",
+            tmp_path / "generated.parquet",
+            tmp_path / "generated_descriptors.parquet",
+            tmp_path / "generated_header.toml",
+            tmp_path / "scratch",
+            threads=1,
+            memory_budget_mib=1,
+        )
 
 
 def test_config_generation_uses_disk_v2_pipeline(tmp_path: Path) -> None:

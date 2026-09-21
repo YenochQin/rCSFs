@@ -15,9 +15,9 @@ from typing import Literal, Protocol, cast
 
 from . import (
     convert_csfs,
-    generate_disk_outputs_from_transcript,
     generate_csfs_from_transcript,
     generate_descriptors_from_parquet,
+    generate_disk_outputs_from_transcript,
     partition_csfs,
     read_peel_subshells,
     restore_csfs_from_descriptors,
@@ -80,6 +80,7 @@ class CsfsGenerateArgs(Protocol):
 
     normalize: bool
     threads: int | None
+    memory_budget_mib: int | None
     generation_storage: Literal["memory", "disk"] | None
     scratch_dir: Path | None
     json: bool
@@ -309,9 +310,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _ = csfsgenerate.add_argument(
         "--threads",
-        type=int,
+        type=_parse_positive_int,
         default=None,
         help="Rayon thread count for generation (default: all cores).",
+    )
+    _ = csfsgenerate.add_argument(
+        "--memory-budget-mib",
+        type=_parse_positive_int,
+        default=None,
+        help="Managed generation-memory budget in MiB (disk storage only).",
     )
     _ = csfsgenerate.add_argument(
         "--generation-storage",
@@ -745,6 +752,32 @@ def _print_csfsgenerate_summary(stats: Mapping[str, object]) -> None:
     descriptor_file = stats.get("descriptor_file")
     if descriptor_file is not None:
         print(f"descriptor_file: {descriptor_file}")
+    stage_stats = stats.get("stage_stats")
+    if isinstance(stage_stats, list):
+        for value in cast(list[object], stage_stats):
+            if not isinstance(value, Mapping):
+                continue
+            stage = cast(Mapping[str, object], value)
+            name = stage.get("name")
+            elapsed = stage.get("elapsed_millis")
+            cpu = stage.get("cpu_millis")
+            if isinstance(name, str) and isinstance(elapsed, int):
+                print(f"stage_{name}_seconds: {elapsed / 1000:.3f}")
+                if isinstance(cpu, int):
+                    print(f"stage_{name}_cpu_seconds: {cpu / 1000:.3f}")
+    resource_stats = stats.get("resource_stats")
+    if isinstance(resource_stats, Mapping):
+        resource = cast(Mapping[str, object], resource_stats)
+        for key in (
+            "memory_budget_mib",
+            "budget_bytes",
+            "peak_managed_bytes",
+            "current_managed_bytes",
+            "occupation_bytes",
+        ):
+            value = resource.get(key)
+            if value is not None:
+                print(f"{key}: {value}")
 
 
 def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, object]:
@@ -767,6 +800,10 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
             raise FileExistsError(f"Output already exists: {path}")
         if not path.parent.is_dir():
             raise FileNotFoundError(f"Output directory does not exist: {path.parent}")
+    if args.memory_budget_mib is not None and not args.generate_descriptors:
+        raise ValueError(
+            "memory_budget_mib requires descriptor-producing disk generation"
+        )
     if not args.generate_descriptors:
         return dict(
             generate_csfs_from_transcript(
@@ -775,6 +812,8 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
         )
     if args.generation_storage == "disk" and args.normalize:
         raise ValueError("normalize is not supported by reversible V2 descriptors")
+    if args.memory_budget_mib is not None and args.generation_storage != "disk":
+        raise ValueError("memory_budget_mib requires disk generation storage")
 
     # The existing converters truncate their destinations. Run them only in a
     # private staging directory, then hold exclusive handles for publication.
@@ -814,6 +853,7 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
                     staged_header,
                     scratch,
                     threads=args.threads,
+                    memory_budget_mib=args.memory_budget_mib,
                 )
             )
             shutil.rmtree(scratch, ignore_errors=True)
@@ -942,6 +982,13 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
                 )
             if args.scratch_dir is None and generate.get("scratch_dir") is not None:
                 args.scratch_dir = Path(_config_string(generate["scratch_dir"]))
+            if (
+                args.memory_budget_mib is None
+                and generate.get("memory_budget_mib") is not None
+            ):
+                args.memory_budget_mib = _config_int(generate["memory_budget_mib"])
+                if args.memory_budget_mib <= 0:
+                    raise ValueError("memory_budget_mib must be greater than 0")
             if _config_bool(generate.get("continue_lists", False)):
                 raise ValueError("continue_lists is not supported yet; use false")
         except (OSError, KeyError, TypeError, ValueError) as exc:

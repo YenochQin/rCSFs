@@ -35,7 +35,8 @@ fn print_memory_j_value_summary(chunks: &[CompleteCsfFile]) {
     let mut blocks = BTreeMap::<(u16, bool), usize>::new();
     for chunk in chunks {
         for block in &chunk.blocks {
-            *blocks.entry((block.total_two_j, block.parity == Parity::Odd))
+            *blocks
+                .entry((block.total_two_j, block.parity == Parity::Odd))
                 .or_insert(0) += usize::try_from(block.record_len).unwrap_or(0);
         }
     }
@@ -155,7 +156,10 @@ pub fn generate_csfs_from_transcript(
     eprintln!("Parsing transcript and enumerating configurations...");
     let request = ExcitationRequest::from_transcript(transcript)?;
     let occupations = enumerate_occupations(&request)?;
-    eprintln!("Enumerated {} unique occupation configurations", occupations.configurations.len());
+    eprintln!(
+        "Enumerated {} unique occupation configurations",
+        occupations.configurations.len()
+    );
 
     eprintln!("Generating CSFs in memory...");
     let requests = occupations
@@ -172,7 +176,10 @@ pub fn generate_csfs_from_transcript(
 
     eprintln!("Writing CSF text file...");
     let write_stats = write_generated_csfs(&occupations.core_subshells, &chunks, output_path)?;
-    eprintln!("Generated {} CSFs across {} symmetry blocks", write_stats.record_count, write_stats.block_count);
+    eprintln!(
+        "Generated {} CSFs across {} symmetry blocks",
+        write_stats.record_count, write_stats.block_count
+    );
     print_memory_j_value_summary(&chunks);
 
     Ok(TranscriptGenerationStats {

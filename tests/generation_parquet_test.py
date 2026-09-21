@@ -7,7 +7,12 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from rcsfs import cli, read_peel_subshells
+from rcsfs import (
+    cli,
+    get_parquet_info,
+    read_peel_subshells,
+    restore_csfs_from_descriptors,
+)
 from rcsfs._rcsfs import generate_csfs_from_transcript
 
 
@@ -28,22 +33,50 @@ def config_file(tmp_path: Path, **outputs: object) -> Path:
     return config
 
 
-@pytest.mark.parametrize("normalize", [False, True])
-def test_config_generation_metadata(tmp_path: Path, normalize: bool) -> None:
-    config = config_file(tmp_path, normalize=normalize)
+def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
+    config = config_file(tmp_path)
     assert cli.main(["csfsgenerate", "--config", str(config)]) == 0
     frame = pl.read_parquet(tmp_path / "out_descriptors.parquet")
     metadata = tomllib.loads((tmp_path / "out_descriptors.toml").read_text())
     assert metadata == {
-        "format_version": 1,
+        "format_version": 2,
         "encoding": "parquet",
-        "normalized": normalize,
+        "normalized": False,
         "record_count": frame.height,
         "subshells": read_peel_subshells(tmp_path / "out_header.toml"),
     }
     assert frame.height == 1
-    assert frame.width == 3 * len(metadata["subshells"])
-    assert frame.dtypes == [pl.Float32 if normalize else pl.Int32] * frame.width
+    assert frame.columns == [
+        f"sub{index}_{channel}"
+        for index in range(len(metadata["subshells"]))
+        for channel in ("n", "2j", "v", "2k")
+    ] + ["total_two_j", "parity"]
+    assert frame.dtypes == [pl.Int32] * frame.width
+    assert frame["total_two_j"].to_list() == [0]
+    assert frame["parity"].to_list() == [1]
+    parquet_metadata = get_parquet_info(tmp_path / "out_descriptors.parquet")[
+        "key_value_metadata"
+    ]
+    assert parquet_metadata["descriptor_version"] == "2"
+    assert parquet_metadata["channels_per_subshell"] == "4"
+    restored = tmp_path / "restored.c"
+    stats = restore_csfs_from_descriptors(
+        tmp_path / "out_descriptors.parquet", tmp_path / "out_header.toml", restored
+    )
+    assert stats["record_count"] == frame.height
+    assert restored.read_bytes() == (tmp_path / "out.c").read_bytes()
+
+
+def test_config_generation_rejects_v2_normalization_without_outputs(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    config = config_file(tmp_path, normalize=True)
+    assert cli.main(["csfsgenerate", "--config", str(config)]) == 1
+    assert (
+        "normalize is not supported by reversible V2 descriptors"
+        in capfd.readouterr().err
+    )
+    assert set(tmp_path.iterdir()) == {config}
 
 
 @pytest.mark.parametrize(
@@ -87,7 +120,7 @@ def test_publication_race_preserves_other_writer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = config_file(tmp_path)
-    original = cli.generate_descriptors_from_parquet
+    original = cli.generate_disk_outputs_from_transcript
     sentinel = tmp_path / "out.parquet"
 
     def racing_writer(*args: object, **kwargs: object) -> object:
@@ -95,7 +128,7 @@ def test_publication_race_preserves_other_writer(
         sentinel.write_bytes(b"another writer")
         return result
 
-    monkeypatch.setattr(cli, "generate_descriptors_from_parquet", racing_writer)
+    monkeypatch.setattr(cli, "generate_disk_outputs_from_transcript", racing_writer)
     assert cli.main(["csfsgenerate", "--config", str(config)]) == 1
     assert sentinel.read_bytes() == b"another writer"
 

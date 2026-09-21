@@ -7,6 +7,7 @@ from rcsfs import (
     convert_csfs,
     generate_csfs_from_transcript,
     generate_descriptors_from_parquet,
+    generate_disk_outputs_from_transcript,
     get_parquet_info,
     read_peel_subshells,
     restore_csfs_from_descriptors,
@@ -38,8 +39,7 @@ def test_descriptor_compression_keeps_legacy_positional_slot(
     assert calls["descriptor_version"] == 2
 
 
-@pytest.mark.parametrize("descriptor_version", [1, 2])
-def test_end_to_end_public_python_api(tmp_path: Path, descriptor_version: int) -> None:
+def test_end_to_end_public_python_api_defaults_to_v2(tmp_path: Path) -> None:
     csf_parquet = tmp_path / "sample.parquet"
 
     stats = convert_csfs(SAMPLE_CSF, csf_parquet, chunk_size=90, num_workers=2)
@@ -64,26 +64,23 @@ def test_end_to_end_public_python_api(tmp_path: Path, descriptor_version: int) -
         peel_subshells=peel_subshells,
         num_workers=2,
         normalize=False,
-        descriptor_version=descriptor_version,
         header_path=stats["header_file"],
     )
 
-    expected_channels = 3 if descriptor_version == 1 else 4
-    expected_size = expected_channels * len(peel_subshells) + (
-        0 if descriptor_version == 1 else 2
-    )
+    expected_channels = 4
+    expected_size = expected_channels * len(peel_subshells) + 2
     assert descriptor_stats["success"] is True
     assert descriptor_stats["csf_count"] == stats["csf_count"]
     assert descriptor_stats["descriptor_count"] == stats["csf_count"]
     assert descriptor_stats["descriptor_size"] == expected_size
-    assert descriptor_stats["descriptor_version"] == descriptor_version
+    assert descriptor_stats["descriptor_version"] == 2
     assert descriptor_stats["channels_per_subshell"] == expected_channels
 
     descriptor_info = get_parquet_info(descriptor_parquet)
     assert descriptor_info["num_rows"] == stats["csf_count"]
     assert "ZSTD" in descriptor_info["compression"]
     kv = descriptor_info["key_value_metadata"]
-    assert kv["descriptor_version"] == str(descriptor_version)
+    assert kv["descriptor_version"] == "2"
     assert kv["channels_per_subshell"] == str(expected_channels)
     assert "source_header_sha256" in kv
 
@@ -393,6 +390,36 @@ def test_restore_csfs_cli_roundtrip(tmp_path: Path) -> None:
     )
     assert subset_stats["success"] is True
     assert subset_stats["record_count"] == 1
+
+
+@pytest.mark.parametrize("threads", [1, 2])
+def test_disk_generation_scratch_layout_and_v2_roundtrip(
+    tmp_path: Path, threads: int
+) -> None:
+    transcript = "* ! Orbital order\n0\n2s(2,*)2p(1,*)\n\n3s,3p\n1,3\n1\nn\n"
+    csf = tmp_path / "generated.c"
+    csf_parquet = tmp_path / "generated.parquet"
+    descriptors = tmp_path / "generated_descriptors.parquet"
+    header = tmp_path / "generated_header.toml"
+    scratch = tmp_path / "scratch"
+
+    stats = generate_disk_outputs_from_transcript(
+        transcript, csf, csf_parquet, descriptors, header, scratch, threads=threads
+    )
+
+    assert stats["success"] is True
+    assert stats["record_count"] > 0
+    assert list((scratch / "ranges").glob("range-*/*.arrow"))
+    assert not (scratch / "ranges" / "ranges").exists()
+    assert get_parquet_info(csf_parquet)["num_rows"] == stats["record_count"]
+    descriptor_info = get_parquet_info(descriptors)
+    assert descriptor_info["num_rows"] == stats["record_count"]
+    assert descriptor_info["key_value_metadata"]["descriptor_version"] == "2"
+
+    restored = tmp_path / "restored.c"
+    restored_stats = restore_csfs_from_descriptors(descriptors, header, restored)
+    assert restored_stats["record_count"] == stats["record_count"]
+    assert restored.read_bytes() == csf.read_bytes()
 
 
 def test_config_generation_uses_disk_v2_pipeline(tmp_path: Path) -> None:

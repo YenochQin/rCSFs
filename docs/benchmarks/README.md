@@ -82,6 +82,20 @@ memory, a sampled scratch peak, file counts and physical process I/O where the
 platform exposes it. A measurement whose registry hash or record count does not
 match is rejected rather than silently recorded.
 
+## Registered campaigns
+
+| Report | What it measures |
+| --- | --- |
+| `v2_disk_generation_p0b_b1/b2_20260921.json` | The pre-planning baseline at revision `a993ca4`, one run per input |
+| `v2_disk_generation_threads_b1/b2_20260922.json` | 1/2/4/8 threads at the derived task size |
+| `v2_disk_generation_budget_b1/b2_20260922.json` | Low (rejected), mid and high `memory_budget_mib` at 8 threads |
+| `v2_disk_generation_b3_capacity_20260921.json` | Full-scale capacity, workload and time-range estimate (no generation) |
+| `v2_disk_generation_matrix_20260922.md` | What the three 2026-09-22 campaigns show |
+
+A rejected configuration is part of the matrix, not a hole in it: the plan asks
+for a low budget to be reported as a resource rejection rather than being
+presented as a slow baseline.
+
 ## Other campaigns
 
 - `rcsfgenerate_serial_20260910.*`, `rcsfgenerate_parallel_20260912.*` — single-J

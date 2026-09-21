@@ -1,0 +1,1983 @@
+{
+  "environment": {
+    "cpu_count": 10,
+    "git": {
+      "branch": "1.3.1-beta2",
+      "commit": "0c4184b5ec517b8375781bc49252bd29161910cf",
+      "describe": "0c4184b-dirty",
+      "dirty": true
+    },
+    "machine": "arm64",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "python": "3.14.0",
+    "release": "25.6.0",
+    "system": "Darwin",
+    "total_memory_bytes": 17179869184
+  },
+  "filesystem": {
+    "free_bytes": 74742296576,
+    "path": "<system-temp>",
+    "total_bytes": 245107195904,
+    "type": "apfs"
+  },
+  "generated_at_unix_seconds": 1790011247.1405,
+  "measurements": [
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.007398999994620681,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781197,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 1,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 5,
+          "maximum": 140087,
+          "minimum": 86,
+          "p50": 140078,
+          "p95": 140081,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 140087,
+        "task_count": 5,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 63508892
+      },
+      "rss_peak_bytes": 736133120,
+      "scratch_final_bytes": 530436694,
+      "scratch_final_file_count": 10,
+      "scratch_peak_bytes": 1050372378,
+      "scratch_peak_file_count": 265,
+      "scratch_samples": 29,
+      "stage_stats": [
+        {
+          "cpu_millis": 48,
+          "elapsed_millis": 47,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 65,
+          "elapsed_millis": 65,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 5
+        },
+        {
+          "cpu_millis": 1149,
+          "elapsed_millis": 1165,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530366650,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1638,
+          "elapsed_millis": 2729,
+          "input_bytes": 530366650,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1402,
+          "elapsed_millis": 1400,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781197,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1226,
+          "elapsed_millis": 1229,
+          "input_bytes": 781197,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 1,
+      "unique_occupations": 19243,
+      "wall_seconds": 6.639657333987998
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.12930925001273863,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781197,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 2,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 5,
+          "maximum": 140087,
+          "minimum": 86,
+          "p50": 140078,
+          "p95": 140081,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 140087,
+        "task_count": 5,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 63508892
+      },
+      "rss_peak_bytes": 743669760,
+      "scratch_final_bytes": 530436694,
+      "scratch_final_file_count": 10,
+      "scratch_peak_bytes": 1050372378,
+      "scratch_peak_file_count": 265,
+      "scratch_samples": 29,
+      "stage_stats": [
+        {
+          "cpu_millis": 43,
+          "elapsed_millis": 42,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 79,
+          "elapsed_millis": 83,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 5
+        },
+        {
+          "cpu_millis": 1137,
+          "elapsed_millis": 1267,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530366650,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1629,
+          "elapsed_millis": 1735,
+          "input_bytes": 530366650,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1396,
+          "elapsed_millis": 1398,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781197,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1227,
+          "elapsed_millis": 1228,
+          "input_bytes": 781197,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 1,
+      "unique_occupations": 19243,
+      "wall_seconds": 5.757891833985923
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.13878158401348628,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781197,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 3,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 5,
+          "maximum": 140087,
+          "minimum": 86,
+          "p50": 140078,
+          "p95": 140081,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 140087,
+        "task_count": 5,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 63508892
+      },
+      "rss_peak_bytes": 746569728,
+      "scratch_final_bytes": 530436694,
+      "scratch_final_file_count": 10,
+      "scratch_peak_bytes": 1046728122,
+      "scratch_peak_file_count": 265,
+      "scratch_samples": 28,
+      "stage_stats": [
+        {
+          "cpu_millis": 51,
+          "elapsed_millis": 50,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 65,
+          "elapsed_millis": 64,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 5
+        },
+        {
+          "cpu_millis": 1129,
+          "elapsed_millis": 1140,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530366650,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1610,
+          "elapsed_millis": 1704,
+          "input_bytes": 530366650,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1400,
+          "elapsed_millis": 1397,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781197,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1226,
+          "elapsed_millis": 1230,
+          "input_bytes": 781197,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 1,
+      "unique_occupations": 19243,
+      "wall_seconds": 5.590823167003691
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.1253266250132583,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 782050,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 5,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 9,
+          "maximum": 70042,
+          "minimum": 257,
+          "p50": 70032,
+          "p95": 70041,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 70043,
+        "task_count": 9,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 63508892
+      },
+      "rss_peak_bytes": 766640128,
+      "scratch_final_bytes": 530465942,
+      "scratch_final_file_count": 10,
+      "scratch_peak_bytes": 1023954554,
+      "scratch_peak_file_count": 265,
+      "scratch_samples": 25,
+      "stage_stats": [
+        {
+          "cpu_millis": 43,
+          "elapsed_millis": 43,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 101,
+          "elapsed_millis": 51,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 9
+        },
+        {
+          "cpu_millis": 1160,
+          "elapsed_millis": 591,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530395898,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1625,
+          "elapsed_millis": 1735,
+          "input_bytes": 530395898,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1379,
+          "elapsed_millis": 1377,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 782050,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1242,
+          "elapsed_millis": 1243,
+          "input_bytes": 782050,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 2,
+      "unique_occupations": 19243,
+      "wall_seconds": 5.043789874995127
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.00682183398748748,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 782050,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 6,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 9,
+          "maximum": 70042,
+          "minimum": 257,
+          "p50": 70032,
+          "p95": 70041,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 70043,
+        "task_count": 9,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 63508892
+      },
+      "rss_peak_bytes": 770097152,
+      "scratch_final_bytes": 530465942,
+      "scratch_final_file_count": 10,
+      "scratch_peak_bytes": 1050401626,
+      "scratch_peak_file_count": 265,
+      "scratch_samples": 27,
+      "stage_stats": [
+        {
+          "cpu_millis": 53,
+          "elapsed_millis": 52,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 104,
+          "elapsed_millis": 53,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 9
+        },
+        {
+          "cpu_millis": 1167,
+          "elapsed_millis": 597,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530395898,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1632,
+          "elapsed_millis": 1881,
+          "input_bytes": 530395898,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1407,
+          "elapsed_millis": 1406,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 782050,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1237,
+          "elapsed_millis": 1250,
+          "input_bytes": 782050,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 2,
+      "unique_occupations": 19243,
+      "wall_seconds": 5.5042772500019055
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.13196329199126922,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 782050,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 7,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 9,
+          "maximum": 70042,
+          "minimum": 257,
+          "p50": 70032,
+          "p95": 70041,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 70043,
+        "task_count": 9,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 63508892
+      },
+      "rss_peak_bytes": 777945088,
+      "scratch_final_bytes": 530465942,
+      "scratch_final_file_count": 10,
+      "scratch_peak_bytes": 1021936154,
+      "scratch_peak_file_count": 265,
+      "scratch_samples": 25,
+      "stage_stats": [
+        {
+          "cpu_millis": 43,
+          "elapsed_millis": 43,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 101,
+          "elapsed_millis": 51,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 9
+        },
+        {
+          "cpu_millis": 1162,
+          "elapsed_millis": 598,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530395898,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1625,
+          "elapsed_millis": 1739,
+          "input_bytes": 530395898,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1381,
+          "elapsed_millis": 1378,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 782050,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1240,
+          "elapsed_millis": 1245,
+          "input_bytes": 782050,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 2,
+      "unique_occupations": 19243,
+      "wall_seconds": 5.058651625004131
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.13689824999892153,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781829,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 9,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 17,
+          "maximum": 35021,
+          "minimum": 432,
+          "p50": 35013,
+          "p95": 35020,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 35021,
+        "task_count": 17,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 76983782
+      },
+      "rss_peak_bytes": 777945088,
+      "scratch_final_bytes": 530898918,
+      "scratch_final_file_count": 18,
+      "scratch_peak_bytes": 1050834602,
+      "scratch_peak_file_count": 273,
+      "scratch_samples": 25,
+      "stage_stats": [
+        {
+          "cpu_millis": 50,
+          "elapsed_millis": 49,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 123,
+          "elapsed_millis": 30,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 17
+        },
+        {
+          "cpu_millis": 1264,
+          "elapsed_millis": 326,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530828874,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1625,
+          "elapsed_millis": 2333,
+          "input_bytes": 530828874,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1384,
+          "elapsed_millis": 1382,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781829,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1254,
+          "elapsed_millis": 1257,
+          "input_bytes": 781829,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 4,
+      "unique_occupations": 19243,
+      "wall_seconds": 5.381619708001381
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.13108145899605006,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781829,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 10,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 17,
+          "maximum": 35021,
+          "minimum": 432,
+          "p50": 35013,
+          "p95": 35020,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 35021,
+        "task_count": 17,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 76983782
+      },
+      "rss_peak_bytes": 777945088,
+      "scratch_final_bytes": 530898918,
+      "scratch_final_file_count": 18,
+      "scratch_peak_bytes": 1038623978,
+      "scratch_peak_file_count": 273,
+      "scratch_samples": 24,
+      "stage_stats": [
+        {
+          "cpu_millis": 51,
+          "elapsed_millis": 50,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 122,
+          "elapsed_millis": 30,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 17
+        },
+        {
+          "cpu_millis": 1258,
+          "elapsed_millis": 324,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530828874,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1620,
+          "elapsed_millis": 1856,
+          "input_bytes": 530828874,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1381,
+          "elapsed_millis": 1378,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781829,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1259,
+          "elapsed_millis": 1278,
+          "input_bytes": 781829,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 4,
+      "unique_occupations": 19243,
+      "wall_seconds": 4.921587624994572
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.1358684169827029,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781829,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 11,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 17,
+          "maximum": 35021,
+          "minimum": 432,
+          "p50": 35013,
+          "p95": 35020,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 35021,
+        "task_count": 17,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 76983782
+      },
+      "rss_peak_bytes": 777945088,
+      "scratch_final_bytes": 530898918,
+      "scratch_final_file_count": 18,
+      "scratch_peak_bytes": 1050834602,
+      "scratch_peak_file_count": 273,
+      "scratch_samples": 24,
+      "stage_stats": [
+        {
+          "cpu_millis": 51,
+          "elapsed_millis": 50,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 123,
+          "elapsed_millis": 31,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 17
+        },
+        {
+          "cpu_millis": 1259,
+          "elapsed_millis": 327,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530828874,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1630,
+          "elapsed_millis": 1900,
+          "input_bytes": 530828874,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1373,
+          "elapsed_millis": 1370,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781829,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1253,
+          "elapsed_millis": 1262,
+          "input_bytes": 781829,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 4,
+      "unique_occupations": 19243,
+      "wall_seconds": 4.943191625003237
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.011712292005540803,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781398,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 13,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 18,
+          "maximum": 32768,
+          "minimum": 3774,
+          "p50": 32740,
+          "p95": 32765,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 32768,
+        "task_count": 18,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 136785514
+      },
+      "rss_peak_bytes": 777945088,
+      "scratch_final_bytes": 530659224,
+      "scratch_final_file_count": 19,
+      "scratch_peak_bytes": 1050594908,
+      "scratch_peak_file_count": 274,
+      "scratch_samples": 24,
+      "stage_stats": [
+        {
+          "cpu_millis": 48,
+          "elapsed_millis": 48,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 171,
+          "elapsed_millis": 21,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 18
+        },
+        {
+          "cpu_millis": 1617,
+          "elapsed_millis": 286,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530589180,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1628,
+          "elapsed_millis": 2035,
+          "input_bytes": 530589180,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1402,
+          "elapsed_millis": 1404,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781398,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1239,
+          "elapsed_millis": 1239,
+          "input_bytes": 781398,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 8,
+      "unique_occupations": 19243,
+      "wall_seconds": 5.038110416993732
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.1376215000054799,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781398,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 14,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 18,
+          "maximum": 32768,
+          "minimum": 3774,
+          "p50": 32740,
+          "p95": 32765,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 32768,
+        "task_count": 18,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 136785514
+      },
+      "rss_peak_bytes": 777945088,
+      "scratch_final_bytes": 530659224,
+      "scratch_final_file_count": 19,
+      "scratch_peak_bytes": 1050594908,
+      "scratch_peak_file_count": 274,
+      "scratch_samples": 24,
+      "stage_stats": [
+        {
+          "cpu_millis": 44,
+          "elapsed_millis": 43,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 167,
+          "elapsed_millis": 21,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 18
+        },
+        {
+          "cpu_millis": 1556,
+          "elapsed_millis": 269,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530589180,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1636,
+          "elapsed_millis": 1965,
+          "input_bytes": 530589180,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1407,
+          "elapsed_millis": 1407,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781398,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1249,
+          "elapsed_millis": 1253,
+          "input_bytes": 781398,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 8,
+      "unique_occupations": 19243,
+      "wall_seconds": 4.9628405420226045
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.007733167003607377,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781398,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "measured",
+      "memory_budget_mib": null,
+      "order": 15,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 18,
+          "maximum": 32768,
+          "minimum": 3774,
+          "p50": 32740,
+          "p95": 32765,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 32768,
+        "task_count": 18,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 136785514
+      },
+      "rss_peak_bytes": 777945088,
+      "scratch_final_bytes": 530659224,
+      "scratch_final_file_count": 19,
+      "scratch_peak_bytes": 1050594908,
+      "scratch_peak_file_count": 274,
+      "scratch_samples": 23,
+      "stage_stats": [
+        {
+          "cpu_millis": 53,
+          "elapsed_millis": 53,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 163,
+          "elapsed_millis": 20,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 18
+        },
+        {
+          "cpu_millis": 1542,
+          "elapsed_millis": 263,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530589180,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1608,
+          "elapsed_millis": 1698,
+          "input_bytes": 530589180,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1407,
+          "elapsed_millis": 1409,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781398,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1234,
+          "elapsed_millis": 1239,
+          "input_bytes": 781398,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 8,
+      "unique_occupations": 19243,
+      "wall_seconds": 4.686486499995226
+    }
+  ],
+  "rejected": [],
+  "schema": "rcsfs-v2-generation-benchmark/1",
+  "settings": {
+    "memory_budget_mib": [
+      null
+    ],
+    "repeats": 3,
+    "scratch_root": "<system-temp>",
+    "scratch_sampling_interval_seconds": 0.2,
+    "threads": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "timed_region": "generation call including artifact publication; excludes set-up and deletion",
+    "warmup_runs": 1
+  },
+  "summary": [
+    {
+      "cleanup_seconds_median": 0.12930925001273863,
+      "memory_budget_mib": null,
+      "runs": 3,
+      "scratch_peak_bytes_max": 1050372378,
+      "stages": {
+        "csf_generation": {
+          "cpu_seconds_median": 1.137,
+          "wall_seconds_max": 1.267,
+          "wall_seconds_median": 1.165,
+          "wall_seconds_min": 1.14
+        },
+        "csf_restore": {
+          "cpu_seconds_median": 1.226,
+          "wall_seconds_max": 1.23,
+          "wall_seconds_median": 1.229,
+          "wall_seconds_min": 1.228
+        },
+        "deduplication": {
+          "cpu_seconds_median": 1.629,
+          "wall_seconds_max": 2.729,
+          "wall_seconds_median": 1.735,
+          "wall_seconds_min": 1.704
+        },
+        "descriptor_merge": {
+          "cpu_seconds_median": 1.4,
+          "wall_seconds_max": 1.4,
+          "wall_seconds_median": 1.398,
+          "wall_seconds_min": 1.397
+        },
+        "enumeration": {
+          "cpu_seconds_median": 0.048,
+          "wall_seconds_max": 0.05,
+          "wall_seconds_median": 0.047,
+          "wall_seconds_min": 0.042
+        },
+        "workload_planning": {
+          "cpu_seconds_median": 0.065,
+          "wall_seconds_max": 0.083,
+          "wall_seconds_median": 0.065,
+          "wall_seconds_min": 0.064
+        }
+      },
+      "threads": 1,
+      "wall_seconds_max": 6.639657333987998,
+      "wall_seconds_median": 5.757891833985923,
+      "wall_seconds_min": 5.590823167003691,
+      "wall_seconds_range": 1.0488341669843066
+    },
+    {
+      "cleanup_seconds_median": 0.1253266250132583,
+      "memory_budget_mib": null,
+      "runs": 3,
+      "scratch_peak_bytes_max": 1050401626,
+      "stages": {
+        "csf_generation": {
+          "cpu_seconds_median": 1.162,
+          "wall_seconds_max": 0.598,
+          "wall_seconds_median": 0.597,
+          "wall_seconds_min": 0.591
+        },
+        "csf_restore": {
+          "cpu_seconds_median": 1.24,
+          "wall_seconds_max": 1.25,
+          "wall_seconds_median": 1.245,
+          "wall_seconds_min": 1.243
+        },
+        "deduplication": {
+          "cpu_seconds_median": 1.625,
+          "wall_seconds_max": 1.881,
+          "wall_seconds_median": 1.739,
+          "wall_seconds_min": 1.735
+        },
+        "descriptor_merge": {
+          "cpu_seconds_median": 1.381,
+          "wall_seconds_max": 1.406,
+          "wall_seconds_median": 1.378,
+          "wall_seconds_min": 1.377
+        },
+        "enumeration": {
+          "cpu_seconds_median": 0.043,
+          "wall_seconds_max": 0.052,
+          "wall_seconds_median": 0.043,
+          "wall_seconds_min": 0.043
+        },
+        "workload_planning": {
+          "cpu_seconds_median": 0.101,
+          "wall_seconds_max": 0.053,
+          "wall_seconds_median": 0.051,
+          "wall_seconds_min": 0.051
+        }
+      },
+      "threads": 2,
+      "wall_seconds_max": 5.5042772500019055,
+      "wall_seconds_median": 5.058651625004131,
+      "wall_seconds_min": 5.043789874995127,
+      "wall_seconds_range": 0.46048737500677817
+    },
+    {
+      "cleanup_seconds_median": 0.1358684169827029,
+      "memory_budget_mib": null,
+      "runs": 3,
+      "scratch_peak_bytes_max": 1050834602,
+      "stages": {
+        "csf_generation": {
+          "cpu_seconds_median": 1.259,
+          "wall_seconds_max": 0.327,
+          "wall_seconds_median": 0.326,
+          "wall_seconds_min": 0.324
+        },
+        "csf_restore": {
+          "cpu_seconds_median": 1.254,
+          "wall_seconds_max": 1.278,
+          "wall_seconds_median": 1.262,
+          "wall_seconds_min": 1.257
+        },
+        "deduplication": {
+          "cpu_seconds_median": 1.625,
+          "wall_seconds_max": 2.333,
+          "wall_seconds_median": 1.9,
+          "wall_seconds_min": 1.856
+        },
+        "descriptor_merge": {
+          "cpu_seconds_median": 1.381,
+          "wall_seconds_max": 1.382,
+          "wall_seconds_median": 1.378,
+          "wall_seconds_min": 1.37
+        },
+        "enumeration": {
+          "cpu_seconds_median": 0.051,
+          "wall_seconds_max": 0.05,
+          "wall_seconds_median": 0.05,
+          "wall_seconds_min": 0.049
+        },
+        "workload_planning": {
+          "cpu_seconds_median": 0.123,
+          "wall_seconds_max": 0.031,
+          "wall_seconds_median": 0.03,
+          "wall_seconds_min": 0.03
+        }
+      },
+      "threads": 4,
+      "wall_seconds_max": 5.381619708001381,
+      "wall_seconds_median": 4.943191625003237,
+      "wall_seconds_min": 4.921587624994572,
+      "wall_seconds_range": 0.46003208300680853
+    },
+    {
+      "cleanup_seconds_median": 0.011712292005540803,
+      "memory_budget_mib": null,
+      "runs": 3,
+      "scratch_peak_bytes_max": 1050594908,
+      "stages": {
+        "csf_generation": {
+          "cpu_seconds_median": 1.556,
+          "wall_seconds_max": 0.286,
+          "wall_seconds_median": 0.269,
+          "wall_seconds_min": 0.263
+        },
+        "csf_restore": {
+          "cpu_seconds_median": 1.239,
+          "wall_seconds_max": 1.253,
+          "wall_seconds_median": 1.239,
+          "wall_seconds_min": 1.239
+        },
+        "deduplication": {
+          "cpu_seconds_median": 1.628,
+          "wall_seconds_max": 2.035,
+          "wall_seconds_median": 1.965,
+          "wall_seconds_min": 1.698
+        },
+        "descriptor_merge": {
+          "cpu_seconds_median": 1.407,
+          "wall_seconds_max": 1.409,
+          "wall_seconds_median": 1.407,
+          "wall_seconds_min": 1.404
+        },
+        "enumeration": {
+          "cpu_seconds_median": 0.048,
+          "wall_seconds_max": 0.053,
+          "wall_seconds_median": 0.048,
+          "wall_seconds_min": 0.043
+        },
+        "workload_planning": {
+          "cpu_seconds_median": 0.167,
+          "wall_seconds_max": 0.021,
+          "wall_seconds_median": 0.021,
+          "wall_seconds_min": 0.02
+        }
+      },
+      "threads": 8,
+      "wall_seconds_max": 5.038110416993732,
+      "wall_seconds_median": 4.9628405420226045,
+      "wall_seconds_min": 4.686486499995226,
+      "wall_seconds_range": 0.3516239169985056
+    }
+  ],
+  "transcript": {
+    "description": "core 1, both registered references, full active space 9s,9p,9d,9f,7g, 2J = 8, 2 excitations",
+    "expected_records": 560351,
+    "expected_unique_occupations": 19243,
+    "name": "b2",
+    "path": "b2_cc1_fullas_2exc.rcsfgenerate",
+    "registered": true,
+    "sha256": "280822983d7f008d8a5a62b0a0fe5b507c2c33e6aa24316834c6ca9f3a8abbf8",
+    "size_bytes": 190
+  },
+  "warmups": [
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.12740583400591277,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781197,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "warmup",
+      "memory_budget_mib": null,
+      "order": 0,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 5,
+          "maximum": 140087,
+          "minimum": 86,
+          "p50": 140078,
+          "p95": 140081,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 140087,
+        "task_count": 5,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 63508892
+      },
+      "rss_peak_bytes": 604979200,
+      "scratch_final_bytes": 530436694,
+      "scratch_final_file_count": 10,
+      "scratch_peak_bytes": 1050372378,
+      "scratch_peak_file_count": 265,
+      "scratch_samples": 28,
+      "stage_stats": [
+        {
+          "cpu_millis": 44,
+          "elapsed_millis": 44,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 66,
+          "elapsed_millis": 65,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 5
+        },
+        {
+          "cpu_millis": 1119,
+          "elapsed_millis": 1130,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530366650,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1628,
+          "elapsed_millis": 1962,
+          "input_bytes": 530366650,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1404,
+          "elapsed_millis": 1403,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781197,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1221,
+          "elapsed_millis": 1221,
+          "input_bytes": 781197,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 1,
+      "unique_occupations": 19243,
+      "wall_seconds": 5.82929929200327
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.006991791975451633,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 782050,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "warmup",
+      "memory_budget_mib": null,
+      "order": 4,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 9,
+          "maximum": 70042,
+          "minimum": 257,
+          "p50": 70032,
+          "p95": 70041,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 70043,
+        "task_count": 9,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 63508892
+      },
+      "rss_peak_bytes": 746569728,
+      "scratch_final_bytes": 530465942,
+      "scratch_final_file_count": 10,
+      "scratch_peak_bytes": 1028094362,
+      "scratch_peak_file_count": 265,
+      "scratch_samples": 26,
+      "stage_stats": [
+        {
+          "cpu_millis": 50,
+          "elapsed_millis": 50,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 116,
+          "elapsed_millis": 57,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 9
+        },
+        {
+          "cpu_millis": 1233,
+          "elapsed_millis": 1061,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530395898,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1613,
+          "elapsed_millis": 1709,
+          "input_bytes": 530395898,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1381,
+          "elapsed_millis": 1378,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 782050,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1236,
+          "elapsed_millis": 1249,
+          "input_bytes": 782050,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 2,
+      "unique_occupations": 19243,
+      "wall_seconds": 5.5099540000082925
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.13550116698024794,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781829,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "warmup",
+      "memory_budget_mib": null,
+      "order": 8,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 17,
+          "maximum": 35021,
+          "minimum": 432,
+          "p50": 35013,
+          "p95": 35020,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 35021,
+        "task_count": 17,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 76983782
+      },
+      "rss_peak_bytes": 777945088,
+      "scratch_final_bytes": 530898918,
+      "scratch_final_file_count": 18,
+      "scratch_peak_bytes": 1050834602,
+      "scratch_peak_file_count": 273,
+      "scratch_samples": 24,
+      "stage_stats": [
+        {
+          "cpu_millis": 50,
+          "elapsed_millis": 49,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 150,
+          "elapsed_millis": 37,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 17
+        },
+        {
+          "cpu_millis": 1336,
+          "elapsed_millis": 362,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530828874,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1630,
+          "elapsed_millis": 2311,
+          "input_bytes": 530828874,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1372,
+          "elapsed_millis": 1369,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781829,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1257,
+          "elapsed_millis": 1280,
+          "input_bytes": 781829,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 4,
+      "unique_occupations": 19243,
+      "wall_seconds": 5.412771333998535
+    },
+    {
+      "block_count": 1,
+      "cleanup_seconds": 0.12984283300465904,
+      "csf_bytes": 168534272,
+      "csf_parquet_bytes": 40680076,
+      "csf_text_bytes": 168534272,
+      "descriptor_bytes": 781398,
+      "descriptor_count": 560351,
+      "duplicate_count": 0,
+      "generated_count": 560351,
+      "header_bytes": 529,
+      "kind": "warmup",
+      "memory_budget_mib": null,
+      "order": 12,
+      "output_file_count": 4,
+      "plan_stats": {
+        "estimated_records_per_task": {
+          "count": 18,
+          "maximum": 32768,
+          "minimum": 3774,
+          "p50": 32740,
+          "p95": 32765,
+          "total": 560351
+        },
+        "estimated_total_records": 560351,
+        "target_records_per_task": 32768,
+        "task_count": 18,
+        "unique_occupations": 19243,
+        "unsplittable_records": 0,
+        "unsplittable_tasks": 0,
+        "zero_record_configurations": 420
+      },
+      "process_io": null,
+      "record_count": 560351,
+      "resource_stats": {
+        "budget_bytes": null,
+        "current_managed_bytes": 15859712,
+        "memory_budget_mib": null,
+        "occupation_bytes": 17182050,
+        "peak_managed_bytes": 136785514
+      },
+      "rss_peak_bytes": 777945088,
+      "scratch_final_bytes": 530659224,
+      "scratch_final_file_count": 19,
+      "scratch_peak_bytes": 1050594908,
+      "scratch_peak_file_count": 274,
+      "scratch_samples": 24,
+      "stage_stats": [
+        {
+          "cpu_millis": 45,
+          "elapsed_millis": 45,
+          "input_bytes": 0,
+          "input_records": 0,
+          "name": "enumeration",
+          "output_bytes": 17182050,
+          "output_records": 19243
+        },
+        {
+          "cpu_millis": 162,
+          "elapsed_millis": 20,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "workload_planning",
+          "output_bytes": 0,
+          "output_records": 18
+        },
+        {
+          "cpu_millis": 1624,
+          "elapsed_millis": 266,
+          "input_bytes": 0,
+          "input_records": 19243,
+          "name": "csf_generation",
+          "output_bytes": 530589180,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1635,
+          "elapsed_millis": 1883,
+          "input_bytes": 530589180,
+          "input_records": 560351,
+          "name": "deduplication",
+          "output_bytes": 520075772,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1396,
+          "elapsed_millis": 1392,
+          "input_bytes": 520075772,
+          "input_records": 560351,
+          "name": "descriptor_merge",
+          "output_bytes": 781398,
+          "output_records": 560351
+        },
+        {
+          "cpu_millis": 1251,
+          "elapsed_millis": 1255,
+          "input_bytes": 781398,
+          "input_records": 560351,
+          "name": "csf_restore",
+          "output_bytes": 209214348,
+          "output_records": 560351
+        }
+      ],
+      "success": true,
+      "threads": 8,
+      "unique_occupations": 19243,
+      "wall_seconds": 4.865866417007055
+    }
+  ]
+}

@@ -25,18 +25,13 @@ stdout or to ``--output``.
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import os
-import platform
 import shutil
 import statistics
-import subprocess
 import sys
 import tempfile
 import threading
 import time
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -44,11 +39,26 @@ from typing import Any
 # editable package so the benchmark measures the source under test.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from benchmark_support import (
+    DEFAULT_MANIFEST,
+    environment,
+    filesystem_metadata,
+    load_manifest,
+    sha256_file,
+    verify_registered_transcript,
+    write_report,
+)
 from rcsfs import generate_disk_outputs_from_transcript
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = REPO_ROOT / "tests" / "fixtures" / "transcripts.toml"
 REPORT_SCHEMA = "rcsfs-v2-generation-benchmark/1"
+
+#: Failures the benchmark expects and records as measurements rather than
+#: crashing on: a rejected configuration is a result, not a broken run.
+_EXPECTED_REJECTIONS = (
+    "memory budget exceeded",
+    "not enough free space",
+    "cannot check free space",
+)
 
 #: Files sampled by the scratch monitor. Small enough to stay cheap next to a
 #: multi-gigabyte run, large enough to observe a stage boundary.
@@ -67,115 +77,6 @@ _STAGE_KEYS = (
     "resource_stats",
     "plan_stats",
 )
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def load_manifest(path: Path) -> dict[str, dict[str, Any]]:
-    """Return the registered transcripts keyed by file name."""
-    if not path.is_file():
-        return {}
-    with path.open("rb") as handle:
-        document = tomllib.load(handle)
-    entries = document.get("transcript", [])
-    if not isinstance(entries, list):
-        raise ValueError(f"{path} has a non-list transcript table")
-    registered: dict[str, dict[str, Any]] = {}
-    for entry in entries:
-        if not isinstance(entry, dict):
-            raise ValueError(f"{path} has a non-table transcript entry")
-        file_name = entry.get("file")
-        if not isinstance(file_name, str):
-            raise ValueError(f"{path} has a transcript entry without a file name")
-        registered[file_name] = entry
-    return registered
-
-
-def _git_metadata() -> dict[str, Any]:
-    def run(*arguments: str) -> str | None:
-        try:
-            completed = subprocess.run(
-                ["git", *arguments],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except (OSError, subprocess.CalledProcessError):
-            return None
-        return completed.stdout.strip()
-
-    status = run("status", "--porcelain")
-    return {
-        "commit": run("rev-parse", "HEAD"),
-        "describe": run("describe", "--tags", "--always", "--dirty"),
-        "branch": run("rev-parse", "--abbrev-ref", "HEAD"),
-        # A dirty tree is reported rather than rejected: a local measurement of
-        # uncommitted work is still useful, but it must not be mistaken for a
-        # reproducible baseline.
-        "dirty": None if status is None else bool(status),
-    }
-
-
-def _filesystem_type(path: Path) -> str | None:
-    """Filesystem name from the mount table, or None when it is unreadable.
-
-    The mount table is read instead of platform-specific helpers because
-    macOS `stat -f %T` reports the mount point rather than the filesystem on
-    current releases, and a wrong name is worse than an absent one.
-    """
-    try:
-        completed = subprocess.run(
-            ["mount"], capture_output=True, text=True, check=True
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    resolved = str(path.resolve())
-    best: tuple[int, str] | None = None
-    for line in completed.stdout.splitlines():
-        # "<device> on <mount point> (<type>, <options>)"
-        on_index = line.find(" on ")
-        open_index = line.rfind(" (")
-        if on_index < 0 or open_index < on_index:
-            continue
-        mount_point = line[on_index + 4 : open_index]
-        fields = line[open_index + 2 :].rstrip(")").split(",")
-        if not fields or not fields[0].strip():
-            continue
-        if resolved != mount_point and not resolved.startswith(
-            mount_point.rstrip("/") + "/"
-        ):
-            continue
-        if best is None or len(mount_point) > best[0]:
-            best = (len(mount_point), fields[0].strip())
-    return None if best is None else best[1]
-
-
-def _filesystem_metadata(path: Path) -> dict[str, Any]:
-    usage = shutil.disk_usage(path)
-    return {
-        "path": str(path),
-        "type": _filesystem_type(path),
-        "total_bytes": usage.total,
-        "free_bytes": usage.free,
-    }
-
-
-def _total_memory_bytes() -> int | None:
-    try:
-        page_size = os.sysconf("SC_PAGE_SIZE")
-        pages = os.sysconf("SC_PHYS_PAGES")
-    except (ValueError, OSError, AttributeError):
-        return None
-    if not isinstance(page_size, int) or not isinstance(pages, int):
-        return None
-    return page_size * pages
 
 
 def _peak_rss_bytes() -> int | None:
@@ -205,20 +106,6 @@ def _process_io_bytes() -> dict[str, int] | None:
     except (OSError, ValueError):
         return None
     return counters or None
-
-
-def _environment() -> dict[str, Any]:
-    return {
-        "python": platform.python_version(),
-        "platform": platform.platform(),
-        "system": platform.system(),
-        "release": platform.release(),
-        "machine": platform.machine(),
-        "processor": platform.processor(),
-        "cpu_count": os.cpu_count(),
-        "total_memory_bytes": _total_memory_bytes(),
-        "git": _git_metadata(),
-    }
 
 
 class ScratchMonitor(threading.Thread):
@@ -300,16 +187,29 @@ def _run_once(
         # The timed region excludes temporary-set creation and deletion, so it
         # is a generation measurement rather than a filesystem measurement.
         started = time.perf_counter()
-        stats = generate_disk_outputs_from_transcript(
-            transcript,
-            paths["csf_text"],
-            paths["csf_parquet"],
-            paths["descriptor"],
-            paths["header"],
-            scratch,
-            threads=threads,
-            memory_budget_mib=memory_budget_mib,
-        )
+        try:
+            stats = generate_disk_outputs_from_transcript(
+                transcript,
+                paths["csf_text"],
+                paths["csf_parquet"],
+                paths["descriptor"],
+                paths["header"],
+                scratch,
+                threads=threads,
+                memory_budget_mib=memory_budget_mib,
+            )
+        except (OSError, RuntimeError) as error:
+            # A budget or space rejection is a result the matrix is meant to
+            # record, not a broken run. Anything else is a real failure.
+            message = str(error)
+            if not any(expected in message for expected in _EXPECTED_REJECTIONS):
+                raise
+            monitor.stop()
+            result["wall_seconds"] = time.perf_counter() - started
+            result["success"] = False
+            result["outcome"] = "rejected"
+            result["error"] = message
+            return result
         wall_seconds = time.perf_counter() - started
         io_after = _process_io_bytes()
         monitor.stop()
@@ -340,10 +240,24 @@ def _run_once(
     return result
 
 
-def _summarize(measurements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _summarize(
+    measurements: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     groups: dict[tuple[int | None, int | None], list[dict[str, Any]]] = {}
+    rejected: list[dict[str, Any]] = []
     for measurement in measurements:
         key = (measurement["threads"], measurement.get("memory_budget_mib"))
+        if measurement.get("outcome") == "rejected":
+            # A refused run has no stage timings to average; it is reported on
+            # its own so a low budget cannot masquerade as a slow one.
+            rejected.append(
+                {
+                    "threads": measurement["threads"],
+                    "memory_budget_mib": measurement.get("memory_budget_mib"),
+                    "error": measurement.get("error"),
+                }
+            )
+            continue
         groups.setdefault(key, []).append(measurement)
     summary: list[dict[str, Any]] = []
     for (threads, budget), group in sorted(
@@ -387,58 +301,7 @@ def _summarize(measurements: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "cpu_seconds_median": None if not cpu else statistics.median(cpu) / 1000.0,
             }
         summary.append(entry)
-    return summary
-
-
-def _check_registered(
-    path: Path,
-    digest: str,
-    registered: dict[str, dict[str, Any]],
-    measurements: list[dict[str, Any]],
-) -> dict[str, Any]:
-    entry = registered.get(path.name)
-    if entry is None:
-        return {"registered": False, "sha256": digest}
-    expected_digest = entry.get("sha256")
-    if expected_digest != digest:
-        raise SystemExit(
-            f"transcript {path.name} is registered with sha256 {expected_digest} "
-            f"but hashes to {digest}; re-register the fixture and its baseline together"
-        )
-    record: dict[str, Any] = {
-        "registered": True,
-        "name": entry.get("name"),
-        "sha256": digest,
-        "description": entry.get("description"),
-        "expected_unique_occupations": entry.get("unique_occupations"),
-        "expected_records": entry.get("records"),
-    }
-    for measurement in measurements:
-        if not measurement.get("success"):
-            continue
-        occupations = measurement.get("unique_occupations")
-        if occupations is not None and occupations != record["expected_unique_occupations"]:
-            raise SystemExit(
-                f"{path.name} enumerated {occupations} configurations but the registered "
-                f"baseline is {record['expected_unique_occupations']}"
-            )
-        records = measurement.get("generated_count")
-        if records is not None and records != record["expected_records"]:
-            raise SystemExit(
-                f"{path.name} generated {records} CSFs but the registered baseline is "
-                f"{record['expected_records']}"
-            )
-        # The planner's count is what scheduling and the capacity model trust.
-        # A drifting counter has to fail here rather than silently mis-plan.
-        plan_stats = measurement.get("plan_stats")
-        if isinstance(plan_stats, dict):
-            estimated = plan_stats.get("estimated_total_records")
-            if estimated is not None and records is not None and estimated != records:
-                raise SystemExit(
-                    f"{path.name} planned {estimated} records but generated {records}; "
-                    f"the workload counter and the generator disagree"
-                )
-    return record
+    return summary, rejected
 
 
 def main() -> int:
@@ -523,16 +386,25 @@ def main() -> int:
             order += 1
             measurements.append(measurement)
 
-    transcript_record = _check_registered(
+    successful = [
+        measurement
+        for measurement in [*warmups, *measurements]
+        if measurement.get("outcome") != "rejected"
+    ]
+    transcript_record = verify_registered_transcript(
         args.transcript,
         digest,
         registered,
-        [*warmups, *measurements],
+        unique_occupations=next(
+            (item.get("unique_occupations") for item in successful), None
+        ),
+        records=next((item.get("generated_count") for item in successful), None),
     )
+    summary, rejected = _summarize(measurements)
     report = {
         "schema": REPORT_SCHEMA,
         "generated_at_unix_seconds": time.time(),
-        "environment": _environment(),
+        "environment": environment(),
         "transcript": {
             **transcript_record,
             "path": args.transcript.name,
@@ -549,17 +421,13 @@ def main() -> int:
             "scratch_sampling_interval_seconds": SCRATCH_SAMPLE_INTERVAL_SECONDS,
             "timed_region": "generation call including artifact publication; excludes set-up and deletion",
         },
-        "filesystem": _filesystem_metadata(scratch_root),
+        "filesystem": filesystem_metadata(scratch_root),
         "measurements": measurements,
         "warmups": warmups,
-        "summary": _summarize(measurements),
+        "summary": summary,
+        "rejected": rejected,
     }
-    encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
-    if args.output is None:
-        print(encoded, end="")
-    else:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(encoded, encoding="utf-8")
+    write_report(report, args.output)
     return 0
 
 

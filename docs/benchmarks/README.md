@@ -51,6 +51,21 @@ the size of every path plus the free space of the destinations it is given. It
 creates no scratch and writes no artifact, so a full-scale input can be assessed
 without producing 5.8 billion CSFs.
 
+## Scripts and report hygiene
+
+`scripts/benchmark_support.py` holds what both scripts must agree on: the
+manifest contract and its verification, the environment and filesystem
+metadata, and path normalization. A report is normalized before it is written,
+so a committed report carries `<system-temp>`, `<repo-root>` or `<path>/<name>`
+instead of the directory layout of the machine that produced it; the filesystem
+type and capacity stay. `tests/benchmark_reports_test.py` fails if any
+registered report contains an absolute path.
+
+A run that is refused by the managed-memory budget or the space pre-flight is
+recorded as a measurement with `outcome: "rejected"` and its error, and is
+excluded from the timing summary: a rejection is a result the matrix exists to
+record, and it must not be averaged into a latency.
+
 ## Running the disk-generation benchmark
 
 ```bash

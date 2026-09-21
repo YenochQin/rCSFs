@@ -33,7 +33,9 @@ use super::{
     enumerate_occupations_with_budget, estimate_capacity, estimate_workload,
     generate_configuration_records, plan_generation, report_plan, request_targets,
 };
-use super::{CapacityEstimate, SpaceCheck, preflight_run};
+use super::{
+    ArtifactKind, CapacityEstimate, SpaceCheck, SpacePolicy, SpaceRole, check_space, preflight_run,
+};
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
 use crate::complete_csf::OccupiedSubshell;
 use crate::descriptor_schema::{
@@ -363,7 +365,12 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
         scratch_dir,
         options,
         |estimate| {
-            for check in preflight_run(estimate, scratch_dir, &outputs)? {
+            for check in preflight_run(
+                estimate,
+                scratch_dir,
+                &outputs,
+                options.allow_unchecked_space,
+            )? {
                 report_space_check(&check);
             }
             Ok(())
@@ -473,15 +480,46 @@ pub(crate) struct DiskEstimate {
     pub(crate) planning_millis: u128,
 }
 
+/// Where a run will put its data, for the pre-flight's space checks.
+///
+/// The roles are what make the check meaningful: paths sharing a volume have
+/// their requirements added, and each phase is compared by its maximum.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SpaceLayout {
+    pub(crate) scratch_dir: Option<PathBuf>,
+    /// Where the staged artifact set is written.
+    pub(crate) staging_dir: Option<PathBuf>,
+    /// Where each artifact is published; publication copies, so these bytes
+    /// coexist with the staged set.
+    pub(crate) destinations: Vec<(PathBuf, ArtifactKind)>,
+}
+
 /// Count the workload and estimate the capacity of a transcript.
 pub(crate) fn estimate_disk_generation(
     transcript: &str,
     options: &GenerationOptions,
 ) -> Result<DiskEstimate> {
+    estimate_disk_generation_with_layout(transcript, options, &SpaceLayout::default())
+        .map(|(estimate, _checks)| estimate)
+}
+
+/// Count the workload, estimate the capacity, and check the volumes.
+///
+/// The space checks run over the same estimate the generation path uses, so a
+/// prediction and the run it predicts cannot disagree about what fits.
+pub(crate) fn estimate_disk_generation_with_layout(
+    transcript: &str,
+    options: &GenerationOptions,
+    layout: &SpaceLayout,
+) -> Result<(DiskEstimate, Vec<SpaceCheck>)> {
     options.validate()?;
     let enumeration_timer = StageTimer::start();
     let request = ExcitationRequest::from_transcript(transcript)?;
-    let (occupations, _charge) = enumerate_occupations_with_budget(&request, None)?;
+    // The estimate must fail the same way the run it predicts would, so the
+    // same budget gates the occupation arena here. Charging an unlimited arena
+    // would let a low-budget estimate succeed and the run then fail at
+    // enumeration.
+    let (occupations, _charge) = enumerate_occupations_with_budget(&request, Some(&options.budget))?;
     ensure!(
         !occupations.configurations.is_empty(),
         "occupation enumeration produced no configurations"
@@ -508,13 +546,38 @@ pub(crate) fn estimate_disk_generation(
             .context("2J target count exceeds u64")?
             .saturating_mul(2),
     )?;
-    Ok(DiskEstimate {
+    let estimate = DiskEstimate {
         layout: DescriptorLayout::new(DescriptorVersion::V2, peel.len()),
         plan_stats: plan.stats(),
         capacity,
         enumeration_millis,
         planning_millis: planning_timer.wall.elapsed().as_millis(),
-    })
+    };
+    let mut entries: Vec<(PathBuf, SpaceRole)> = Vec::new();
+    if let Some(scratch) = &layout.scratch_dir {
+        entries.push((scratch.clone(), SpaceRole::Scratch));
+    }
+    if let Some(staging) = &layout.staging_dir {
+        entries.push((staging.clone(), SpaceRole::Staging));
+    }
+    for (destination, kind) in &layout.destinations {
+        entries.push((
+            destination.clone(),
+            SpaceRole::Published {
+                bytes: estimate.capacity.artifact_bytes(*kind),
+            },
+        ));
+    }
+    // Reporting, not enforcing: an estimate exists to answer whether a run
+    // would fit, so an impossible requirement is a result it must be able to
+    // report. Callers that are about to write use `SpacePolicy::Require`
+    // instead -- the generation path does, and so does the CLI.
+    let checks = if entries.is_empty() {
+        Vec::new()
+    } else {
+        check_space(&estimate.capacity, &entries, SpacePolicy::Report)?
+    };
+    Ok((estimate, checks))
 }
 
 /// Report one pre-flight space check on stderr.
@@ -696,6 +759,17 @@ pub(crate) fn generate_v2_descriptor_segments_checked(
     ensure!(
         record_count > 0,
         "no CSFs generated for the requested 2J range"
+    );
+    // The plan claims to cover every counted record. Comparing the generated
+    // total against the counted total turns a scheduling mistake that drops
+    // work into a failure here, instead of a shorter output file that only a
+    // byte-for-byte comparison would notice.
+    ensure!(
+        u64::try_from(record_count).context("descriptor record count exceeds u64")?
+            == plan.workload.total_records,
+        "generation produced {record_count} CSFs but the workload plan counted \
+         {}; the schedule does not cover every record",
+        plan.workload.total_records
     );
     let segment_bytes = segments
         .iter()
@@ -2511,21 +2585,38 @@ mod tests {
         }
     }
 
+    /// A configuration rich enough to be divided along its state-prefix tree:
+    /// five configurations, 96 records, 38 in the largest one.
+    fn prefix_split_transcript() -> &'static str {
+        "* ! Orbital order\n0\n5g(4,*)\n\n5g\n0,8\n1\nn\n"
+    }
+
     #[test]
     fn range_segments_merge_to_the_same_v2_rows_at_each_thread_count() {
-        let request = ExcitationRequest::from_transcript(transcript()).unwrap();
+        // This transcript reaches the state-prefix split, which the registered
+        // small transcripts never did: every configuration there produces at
+        // most one record per 2J, so no split was ever scheduled and a broken
+        // split could not be observed.
+        let request = ExcitationRequest::from_transcript(prefix_split_transcript()).unwrap();
         let root = temporary_directory("merge");
         fs::create_dir(&root).unwrap();
         // Thread count and scheduling granularity are execution choices: the
         // published rows must be identical for every combination, including the
         // smallest task target that still fits one configuration per task and
         // the state-prefix splitting it forces.
-        let mut schedules = vec![(1usize, 1u64), (2, 1), (num_cpus::get().max(1), 1)];
-        schedules.push((1, 3));
-        schedules.push((1, u64::MAX));
+        let mut schedules = vec![
+            (1usize, 1u64),
+            (2, 1),
+            (num_cpus::get().max(1), 1),
+            (1, 2),
+            (1, 3),
+            (1, 5),
+            (1, u64::MAX),
+        ];
         schedules.sort_unstable();
         schedules.dedup();
         let mut results = Vec::new();
+        let mut prefix_tasks = 0usize;
         for (threads, records_per_task) in schedules {
             let label = format!("t{threads}-r{records_per_task}");
             let scratch = root.join(format!("scratch-{label}"));
@@ -2549,6 +2640,12 @@ mod tests {
                     .iter()
                     .all(|segment| segment.byte_count > 0)
             );
+            prefix_tasks += generated
+                .plan
+                .tasks
+                .iter()
+                .filter(|task| matches!(task.span, TaskSpan::StatePrefixes { .. }))
+                .count();
             let merge = merge_v2_descriptor_segments(&generated, &output).unwrap();
             assert_eq!(merge.record_count, generated.record_count);
             results.push((
@@ -2556,6 +2653,10 @@ mod tests {
                 expected_rows(&request, &generated.peel_subshells).unwrap(),
             ));
         }
+        assert!(
+            prefix_tasks > 0,
+            "no schedule exercised the state-prefix split"
+        );
         assert!(
             results
                 .iter()
@@ -2827,3 +2928,4 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+

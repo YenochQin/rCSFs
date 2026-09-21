@@ -49,6 +49,7 @@ For detailed documentation, see function documentation:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -619,6 +620,7 @@ def generate_disk_outputs_from_transcript(
     threads: int | None = None,
     *,
     memory_budget_mib: int | None = None,
+    allow_unchecked_space: bool = False,
 ) -> CsfGenerationStats:
     """Generate staged CSF and reversible V2 descriptors with bounded memory.
 
@@ -628,6 +630,12 @@ def generate_disk_outputs_from_transcript(
     ``memory_budget_mib`` is a managed-memory accounting limit for occupation,
     generation-batch, de-duplication, bitset, and writer reservations. It does
     not cap process RSS, allocator overhead, or thread stacks.
+
+    The run is refused before the first segment when the scratch or staging
+    volume cannot hold the estimated data. If a volume's free space cannot be
+    measured on this platform, the run is refused too unless
+    ``allow_unchecked_space`` is set: skipping the pre-flight silently is the
+    outcome the pre-flight exists to prevent.
     """
     from ._rcsfs import generate_disk_outputs_from_transcript as native_generate
 
@@ -640,6 +648,7 @@ def generate_disk_outputs_from_transcript(
         scratch_dir=str(scratch_dir),
         threads=threads,
         memory_budget_mib=memory_budget_mib,
+        allow_unchecked_space=allow_unchecked_space,
     )
 
 
@@ -648,6 +657,9 @@ def estimate_disk_generation(
     threads: int | None = None,
     *,
     memory_budget_mib: int | None = None,
+    scratch_dir: str | Path | None = None,
+    staging_dir: str | Path | None = None,
+    destinations: Mapping[str, str | Path] | None = None,
 ) -> CsfGenerationEstimate:
     """Count a transcript's workload and estimate a disk run's capacity.
 
@@ -661,6 +673,19 @@ def estimate_disk_generation(
     The estimates are upper bounds, not promises. ``failure_recovery`` is
     ``"restart"`` because scratch data is not bound to an input hash and a
     format version, so a failed run cannot be resumed from it.
+
+    Passing ``scratch_dir``, ``staging_dir`` and ``destinations`` adds space
+    checks that share this model: requirements on one volume are added together
+    and each phase is compared by its maximum. ``destinations`` maps an artifact
+    kind (``"csf_text"``, ``"csf_parquet"``, ``"descriptor"``, ``"metadata"``)
+    to the path that will receive it, so the model charges each volume the size
+    that artifact actually takes.
+
+    The checks are *reported*, never enforced: an estimate exists to answer
+    whether a run would fit, so an insufficient or unmeasurable volume appears
+    as ``sufficient`` ``False`` or ``None``. Deciding what that means belongs to
+    the caller — :func:`generate_disk_outputs_from_transcript` refuses to start
+    in both cases unless ``allow_unchecked_space`` is set.
     """
     from ._rcsfs import estimate_disk_generation as native_estimate
 
@@ -668,6 +693,11 @@ def estimate_disk_generation(
         transcript=transcript,
         threads=threads,
         memory_budget_mib=memory_budget_mib,
+        scratch_dir=None if scratch_dir is None else str(scratch_dir),
+        staging_dir=None if staging_dir is None else str(staging_dir),
+        destinations=None
+        if destinations is None
+        else [(kind, str(path)) for kind, path in destinations.items()],
     )
 
 

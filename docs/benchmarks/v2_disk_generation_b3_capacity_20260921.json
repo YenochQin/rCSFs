@@ -1,18 +1,10 @@
 {
-  "destination_checks": [
-    {
-      "free_bytes": 73518374912,
-      "path": ".",
-      "required_bytes": 2879906416326,
-      "sufficient": false
-    }
-  ],
   "environment": {
     "cpu_count": 10,
     "git": {
       "branch": "1.3.1-beta2",
-      "commit": "441c3fbe360bac6927d51d9577cef15e033a8dbf",
-      "describe": "441c3fb-dirty",
+      "commit": "aa3cfa50eb3f2effd611eb19c7c51f1b511fa6ce",
+      "describe": "aa3cfa5-dirty",
       "dirty": true
     },
     "machine": "arm64",
@@ -48,7 +40,7 @@
       "staged_outputs": 2303925133061,
       "survivor_bitsets": 726772028
     },
-    "enumeration_millis": 14547,
+    "enumeration_millis": 14993,
     "failure_recovery": "restart",
     "peel_subshells": 56,
     "plan_stats": {
@@ -68,23 +60,32 @@
       "unsplittable_tasks": 0,
       "zero_record_configurations": 14185
     },
-    "planning_millis": 8563,
+    "planning_millis": 7859,
     "pre_deduplication_records": 5814175207,
+    "space_checks": [
+      {
+        "free_bytes": 75707277312,
+        "path": ".",
+        "required_bytes": 24153428419972,
+        "sufficient": false
+      }
+    ],
     "success": true,
     "unique_occupations": 7031941,
     "v2_columns": 226
   },
   "filesystem": {
-    "free_bytes": 73518358528,
-    "path": "/Users/yiqin/Projects/GraspKit-Workspace/rCSFs",
+    "free_bytes": 75707256832,
+    "path": "<repo-root>",
     "total_bytes": 245107195904,
     "type": "apfs"
   },
-  "generated_at_unix_seconds": 1790005319.110605,
+  "generated_at_unix_seconds": 1790009746.821696,
   "schema": "rcsfs-v2-generation-capacity/1",
   "settings": {
     "counted_records_are": "pre-de-duplication",
     "memory_budget_mib": null,
+    "space_checked": true,
     "threads": 8
   },
   "transcript": {
@@ -97,5 +98,5 @@
     "sha256": "1ec027bcbe6532e6855d82c965a1c4713ee9e0396ef461fb6f709cd9070dd1a8",
     "size_bytes": 190
   },
-  "wall_seconds": 23.36027229198953
+  "wall_seconds": 23.191359999997076
 }

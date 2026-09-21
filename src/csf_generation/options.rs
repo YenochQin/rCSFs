@@ -52,6 +52,12 @@ pub(crate) struct GenerationOptions {
     /// Estimated pre-deduplication records one scheduling task may carry.
     /// `None` derives it from the counted total and the thread count.
     pub(crate) records_per_task: Option<u64>,
+    /// Whether a volume whose free space cannot be measured is accepted.
+    ///
+    /// The default is `false`: a platform that cannot report free space would
+    /// otherwise silently skip the pre-flight, which is the failure mode the
+    /// pre-flight exists to prevent. Accepting it has to be an explicit choice.
+    pub(crate) allow_unchecked_space: bool,
     pub(crate) rows_per_batch: usize,
     pub(crate) rows_per_segment: usize,
     pub(crate) budget: ResourceBudget,
@@ -64,6 +70,7 @@ impl Default for GenerationOptions {
             threads: None,
             scratch_dir: None,
             records_per_task: None,
+            allow_unchecked_space: false,
             rows_per_batch: 8_192,
             rows_per_segment: 131_072,
             budget: ResourceBudget::unlimited(),
@@ -78,6 +85,16 @@ impl GenerationOptions {
         memory_budget_mib: Option<usize>,
         scratch_dir: Option<PathBuf>,
     ) -> Result<Self> {
+        Self::from_api_with_space_policy(threads, memory_budget_mib, scratch_dir, false)
+    }
+
+    /// Build the options, deciding explicitly what an unmeasurable volume means.
+    pub(crate) fn from_api_with_space_policy(
+        threads: Option<usize>,
+        memory_budget_mib: Option<usize>,
+        scratch_dir: Option<PathBuf>,
+        allow_unchecked_space: bool,
+    ) -> Result<Self> {
         ensure!(threads != Some(0), "threads must be greater than 0");
         let budget = ResourceBudget::new(memory_budget_mib)?;
         let segment_compression = SegmentCompression::from_environment()?;
@@ -86,6 +103,7 @@ impl GenerationOptions {
             scratch_dir,
             budget,
             segment_compression,
+            allow_unchecked_space,
             ..Self::default()
         })
     }

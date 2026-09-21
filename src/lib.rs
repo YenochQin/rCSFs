@@ -3,7 +3,7 @@ use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods, PyList, PyListMethods};
 use pyo3_arrow::PyRecordBatchReader;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // Public modules for integration testing
 pub mod atomic_output;
@@ -398,7 +398,7 @@ fn generate_csfs_from_transcript(
 /// disk pipeline.  Python owns the final multi-file transaction and optional
 /// CSF-three-line Parquet conversion.
 #[pyfunction]
-#[pyo3(signature = (transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None, memory_budget_mib=None))]
+#[pyo3(signature = (transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None, memory_budget_mib=None, allow_unchecked_space=false))]
 #[allow(clippy::too_many_arguments)]
 fn generate_disk_outputs_from_transcript(
     py: Python,
@@ -410,6 +410,7 @@ fn generate_disk_outputs_from_transcript(
     scratch_dir: String,
     threads: Option<usize>,
     memory_budget_mib: Option<usize>,
+    allow_unchecked_space: bool,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     if matches!(threads, Some(0)) {
         return Err(PyValueError::new_err("threads must be greater than 0"));
@@ -419,10 +420,11 @@ fn generate_disk_outputs_from_transcript(
             "memory_budget_mib must be greater than 0",
         ));
     }
-    let options = crate::csf_generation::GenerationOptions::from_api(
+    let options = crate::csf_generation::GenerationOptions::from_api_with_space_policy(
         threads,
         memory_budget_mib,
         Some(Path::new(&scratch_dir).to_path_buf()),
+        allow_unchecked_space,
     )
     .map_err(|error| PyValueError::new_err(format!("invalid generation options: {error:#}")))?;
     let stats = py
@@ -513,12 +515,23 @@ fn plan_stats_dict(
 /// generation, so its schedule and record counts describe exactly what a run
 /// would do. It creates no scratch directory and publishes no file.
 #[pyfunction]
-#[pyo3(signature = (transcript, threads=None, memory_budget_mib=None))]
+#[pyo3(signature = (
+    transcript,
+    threads=None,
+    memory_budget_mib=None,
+    scratch_dir=None,
+    staging_dir=None,
+    destinations=None
+))]
+#[allow(clippy::too_many_arguments)] // PyO3 exposes one argument per Python parameter.
 fn estimate_disk_generation(
     py: Python,
     transcript: String,
     threads: Option<usize>,
     memory_budget_mib: Option<usize>,
+    scratch_dir: Option<String>,
+    staging_dir: Option<String>,
+    destinations: Option<Vec<(String, String)>>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     if matches!(threads, Some(0)) {
         return Err(PyValueError::new_err("threads must be greater than 0"));
@@ -528,14 +541,34 @@ fn estimate_disk_generation(
             "memory_budget_mib must be greater than 0",
         ));
     }
-    let options = crate::csf_generation::GenerationOptions::from_api(
-        threads,
-        memory_budget_mib,
-        None,
-    )
-    .map_err(|error| PyValueError::new_err(format!("invalid generation options: {error:#}")))?;
-    let estimate = py
-        .detach(|| crate::csf_generation::streaming::estimate_disk_generation(&transcript, &options))
+    let options =
+        crate::csf_generation::GenerationOptions::from_api(threads, memory_budget_mib, None)
+            .map_err(|error| {
+                PyValueError::new_err(format!("invalid generation options: {error:#}"))
+            })?;
+    let layout = crate::csf_generation::streaming::SpaceLayout {
+        scratch_dir: scratch_dir.map(PathBuf::from),
+        staging_dir: staging_dir.map(PathBuf::from),
+        destinations: destinations
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(kind, path)| {
+                Ok((
+                    PathBuf::from(path),
+                    crate::csf_generation::ArtifactKind::from_name(&kind)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, anyhow::Error>>()
+            .map_err(|error| PyValueError::new_err(format!("{error:#}")))?,
+    };
+    let (estimate, checks) = py
+        .detach(|| {
+            crate::csf_generation::streaming::estimate_disk_generation_with_layout(
+                &transcript,
+                &options,
+                &layout,
+            )
+        })
         .map_err(|error| PyIOError::new_err(format!("{error:#}")))?;
     let output = PyDict::new(py);
     output.set_item("success", true)?;
@@ -567,5 +600,15 @@ fn estimate_disk_generation(
     // No manifest binds the scratch of a failed run to its input and format
     // version, so scratch is never reused: a failed run restarts.
     output.set_item("failure_recovery", "restart")?;
+    let space_checks = PyList::empty(py);
+    for check in checks {
+        let item = PyDict::new(py);
+        item.set_item("path", check.path)?;
+        item.set_item("required_bytes", check.required_bytes)?;
+        item.set_item("free_bytes", check.free_bytes)?;
+        item.set_item("sufficient", check.sufficient)?;
+        space_checks.append(item)?;
+    }
+    output.set_item("space_checks", space_checks)?;
     Ok(output.into())
 }

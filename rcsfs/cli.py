@@ -778,7 +778,13 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
 
     # The existing converters truncate their destinations. Run them only in a
     # private staging directory, then hold exclusive handles for publication.
-    with tempfile.TemporaryDirectory(prefix="rcsfs-generation-") as directory:
+    # Staged under the current working directory rather than the system temp
+    # dir: disk-mode generation can write far more Arrow/Parquet data than a
+    # tmpfs-backed /tmp has room for, so the caller's own filesystem is the
+    # safer default. Removed automatically on exit either way.
+    with tempfile.TemporaryDirectory(
+        prefix="rcsfs-generation-", dir=str(Path.cwd())
+    ) as directory:
         root = Path(directory)
         csf_dir = root / "text"
         csf_dir.mkdir()

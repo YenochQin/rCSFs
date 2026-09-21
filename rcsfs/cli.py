@@ -778,6 +778,27 @@ def _print_csfsgenerate_summary(stats: Mapping[str, object]) -> None:
             value = resource.get(key)
             if value is not None:
                 print(f"{key}: {value}")
+    plan_stats = stats.get("plan_stats")
+    if isinstance(plan_stats, Mapping):
+        plan = cast(Mapping[str, object], plan_stats)
+        for key in (
+            "task_count",
+            "target_records_per_task",
+            "estimated_total_records",
+            "zero_record_configurations",
+            "unsplittable_tasks",
+            "unsplittable_records",
+        ):
+            value = plan.get(key)
+            if value is not None:
+                print(f"plan_{key}: {value}")
+        per_task = plan.get("estimated_records_per_task")
+        if isinstance(per_task, Mapping):
+            distribution = cast(Mapping[str, object], per_task)
+            for key in ("minimum", "p50", "p95", "maximum"):
+                value = distribution.get(key)
+                if value is not None:
+                    print(f"plan_estimated_records_per_task_{key}: {value}")
 
 
 def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, object]:

@@ -237,11 +237,42 @@ memory_budget_mib = 8192
 ```
 
 The CLI flag `--memory-budget-mib` overrides the TOML value. The returned JSON
-contains `stage_stats` for enumeration, generation, de-duplication, descriptor
-merge, and CSF restoration, plus `resource_stats.memory_budget_mib`,
-`budget_bytes`, `peak_managed_bytes`, `current_managed_bytes`, and
-`occupation_bytes`. The budget accounts for selected internal data structures;
-it is not an operating-system RSS limit.
+contains `stage_stats` for enumeration, workload planning, generation,
+de-duplication, descriptor merge, and CSF restoration, plus
+`resource_stats.memory_budget_mib`, `budget_bytes`, `peak_managed_bytes`,
+`current_managed_bytes`, and `occupation_bytes`. The budget accounts for
+selected internal data structures; it is not an operating-system RSS limit.
+
+### Counted workload planning
+
+The disk path counts what each enumerated occupation configuration will produce
+before it generates anything, then divides the work into tasks of comparable
+estimated size. The count is the number of `(state selection, coupling chain)`
+pairs that reach a requested `2J`; it is computed by dynamic programming over
+the cumulative `2J` values rather than by walking the chains, and it is checked
+for overflow rather than truncated. Its input contract is exactly the
+generator's: the same occupation validation, the same state tables, and the same
+`2J` range parity rule. When a reachable intermediate coupling could exceed
+GRASP's output field, the configuration is counted by running the generator
+into a counting sink instead, so a configuration the generator would reject is
+rejected here too.
+
+Two invariants hold for the result:
+
+- The plan partitions the configuration list and each configuration's generation
+  order, so concatenating its tasks in ordinal order reproduces the unsplit
+  record order. Task sizes are execution details; `RCSFS_RECORDS_PER_TASK`
+  exists only to hold the schedule fixed in a benchmark.
+- Every counted record is scheduled. Work that cannot be divided far enough to
+  reach the size target is still generated as one task and reported separately
+  in `plan_stats.unsplittable_tasks`, rather than being dropped or hidden.
+
+`plan_stats` reports `task_count`, `target_records_per_task`, the per-task
+estimate distribution (`minimum`/`p50`/`p95`/`maximum`), `unique_occupations`,
+`zero_record_configurations`, `unsplittable_tasks`, and `unsplittable_records`.
+`estimated_total_records` is a pre-de-duplication estimate and is expected to
+equal `generated_count`; the benchmark fails rather than records the run when
+they disagree.
 
 
 Descriptor columns and sidecar subshells follow the final CSF header. The

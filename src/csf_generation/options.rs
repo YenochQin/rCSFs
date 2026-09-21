@@ -49,7 +49,9 @@ impl SegmentCompression {
 pub(crate) struct GenerationOptions {
     pub(crate) threads: Option<usize>,
     pub(crate) scratch_dir: Option<PathBuf>,
-    pub(crate) configurations_per_range: usize,
+    /// Estimated pre-deduplication records one scheduling task may carry.
+    /// `None` derives it from the counted total and the thread count.
+    pub(crate) records_per_task: Option<u64>,
     pub(crate) rows_per_batch: usize,
     pub(crate) rows_per_segment: usize,
     pub(crate) budget: ResourceBudget,
@@ -61,7 +63,7 @@ impl Default for GenerationOptions {
         Self {
             threads: None,
             scratch_dir: None,
-            configurations_per_range: 4_096,
+            records_per_task: None,
             rows_per_batch: 8_192,
             rows_per_segment: 131_072,
             budget: ResourceBudget::unlimited(),
@@ -91,8 +93,8 @@ impl GenerationOptions {
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(self.threads != Some(0), "threads must be greater than 0");
         ensure!(
-            self.configurations_per_range > 0,
-            "configurations_per_range must be greater than 0"
+            self.records_per_task != Some(0),
+            "records_per_task must be greater than 0"
         );
         ensure!(
             self.rows_per_batch > 0,

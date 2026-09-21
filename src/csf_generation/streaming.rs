@@ -11,8 +11,7 @@ use arrow::array::{Array, Int32Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ipc::reader::FileReader;
-use arrow_ipc::writer::{FileWriter, IpcWriteOptions};
-use arrow_ipc::{CompressionType, MetadataVersion};
+use arrow_ipc::writer::FileWriter;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
@@ -28,10 +27,11 @@ use std::time::{Duration, Instant};
 
 use super::{
     EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, GeneratedRecordRef,
-    GeneratedRecordSink, GenerationOptions, GenerationRequest, Parity, ResourceBudget,
-    ResourcePermit, ResourceStats, SegmentCompression, Subshell,
-    enumerate_occupations_with_budget,
-    generate_records_into,
+    GeneratedRecordSink, GenerationOptions, GenerationPlan, Parity,
+    PlanStats, PlannedTask, RecordSelection, ResourceBudget, ResourcePermit,
+    ResourceStats, Subshell, SubshellOccupation, TaskSpan,
+    enumerate_occupations_with_budget, estimate_workload, generate_configuration_records,
+    plan_generation, report_plan,
 };
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
 use crate::complete_csf::OccupiedSubshell;
@@ -212,7 +212,8 @@ pub(crate) struct SegmentGeneration {
     pub(crate) layout: DescriptorLayout,
     pub(crate) peel_subshells: Vec<String>,
     pub(crate) core_subshells: Vec<Subshell>,
-    pub(crate) ranges: Vec<GenerationRange>,
+    /// The counted workload and the schedule derived from it.
+    pub(crate) plan: GenerationPlan,
     pub(crate) segments: Vec<DescriptorSegment>,
     pub(crate) unique_occupations: usize,
     pub(crate) record_count: usize,
@@ -283,6 +284,7 @@ pub(crate) struct DiskGenerationStats {
     pub(crate) descriptor_bytes: u64,
     pub(crate) stage_stats: Vec<StageStats>,
     pub(crate) resource_stats: ResourceStats,
+    pub(crate) plan_stats: PlanStats,
 }
 
 /// Generate, exactly de-duplicate and restore a V2 descriptor through private
@@ -433,28 +435,8 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
         resource_stats: generated
             .budget
             .snapshot(generated.resource_stats.occupation_bytes),
+        plan_stats: generated.plan.stats(),
     })
-}
-
-/// Partition `configuration_count` inputs into fixed-size, stable ranges.
-pub(crate) fn plan_generation_ranges(
-    configuration_count: usize,
-    configurations_per_range: usize,
-) -> Result<Vec<GenerationRange>> {
-    ensure!(
-        configurations_per_range > 0,
-        "configurations_per_range must be greater than 0"
-    );
-    let mut ranges = Vec::with_capacity(configuration_count.div_ceil(configurations_per_range));
-    for start in (0..configuration_count).step_by(configurations_per_range) {
-        let ordinal = u32::try_from(ranges.len()).context("too many generation ranges")?;
-        ranges.push(GenerationRange {
-            ordinal,
-            start_configuration: start,
-            end_configuration: (start + configurations_per_range).min(configuration_count),
-        });
-    }
-    Ok(ranges)
 }
 
 /// Determine the deterministic Peel table needed before any V2 row is written.
@@ -518,30 +500,46 @@ pub(crate) fn generate_v2_descriptor_segments(
         .enumerate()
         .map(|(index, &shell)| Ok((shell, u16::try_from(index)?)))
         .collect::<Result<HashMap<_, _>>>()?;
-    let ranges = plan_generation_ranges(
-        occupations.configurations.len(),
-        options.configurations_per_range,
-    )?;
     let ranges_root = scratch_dir.join("ranges");
+    let planning_timer = StageTimer::start();
+    let workload = estimate_workload(request, &occupations, options.threads)?;
+    let plan = plan_generation(
+        request,
+        &occupations,
+        workload,
+        options.threads,
+        options.records_per_task,
+    )?;
+    report_plan(&plan);
+    let planning_stats = planning_timer.finish(
+        "workload_planning",
+        occupations.configurations.len(),
+        plan.tasks.len(),
+        0,
+        // Planning reads the occupation arena and writes no file of its own, so
+        // both byte counters stay zero. The counted record estimate is reported
+        // through `plan_stats`, which is not a file-byte measurement.
+        0,
+    );
+    let generation_timer = StageTimer::start();
     fs::create_dir_all(&ranges_root).with_context(|| {
         format!(
             "failed to create scratch directory {}",
             ranges_root.display()
         )
     })?;
-    let generation_timer = StageTimer::start();
-    let progress = Arc::new(RangeProgress::new(ranges.len()));
+    let progress = Arc::new(RangeProgress::new(plan.tasks.len()));
 
-    let run_range = || {
-        ranges
+    let run_task = || {
+        plan.tasks
             .par_iter()
-            .map(|range| {
-                generate_range_segments(
-                    *range,
-                    &occupations.configurations,
-                    &occupations.core_subshells,
+            .map(|task| {
+                generate_task_segments(
+                    task,
                     request.min_two_j,
                     request.max_two_j,
+                    &occupations.configurations,
+                    &occupations.core_subshells,
                     layout,
                     &peel_subshells,
                     &global_indices,
@@ -557,8 +555,8 @@ pub(crate) fn generate_v2_descriptor_segments(
             .num_threads(threads)
             .build()
             .context("failed to build descriptor range thread pool")?
-            .install(run_range)?,
-        None => run_range()?,
+            .install(run_task)?,
+        None => run_task()?,
     };
     progress.finish();
 
@@ -587,12 +585,12 @@ pub(crate) fn generate_v2_descriptor_segments(
         layout,
         peel_subshells,
         core_subshells: occupations.core_subshells,
-        ranges,
         segments,
         unique_occupations: occupations.configurations.len(),
         record_count,
         stage_stats: vec![
             enumeration_stats,
+            planning_stats,
             generation_timer.finish(
                 "csf_generation",
                 occupations.configurations.len(),
@@ -603,6 +601,7 @@ pub(crate) fn generate_v2_descriptor_segments(
         ],
         budget: options.budget.clone(),
         resource_stats,
+        plan,
     })
 }
 
@@ -1500,8 +1499,8 @@ fn write_generation_header(
 fn validate_options(options: &StreamingGenerationOptions) -> Result<()> {
     ensure!(options.threads != Some(0), "threads must be greater than 0");
     ensure!(
-        options.configurations_per_range > 0,
-        "configurations_per_range must be greater than 0"
+        options.records_per_task != Some(0),
+        "records_per_task must be greater than 0"
     );
     ensure!(
         options.rows_per_batch > 0,
@@ -1520,12 +1519,12 @@ struct RangeResult {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn generate_range_segments(
-    range: GenerationRange,
-    configurations: &[EnumeratedConfiguration],
-    core_subshells: &[Subshell],
+fn generate_task_segments(
+    task: &PlannedTask,
     min_two_j: u16,
     max_two_j: u16,
+    configurations: &[EnumeratedConfiguration],
+    core_subshells: &[Subshell],
     layout: DescriptorLayout,
     peel_subshells: &[String],
     global_indices: &HashMap<Subshell, u16>,
@@ -1534,15 +1533,16 @@ fn generate_range_segments(
     progress: &RangeProgress,
 ) -> Result<RangeResult> {
     progress.range_started();
-    let range_dir = ranges_root.join(format!("range-{:06}", range.ordinal));
+    let range_dir = ranges_root.join(format!("range-{:06}", task.ordinal));
     fs::create_dir(&range_dir)
         .with_context(|| format!("failed to create range directory {}", range_dir.display()))?;
-    let mut writer = RangeSegmentWriter::new(range.ordinal, layout, range_dir, options)?;
-    // Keep recursion on the range worker. The old nested collector retained
+    let mut writer = RangeSegmentWriter::new(task.ordinal, layout, range_dir, options)?;
+    // Keep recursion on the task worker. The old nested collector retained
     // complete branch CSF vectors and could exhaust a caller-supplied budget
     // before the segment writer had a chance to flush.
     let branch_count = 1;
-    for configuration in &configurations[range.start_configuration..range.end_configuration] {
+    let plan_span = task.span.configurations();
+    for configuration in &configurations[plan_span] {
         let configuration_bytes = configuration
             .occupations
             .len()
@@ -1554,28 +1554,52 @@ fn generate_range_segments(
                 .context("generation configuration bytes exceed u64")?,
             "generation configuration copy",
         )?;
-        let generation_request = GenerationRequest {
-            core_subshells: core_subshells.to_vec(),
-            configuration: configuration.occupations.clone(),
-            min_two_j,
-            max_two_j,
-        };
-        let local_to_global = local_to_global_indices(&generation_request, global_indices)?;
+        let local_to_global = local_to_global_indices(&configuration.occupations, global_indices)?;
         let mut sink =
             DescriptorBatchSink::new(layout, peel_subshells, local_to_global, &mut writer);
-        generate_records_into(&generation_request, branch_count, &mut sink)?;
+        let selection = task_selection(task)?;
+        generate_configuration_records(
+            core_subshells,
+            &configuration.occupations,
+            min_two_j,
+            max_two_j,
+            selection,
+            branch_count,
+            &mut sink,
+        )?;
     }
     let result = writer.finish()?;
     progress.range_completed(result.record_count);
     Ok(result)
 }
 
+/// The record selection a planned task generates.
+///
+/// A multi-configuration task applies its selection to each configuration in
+/// turn; the task span guarantees this walks the configurations in the same
+/// order the unsplit path would.
+fn task_selection(task: &PlannedTask) -> Result<RecordSelection<'_>> {
+    match &task.span {
+        TaskSpan::Configurations { .. } => Ok(RecordSelection::All),
+        TaskSpan::Targets { targets, .. } => Ok(RecordSelection::Targets(targets)),
+        TaskSpan::StatePrefixes {
+            target,
+            branch_count,
+            branches,
+            ..
+        } => Ok(RecordSelection::StatePrefixes {
+            target: *target,
+            branch_count: *branch_count,
+            branches: branches.clone(),
+        }),
+    }
+}
+
 fn local_to_global_indices(
-    request: &GenerationRequest,
+    configuration: &[SubshellOccupation],
     global_indices: &HashMap<Subshell, u16>,
 ) -> Result<Vec<u16>> {
-    request
-        .configuration
+    configuration
         .iter()
         .filter(|entry| entry.electrons > 0)
         .map(|entry| {
@@ -2223,7 +2247,7 @@ fn copy_surviving_segment_to_parquet(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::csf_generation::{enumerate_occupations, generate_csfs};
+    use crate::csf_generation::{GenerationRequest, enumerate_occupations, generate_csfs};
     use crate::descriptor_v2::write_feature_row;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -2367,26 +2391,33 @@ mod tests {
         let request = ExcitationRequest::from_transcript(transcript()).unwrap();
         let root = temporary_directory("merge");
         fs::create_dir(&root).unwrap();
-        let mut thread_counts = vec![1, 2, num_cpus::get().max(1)];
-        thread_counts.sort_unstable();
-        thread_counts.dedup();
+        // Thread count and scheduling granularity are execution choices: the
+        // published rows must be identical for every combination, including the
+        // smallest task target that still fits one configuration per task and
+        // the state-prefix splitting it forces.
+        let mut schedules = vec![(1usize, 1u64), (2, 1), (num_cpus::get().max(1), 1)];
+        schedules.push((1, 3));
+        schedules.push((1, u64::MAX));
+        schedules.sort_unstable();
+        schedules.dedup();
         let mut results = Vec::new();
-        for threads in thread_counts {
-            let scratch = root.join(format!("scratch-{threads}"));
-            let output = root.join(format!("descriptors-{threads}.parquet"));
+        for (threads, records_per_task) in schedules {
+            let label = format!("t{threads}-r{records_per_task}");
+            let scratch = root.join(format!("scratch-{label}"));
+            let output = root.join(format!("descriptors-{label}.parquet"));
             let generated = generate_v2_descriptor_segments(
                 &request,
                 &scratch,
                 &StreamingGenerationOptions {
                     threads: Some(threads),
-                    configurations_per_range: 1,
+                    records_per_task: Some(records_per_task),
                     rows_per_batch: 2,
                     rows_per_segment: 3,
                     ..StreamingGenerationOptions::default()
                 },
             )
             .unwrap();
-            assert!(generated.segments.len() > 1);
+            assert!(!generated.segments.is_empty());
             assert!(
                 generated
                     .segments
@@ -2400,37 +2431,52 @@ mod tests {
                 expected_rows(&request, &generated.peel_subshells).unwrap(),
             ));
         }
-        let expected = &results[0].1;
-        for (rows, comparison) in &results {
-            assert_eq!(rows, comparison);
-            assert_eq!(rows, expected);
-        }
+        assert!(
+            results
+                .iter()
+                .all(|(rows, comparison)| rows == comparison && rows == &results[0].0),
+            "scheduling changed the published rows"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// A plan accounts for the counted workload exactly once and walks the
+    /// configurations in enumeration order.
+    ///
+    /// Splitting one configuration across several tasks is allowed, so the
+    /// configurations a task touches do not partition the input on their own.
+    /// What must hold is that the estimated records add up to the counted
+    /// total — a task that is computed and then not scheduled would silently
+    /// lose those records — and that no task reaches backwards.
     #[test]
-    fn range_planning_is_contiguous_and_rejects_zero_size() {
-        assert!(plan_generation_ranges(4, 0).is_err());
-        assert_eq!(
-            plan_generation_ranges(5, 2).unwrap(),
-            [
-                GenerationRange {
-                    ordinal: 0,
-                    start_configuration: 0,
-                    end_configuration: 2,
-                },
-                GenerationRange {
-                    ordinal: 1,
-                    start_configuration: 2,
-                    end_configuration: 4,
-                },
-                GenerationRange {
-                    ordinal: 2,
-                    start_configuration: 4,
-                    end_configuration: 5,
-                },
-            ]
-        );
+    fn a_plan_accounts_for_every_counted_record_in_order() {
+        for target in [None, Some(1), Some(3)] {
+            let request = ExcitationRequest::from_transcript(transcript()).unwrap();
+            let occupations = enumerate_occupations(&request).unwrap();
+            let workload = estimate_workload(&request, &occupations, Some(1)).unwrap();
+            let plan =
+                plan_generation(&request, &occupations, workload, Some(1), target).unwrap();
+            let scheduled = plan
+                .tasks
+                .iter()
+                .try_fold(0u64, |total, task| total.checked_add(task.estimated_records))
+                .unwrap();
+            assert_eq!(scheduled, plan.workload.total_records);
+            let mut previous = 0;
+            for task in &plan.tasks {
+                let span = task.span.configurations();
+                assert!(
+                    span.start >= previous && span.end > span.start,
+                    "task spans must advance in configuration order: {:?}",
+                    task.span
+                );
+                previous = span.start;
+            }
+            assert_eq!(
+                plan.tasks.last().unwrap().span.configurations().end,
+                occupations.configurations.len()
+            );
+        }
     }
 
     #[test]
@@ -2443,7 +2489,7 @@ mod tests {
             &root.join("scratch"),
             &StreamingGenerationOptions {
                 threads: Some(1),
-                configurations_per_range: 1,
+                records_per_task: Some(1),
                 rows_per_batch: 2,
                 rows_per_segment: 3,
                 ..StreamingGenerationOptions::default()
@@ -2485,7 +2531,7 @@ mod tests {
             &root.join("ranges"),
             &StreamingGenerationOptions {
                 threads: Some(1),
-                configurations_per_range: 1,
+                records_per_task: Some(1),
                 rows_per_batch: 2,
                 rows_per_segment: 3,
                 ..StreamingGenerationOptions::default()
@@ -2506,7 +2552,7 @@ mod tests {
             layout: generated.layout,
             peel_subshells: generated.peel_subshells.clone(),
             core_subshells: generated.core_subshells.clone(),
-            ranges: generated.ranges.clone(),
+            plan: generated.plan.clone(),
             segments: generated
                 .segments
                 .iter()
@@ -2580,7 +2626,7 @@ mod tests {
             &root.join("ranges"),
             &StreamingGenerationOptions {
                 threads: Some(1),
-                configurations_per_range: 1,
+                records_per_task: Some(1),
                 rows_per_batch: 2,
                 rows_per_segment: 3,
                 ..StreamingGenerationOptions::default()

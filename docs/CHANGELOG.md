@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### V2 生成容量预估与磁盘预检（2026-09-21）
+
+- 新增 `csf_generation::capacity`：用 P5a 的 checked 计数估算 segment、根桶、
+  递归桶、幸存位图、描述符、CSF 文本与 CSF Parquet 的字节数，应用 25% 安全
+  余量，并在写入任何 segment 之前检查 scratch 与 staging 卷的可用空间；CLI
+  另外检查各最终目标目录，因为发布是复制，且目标路径只有 CLI 知道。
+- 新增 `estimate_disk_generation`（Python/PyO3）与 CLI `--estimate-only`：
+  执行与真实运行相同的枚举、计数与调度，但不创建 scratch、不写文件。
+- 估算模型的所有比例取自登记的 B1/B2 实测，报告以 `assumptions` 列出每个比例
+  与未实测项（递归分桶按再整体重写一遍计入，不默认为零）。B2 上估算为实测的
+  1.01–1.62 倍。
+- 登记 B3 完整输入（`b3_cc1_9spdfg_4exc.rcsfgenerate`）：计数得到 7,031,941
+  个组态与 5,814,175,207 条去重前 CSF，与计划 §2.2 的独立数值完全一致；容量
+  报告见 `docs/benchmarks/v2_disk_generation_b3_capacity_20260921.md`。
+- 明确失败恢复策略为"重新开始"：scratch 未绑定输入哈希与格式版本，不从其中
+  恢复；`plan_stats` 之外新增报告字段 `failure_recovery`。
+- 明确受管预算并发超出时的处理是立即返回资源错误（不是等待/背压），并在
+  文档中登记 B1/B2 的受管峰值与 RSS 差距。
+
 ### V2 生成计数与工作量规划（2026-09-21）
 
 - 新增 `csf_generation::planning`：生成前用动态规划精确计数每个占据组态的

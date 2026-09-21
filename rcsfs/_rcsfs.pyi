@@ -4,6 +4,7 @@ from typing import Protocol
 
 from ._types import (
     ConversionStats,
+    CsfGenerationEstimate,
     CsfGenerationStats,
     CsfHeaderData,
     CsfRestoreStats,
@@ -79,6 +80,11 @@ def generate_disk_outputs_from_transcript(
     threads: int | None = None,
     memory_budget_mib: int | None = None,
 ) -> CsfGenerationStats: ...
+def estimate_disk_generation(
+    transcript: str,
+    threads: int | None = None,
+    memory_budget_mib: int | None = None,
+) -> CsfGenerationEstimate: ...
 def select_interacting_csfs(
     reference_csf: str,
     candidate_csf: str,

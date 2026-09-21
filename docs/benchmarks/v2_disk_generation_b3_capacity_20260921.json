@@ -1,0 +1,101 @@
+{
+  "destination_checks": [
+    {
+      "free_bytes": 73518374912,
+      "path": ".",
+      "required_bytes": 2879906416326,
+      "sufficient": false
+    }
+  ],
+  "environment": {
+    "cpu_count": 10,
+    "git": {
+      "branch": "1.3.1-beta2",
+      "commit": "441c3fbe360bac6927d51d9577cef15e033a8dbf",
+      "describe": "441c3fb-dirty",
+      "dirty": true
+    },
+    "machine": "arm64",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "python": "3.14.0",
+    "release": "25.6.0",
+    "system": "Darwin",
+    "total_memory_bytes": 17179869184
+  },
+  "estimate": {
+    "assumptions": [
+      "record counts are pre-de-duplication: no record is assumed to be removed (B1/B2 removed none, and a removing input only lowers the published sizes)",
+      "segments 1007 bytes/row = 1.1x the 904-byte V2 row plus two ordinals; measured overhead was 3.3%",
+      "root buckets 960 bytes/row = V2 row + 16-byte digest + 8-byte ordinal + framing; measured exactly V2 row + 24",
+      "recursive bucketing assumes 1 additional full repartition; it was never triggered by the registered inputs",
+      "descriptor 1/100 bytes per V2 integer per row; measured 0.0098 (61 columns) and 0.0062 (226 columns) bytes, so every shape is rounded up",
+      "CSF text 321 bytes/record and CSF Parquet 73 bytes/record; measured 320.05/27.51 and 300.77/72.60, rounded up",
+      "publishing copies the staged set to its destinations, so the staged set and the published files exist at the same time",
+      "safety margin 5/4 on every requirement",
+      "free space is checked with statvfs where the platform provides it; elsewhere it is reported as unchecked rather than assumed sufficient"
+    ],
+    "bytes": {
+      "csf_parquet": 424434790111,
+      "csf_text": 1866350241447,
+      "descriptor": 13140035967,
+      "recursive_buckets": 5581608198720,
+      "required_output": 2879906416326,
+      "required_scratch": 21273522003646,
+      "root_buckets": 5581608198720,
+      "scratch_peak": 17018817602917,
+      "segments": 5854874433449,
+      "staged_outputs": 2303925133061,
+      "survivor_bitsets": 726772028
+    },
+    "enumeration_millis": 14547,
+    "failure_recovery": "restart",
+    "peel_subshells": 56,
+    "plan_stats": {
+      "estimated_records_per_task": {
+        "count": 1455,
+        "maximum": 3999999,
+        "minimum": 660658,
+        "p50": 3999089,
+        "p95": 3999953,
+        "total": 5814175207
+      },
+      "estimated_total_records": 5814175207,
+      "target_records_per_task": 4000000,
+      "task_count": 1455,
+      "unique_occupations": 7031941,
+      "unsplittable_records": 0,
+      "unsplittable_tasks": 0,
+      "zero_record_configurations": 14185
+    },
+    "planning_millis": 8563,
+    "pre_deduplication_records": 5814175207,
+    "success": true,
+    "unique_occupations": 7031941,
+    "v2_columns": 226
+  },
+  "filesystem": {
+    "free_bytes": 73518358528,
+    "path": "/Users/yiqin/Projects/GraspKit-Workspace/rCSFs",
+    "total_bytes": 245107195904,
+    "type": "apfs"
+  },
+  "generated_at_unix_seconds": 1790005319.110605,
+  "schema": "rcsfs-v2-generation-capacity/1",
+  "settings": {
+    "counted_records_are": "pre-de-duplication",
+    "memory_budget_mib": null,
+    "threads": 8
+  },
+  "transcript": {
+    "description": "core 1, both registered references, full active space 9s,9p,9d,9f,7g, 2J = 8, 4 excitations",
+    "expected_records": 5814175207,
+    "expected_unique_occupations": 7031941,
+    "name": "b3",
+    "path": "b3_cc1_9spdfg_4exc.rcsfgenerate",
+    "registered": true,
+    "sha256": "1ec027bcbe6532e6855d82c965a1c4713ee9e0396ef461fb6f709cd9070dd1a8",
+    "size_bytes": 190
+  },
+  "wall_seconds": 23.36027229198953
+}

@@ -28,6 +28,7 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(partition_csfs, m)?)?;
     m.add_function(wrap_pyfunction!(generate_csfs_from_transcript, m)?)?;
     m.add_function(wrap_pyfunction!(generate_disk_outputs_from_transcript, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_disk_generation, m)?)?;
     m.add_function(wrap_pyfunction!(select_interacting_csfs, m)?)?;
 
     // Register CSF descriptor module
@@ -476,28 +477,26 @@ fn generate_disk_outputs_from_transcript(
         stage_stats.append(item)?;
     }
     output.set_item("stage_stats", stage_stats)?;
+    output.set_item("plan_stats", plan_stats_dict(py, &stats.plan_stats)?)?;
+    Ok(output.into())
+}
+
+/// The counted workload and schedule, shared by the generation result and the
+/// estimate-only report so both describe the plan the same way.
+fn plan_stats_dict(
+    py: Python<'_>,
+    stats: &crate::csf_generation::PlanStats,
+) -> PyResult<pyo3::Py<PyDict>> {
     let plan_stats = PyDict::new(py);
-    plan_stats.set_item("task_count", stats.plan_stats.task_count)?;
-    plan_stats.set_item(
-        "target_records_per_task",
-        stats.plan_stats.target_records_per_task,
-    )?;
-    plan_stats.set_item(
-        "estimated_total_records",
-        stats.plan_stats.estimated_total_records,
-    )?;
-    plan_stats.set_item("unique_occupations", stats.plan_stats.unique_occupations)?;
-    plan_stats.set_item(
-        "zero_record_configurations",
-        stats.plan_stats.zero_record_configurations,
-    )?;
-    plan_stats.set_item("unsplittable_tasks", stats.plan_stats.unsplittable_tasks)?;
-    plan_stats.set_item(
-        "unsplittable_records",
-        stats.plan_stats.unsplittable_records,
-    )?;
+    plan_stats.set_item("task_count", stats.task_count)?;
+    plan_stats.set_item("target_records_per_task", stats.target_records_per_task)?;
+    plan_stats.set_item("estimated_total_records", stats.estimated_total_records)?;
+    plan_stats.set_item("unique_occupations", stats.unique_occupations)?;
+    plan_stats.set_item("zero_record_configurations", stats.zero_record_configurations)?;
+    plan_stats.set_item("unsplittable_tasks", stats.unsplittable_tasks)?;
+    plan_stats.set_item("unsplittable_records", stats.unsplittable_records)?;
     let per_task = PyDict::new(py);
-    let distribution = stats.plan_stats.estimated_records_per_task;
+    let distribution = stats.estimated_records_per_task;
     per_task.set_item("count", distribution.count)?;
     per_task.set_item("total", distribution.total)?;
     per_task.set_item("minimum", distribution.minimum)?;
@@ -505,6 +504,68 @@ fn generate_disk_outputs_from_transcript(
     per_task.set_item("p95", distribution.p95)?;
     per_task.set_item("maximum", distribution.maximum)?;
     plan_stats.set_item("estimated_records_per_task", per_task)?;
-    output.set_item("plan_stats", plan_stats)?;
+    Ok(plan_stats.unbind())
+}
+
+/// Count a transcript's workload and estimate its capacity without writing.
+///
+/// This runs the same enumeration, counting and planning as a real disk
+/// generation, so its schedule and record counts describe exactly what a run
+/// would do. It creates no scratch directory and publishes no file.
+#[pyfunction]
+#[pyo3(signature = (transcript, threads=None, memory_budget_mib=None))]
+fn estimate_disk_generation(
+    py: Python,
+    transcript: String,
+    threads: Option<usize>,
+    memory_budget_mib: Option<usize>,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    if matches!(threads, Some(0)) {
+        return Err(PyValueError::new_err("threads must be greater than 0"));
+    }
+    if matches!(memory_budget_mib, Some(0)) {
+        return Err(PyValueError::new_err(
+            "memory_budget_mib must be greater than 0",
+        ));
+    }
+    let options = crate::csf_generation::GenerationOptions::from_api(
+        threads,
+        memory_budget_mib,
+        None,
+    )
+    .map_err(|error| PyValueError::new_err(format!("invalid generation options: {error:#}")))?;
+    let estimate = py
+        .detach(|| crate::csf_generation::streaming::estimate_disk_generation(&transcript, &options))
+        .map_err(|error| PyIOError::new_err(format!("{error:#}")))?;
+    let output = PyDict::new(py);
+    output.set_item("success", true)?;
+    output.set_item("unique_occupations", estimate.plan_stats.unique_occupations)?;
+    output.set_item(
+        "pre_deduplication_records",
+        estimate.capacity.pre_deduplication_records,
+    )?;
+    output.set_item("peel_subshells", estimate.capacity.peel_subshells)?;
+    output.set_item("v2_columns", estimate.capacity.v2_columns)?;
+    output.set_item("enumeration_millis", estimate.enumeration_millis)?;
+    output.set_item("planning_millis", estimate.planning_millis)?;
+    output.set_item("plan_stats", plan_stats_dict(py, &estimate.plan_stats)?)?;
+    let capacity = &estimate.capacity;
+    let bytes = PyDict::new(py);
+    bytes.set_item("segments", capacity.segment_bytes)?;
+    bytes.set_item("root_buckets", capacity.root_bucket_bytes)?;
+    bytes.set_item("recursive_buckets", capacity.recursive_bucket_bytes)?;
+    bytes.set_item("survivor_bitsets", capacity.survivor_bitset_bytes)?;
+    bytes.set_item("scratch_peak", capacity.scratch_peak_bytes)?;
+    bytes.set_item("descriptor", capacity.descriptor_bytes)?;
+    bytes.set_item("csf_text", capacity.csf_text_bytes)?;
+    bytes.set_item("csf_parquet", capacity.csf_parquet_bytes)?;
+    bytes.set_item("staged_outputs", capacity.staged_output_bytes)?;
+    bytes.set_item("required_scratch", capacity.required_scratch_bytes)?;
+    bytes.set_item("required_output", capacity.required_output_bytes)?;
+    output.set_item("bytes", bytes)?;
+    output.set_item("assumptions", capacity.assumption_lines().to_vec())?;
+    // No manifest binds the scratch of a failed run to its input and format
+    // version, so scratch is never reused: a failed run restarts.
+    output.set_item("failure_recovery", "restart")?;
     Ok(output.into())
 }

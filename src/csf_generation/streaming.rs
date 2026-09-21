@@ -30,9 +30,10 @@ use super::{
     GeneratedRecordSink, GenerationOptions, GenerationPlan, Parity,
     PlanStats, PlannedTask, RecordSelection, ResourceBudget, ResourcePermit,
     ResourceStats, Subshell, SubshellOccupation, TaskSpan,
-    enumerate_occupations_with_budget, estimate_workload, generate_configuration_records,
-    plan_generation, report_plan,
+    enumerate_occupations_with_budget, estimate_capacity, estimate_workload,
+    generate_configuration_records, plan_generation, report_plan, request_targets,
 };
+use super::{CapacityEstimate, SpaceCheck, preflight_run};
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
 use crate::complete_csf::OccupiedSubshell;
 use crate::descriptor_schema::{
@@ -349,7 +350,25 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
         )
     })?;
     eprintln!("Generating CSFs and V2 descriptors to disk segments...");
-    let generated = generate_v2_descriptor_segments(&request, scratch_dir, options)?;
+    // Refuse a run whose estimate does not fit the scratch or staging volumes,
+    // while the scratch directory still holds nothing but the empty root.
+    let outputs = [
+        csf_output,
+        csf_parquet_output,
+        descriptor_output,
+        header_output,
+    ];
+    let generated = generate_v2_descriptor_segments_checked(
+        &request,
+        scratch_dir,
+        options,
+        |estimate| {
+            for check in preflight_run(estimate, scratch_dir, &outputs)? {
+                report_space_check(&check);
+            }
+            Ok(())
+        },
+    )?;
     stage_stats.extend(generated.stage_stats.iter().cloned());
     eprintln!(
         "Generated {} CSFs across {} symmetry blocks",
@@ -439,6 +458,85 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
     })
 }
 
+/// What a run is expected to cost, derived without writing anything.
+///
+/// This is the scriptable pre-flight: it enumerates and counts exactly as
+/// generation does, then reports the schedule and the byte estimate. It creates
+/// no scratch directory and publishes no file, so it can be run before a
+/// decision about a multi-hour job.
+#[derive(Debug)]
+pub(crate) struct DiskEstimate {
+    pub(crate) layout: DescriptorLayout,
+    pub(crate) plan_stats: PlanStats,
+    pub(crate) capacity: CapacityEstimate,
+    pub(crate) enumeration_millis: u128,
+    pub(crate) planning_millis: u128,
+}
+
+/// Count the workload and estimate the capacity of a transcript.
+pub(crate) fn estimate_disk_generation(
+    transcript: &str,
+    options: &GenerationOptions,
+) -> Result<DiskEstimate> {
+    options.validate()?;
+    let enumeration_timer = StageTimer::start();
+    let request = ExcitationRequest::from_transcript(transcript)?;
+    let (occupations, _charge) = enumerate_occupations_with_budget(&request, None)?;
+    ensure!(
+        !occupations.configurations.is_empty(),
+        "occupation enumeration produced no configurations"
+    );
+    let peel = precompute_peel_subshells(&occupations);
+    ensure!(
+        !peel.is_empty(),
+        "no occupied Peel subshells were enumerated"
+    );
+    let enumeration_millis = enumeration_timer.wall.elapsed().as_millis();
+    let planning_timer = StageTimer::start();
+    let workload = estimate_workload(&request, &occupations, options.threads)?;
+    let plan = plan_generation(
+        &request,
+        &occupations,
+        workload,
+        options.threads,
+        options.records_per_task,
+    )?;
+    let capacity = estimate_capacity(
+        peel.len(),
+        plan.workload.total_records,
+        u64::try_from(request_targets(&request)?.len())
+            .context("2J target count exceeds u64")?
+            .saturating_mul(2),
+    )?;
+    Ok(DiskEstimate {
+        layout: DescriptorLayout::new(DescriptorVersion::V2, peel.len()),
+        plan_stats: plan.stats(),
+        capacity,
+        enumeration_millis,
+        planning_millis: planning_timer.wall.elapsed().as_millis(),
+    })
+}
+
+/// Report one pre-flight space check on stderr.
+///
+/// A check the platform cannot answer is reported as unchecked rather than as
+/// sufficient: an unknown value is not a clearance.
+fn report_space_check(check: &SpaceCheck) {
+    match (check.free_bytes, check.sufficient) {
+        (Some(free), Some(sufficient)) => eprintln!(
+            "Pre-flight: {} needs {} bytes, {} available{}",
+            check.path,
+            check.required_bytes,
+            free,
+            if sufficient { "" } else { " (INSUFFICIENT)" }
+        ),
+        _ => eprintln!(
+            "Pre-flight: {} needs {} bytes; free space is not reported on this platform",
+            check.path, check.required_bytes
+        ),
+    }
+}
+
 /// Determine the deterministic Peel table needed before any V2 row is written.
 ///
 /// This scans the already-enumerated relativistic occupations rather than the
@@ -469,6 +567,22 @@ pub(crate) fn generate_v2_descriptor_segments(
     request: &ExcitationRequest,
     scratch_dir: &Path,
     options: &StreamingGenerationOptions,
+) -> Result<SegmentGeneration> {
+    generate_v2_descriptor_segments_checked(request, scratch_dir, options, |_| Ok(()))
+}
+
+/// Generate V2 segments, offering the counted capacity estimate to the caller
+/// before a single row is written.
+///
+/// Enumeration and counting happen once. `preflight` therefore receives an
+/// estimate derived from the same counts that scheduled the work, and can
+/// refuse the run while the scratch directory is still empty instead of after
+/// the segments have filled a filesystem.
+pub(crate) fn generate_v2_descriptor_segments_checked(
+    request: &ExcitationRequest,
+    scratch_dir: &Path,
+    options: &StreamingGenerationOptions,
+    preflight: impl FnOnce(&CapacityEstimate) -> Result<()>,
 ) -> Result<SegmentGeneration> {
     options.validate()?;
     let enumerate_timer = StageTimer::start();
@@ -521,6 +635,17 @@ pub(crate) fn generate_v2_descriptor_segments(
         // through `plan_stats`, which is not a file-byte measurement.
         0,
     );
+    // The capacity estimate is complete before any segment exists. Symmetry
+    // blocks are not known yet, so the bitset term uses the largest number the
+    // requested 2J range can produce.
+    let capacity = estimate_capacity(
+        peel_subshells.len(),
+        plan.workload.total_records,
+        u64::try_from(request_targets(request)?.len())
+            .context("2J target count exceeds u64")?
+            .saturating_mul(2),
+    )?;
+    preflight(&capacity)?;
     let generation_timer = StageTimer::start();
     fs::create_dir_all(&ranges_root).with_context(|| {
         format!(
@@ -2477,6 +2602,35 @@ mod tests {
                 occupations.configurations.len()
             );
         }
+    }
+
+    /// A rejected pre-flight must leave the scratch directory without a single
+    /// segment: the whole point is to fail before hours of writing.
+    #[test]
+    fn a_refused_preflight_writes_no_segment() {
+        let request = ExcitationRequest::from_transcript(transcript()).unwrap();
+        let root = temporary_directory("preflight");
+        fs::create_dir(&root).unwrap();
+        let scratch = root.join("scratch");
+        let error = generate_v2_descriptor_segments_checked(
+            &request,
+            &scratch,
+            &StreamingGenerationOptions {
+                threads: Some(1),
+                ..StreamingGenerationOptions::default()
+            },
+            |estimate| {
+                assert!(estimate.scratch_peak_bytes > 0);
+                anyhow::bail!("refused by the test pre-flight")
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("refused by the test pre-flight"));
+        assert!(
+            !scratch.exists(),
+            "a refused pre-flight must not create the scratch directory"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

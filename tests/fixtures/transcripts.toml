@@ -10,6 +10,11 @@
 # values registered in docs/benchmarks; the maintained test suite checks the
 # hash and `unique_occupations` (cheap), while `scripts/benchmark_v2_generation.py`
 # additionally cross-checks `records` against a real run (expensive).
+#
+# `manual = true` marks an input whose enumeration is too expensive for the
+# default test suite. Its hash is still checked on every run; its counts are
+# verified by scripts/estimate_v2_generation.py, which counts without generating
+# and therefore does not enter `cargo test` or `pytest`.
 
 version = 1
 
@@ -28,3 +33,14 @@ sha256 = "280822983d7f008d8a5a62b0a0fe5b507c2c33e6aa24316834c6ca9f3a8abbf8"
 description = "core 1, both registered references, full active space 9s,9p,9d,9f,7g, 2J = 8, 2 excitations"
 unique_occupations = 19243
 records = 560351
+
+[[transcript]]
+name = "b3"
+file = "b3_cc1_9spdfg_4exc.rcsfgenerate"
+sha256 = "1ec027bcbe6532e6855d82c965a1c4713ee9e0396ef461fb6f709cd9070dd1a8"
+description = "core 1, both registered references, full active space 9s,9p,9d,9f,7g, 2J = 8, 4 excitations"
+unique_occupations = 7031941
+records = 5814175207
+# 7.03M configurations: the enumeration alone takes ~15 s at 8 threads and
+# several GiB, which does not belong in the default suite.
+manual = true

@@ -120,7 +120,17 @@ struct ResourceState {
 /// This is deliberately an accounting limit, not an RSS limit.  Allocator
 /// metadata, thread stacks, Arrow/Parquet runtime buffers and the process
 /// itself remain outside the managed total and are reported separately by the
-/// caller's documentation.
+/// caller's documentation.  On the registered B1/B2 inputs the managed peak was
+/// 29-88 MiB against a 371-660 MiB process RSS, so the unmanaged remainder is
+/// several times the accounted total; that gap is why this value must not be
+/// described as a memory cap.
+///
+/// A reservation that would exceed the limit fails immediately with a resource
+/// error. It deliberately does not wait or apply backpressure: a brief
+/// concurrent overshoot is a real possibility when several workers reserve in
+/// the same instant, and converting it into an unbounded wait would trade a
+/// clear failure for a stall whose timing depends on worker completion order.
+/// Callers that want headroom must ask for a larger budget.
 #[derive(Clone, Debug)]
 pub(crate) struct ResourceBudget {
     state: Arc<ResourceState>,

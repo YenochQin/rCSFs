@@ -58,6 +58,8 @@ from ._types import (
     ConversionStats,
     CsfBlockInfo,
     CsfDataStats,
+    CsfGenerationEstimate,
+    CsfGenerationEstimateBytes,
     CsfGenerationPlanStats,
     CsfGenerationRecordDistribution,
     CsfGenerationResourceStats,
@@ -641,6 +643,34 @@ def generate_disk_outputs_from_transcript(
     )
 
 
+def estimate_disk_generation(
+    transcript: str,
+    threads: int | None = None,
+    *,
+    memory_budget_mib: int | None = None,
+) -> CsfGenerationEstimate:
+    """Count a transcript's workload and estimate a disk run's capacity.
+
+    This enumerates, counts and schedules exactly as
+    :func:`generate_disk_outputs_from_transcript` would, but creates no scratch
+    directory and writes no output. Use it to decide whether a run fits before
+    committing to it: ``bytes`` holds the estimated size of each path and its
+    safety-margined requirement, and ``assumptions`` lists every ratio and
+    unmeasured quantity the estimate relies on.
+
+    The estimates are upper bounds, not promises. ``failure_recovery`` is
+    ``"restart"`` because scratch data is not bound to an input hash and a
+    format version, so a failed run cannot be resumed from it.
+    """
+    from ._rcsfs import estimate_disk_generation as native_estimate
+
+    return native_estimate(
+        transcript=transcript,
+        threads=threads,
+        memory_budget_mib=memory_budget_mib,
+    )
+
+
 # ///////////////////////////////////////////////////////////////////////////////
 # Public API
 # ///////////////////////////////////////////////////////////////////////////////
@@ -663,6 +693,7 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     # CSF generation
     "generate_csfs_from_transcript",
     "generate_disk_outputs_from_transcript",
+    "estimate_disk_generation",
     # Type definitions
     "CsfHeaderInfo",
     "CsfBlockInfo",
@@ -674,6 +705,8 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     "CsfRestoreStats",
     "PartitionStats",
     "CsfGenerationStats",
+    "CsfGenerationEstimate",
+    "CsfGenerationEstimateBytes",
     "CsfGenerationPlanStats",
     "CsfGenerationRecordDistribution",
     "CsfGenerationResourceStats",

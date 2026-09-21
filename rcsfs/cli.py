@@ -11,10 +11,11 @@ import tomllib
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol, TextIO, cast
 
 from . import (
     convert_csfs,
+    estimate_disk_generation,
     generate_csfs_from_transcript,
     generate_descriptors_from_parquet,
     generate_disk_outputs_from_transcript,
@@ -81,6 +82,7 @@ class CsfsGenerateArgs(Protocol):
     normalize: bool
     threads: int | None
     memory_budget_mib: int | None
+    estimate_only: bool
     generation_storage: Literal["memory", "disk"] | None
     scratch_dir: Path | None
     json: bool
@@ -331,6 +333,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Existing directory for disk-generation scratch data.",
+    )
+    _ = csfsgenerate.add_argument(
+        "--estimate-only",
+        action="store_true",
+        help=(
+            "Count the workload and report the capacity estimate without generating "
+            "anything (requires --generate-descriptors)."
+        ),
     )
     _ = csfsgenerate.add_argument(
         "--json",
@@ -741,6 +751,9 @@ def _read_continue() -> bool:
 
 
 def _print_csfsgenerate_summary(stats: Mapping[str, object]) -> None:
+    if stats.get("estimate_only") is True:
+        _print_estimate_summary(stats)
+        return
     output_file = stats.get("output_file", "")
     print(f"Generated CSFs: {output_file}")
     record_count = stats.get("record_count")
@@ -801,6 +814,112 @@ def _print_csfsgenerate_summary(stats: Mapping[str, object]) -> None:
                     print(f"plan_estimated_records_per_task_{key}: {value}")
 
 
+def _estimate_bytes(estimate: Mapping[str, object], key: str) -> int:
+    """Read one byte estimate from a capacity report, rejecting a missing one."""
+    bytes_table = estimate.get("bytes")
+    if not isinstance(bytes_table, Mapping):
+        raise ValueError("Capacity estimate is missing its byte table")
+    value = cast(Mapping[str, object], bytes_table).get(key)
+    if not isinstance(value, int):
+        raise ValueError(f"Capacity estimate is missing the {key} byte count")
+    return value
+
+
+def _check_destination_space(
+    estimate: Mapping[str, object], destinations: Mapping[Path, int]
+) -> list[dict[str, object]]:
+    """Check each destination volume against its own share of the estimate.
+
+    Publication copies the staged set into its destinations, so those files
+    exist on top of everything the run already wrote. Only the destination that
+    receives each artifact is charged for it, which is why this is done here
+    rather than inside the generation call: the final paths are the CLI's.
+    """
+    staged = _estimate_bytes(estimate, "staged_outputs")
+    required = _estimate_bytes(estimate, "required_output")
+    # Derive the model's safety margin from the report rather than repeating it.
+    margin_numerator = required
+    margin_denominator = max(staged, 1)
+    by_directory: dict[Path, int] = {}
+    for path, size in destinations.items():
+        parent = path.parent if path.parent != Path("") else Path(".")
+        by_directory[parent] = by_directory.get(parent, 0) + size
+    checks: list[dict[str, object]] = []
+    for directory, size in sorted(by_directory.items(), key=lambda item: str(item[0])):
+        needed = size * margin_numerator // margin_denominator
+        try:
+            free = shutil.disk_usage(directory).free
+        except OSError:
+            checks.append(
+                {
+                    "path": str(directory),
+                    "required_bytes": needed,
+                    "free_bytes": None,
+                    "sufficient": None,
+                }
+            )
+            continue
+        sufficient = free >= needed
+        checks.append(
+            {
+                "path": str(directory),
+                "required_bytes": needed,
+                "free_bytes": free,
+                "sufficient": sufficient,
+            }
+        )
+        if not sufficient:
+            raise ValueError(
+                f"Not enough free space for the published outputs at {directory}: "
+                f"{needed} bytes required (including the safety margin), "
+                f"{free} bytes available"
+            )
+    return checks
+
+
+def _print_estimate_summary(
+    stats: Mapping[str, object], *, file: TextIO | None = None
+) -> None:
+    """Print the counted workload and the capacity estimate."""
+    stream: TextIO = sys.stdout if file is None else file
+    plan_stats = stats.get("plan_stats")
+    plan: Mapping[str, object] = (
+        cast(Mapping[str, object], plan_stats) if isinstance(plan_stats, Mapping) else {}
+    )
+    print(f"unique_occupations: {stats.get('unique_occupations')}", file=stream)
+    print(
+        f"pre_dedup_records: {stats.get('pre_deduplication_records')}",
+        file=stream,
+    )
+    print(f"peel_subshells: {stats.get('peel_subshells')}", file=stream)
+    print(f"v2_columns: {stats.get('v2_columns')}", file=stream)
+    for key in ("task_count", "target_records_per_task", "zero_record_configurations",
+                "unsplittable_tasks", "unsplittable_records"):
+        value = plan.get(key)
+        if value is not None:
+            print(f"plan_{key}: {value}", file=stream)
+    bytes_table = stats.get("bytes")
+    if isinstance(bytes_table, Mapping):
+        for key, value in cast(Mapping[str, object], bytes_table).items():
+            print(f"bytes_{key}: {value}", file=stream)
+    checks = stats.get("space_checks")
+    if isinstance(checks, list):
+        for value in cast(list[object], checks):
+            if not isinstance(value, Mapping):
+                continue
+            check = cast(Mapping[str, object], value)
+            print(
+                f"space_check {check.get('path')}: required {check.get('required_bytes')} "
+                f"free {check.get('free_bytes')} sufficient {check.get('sufficient')}",
+                file=stream,
+            )
+    assumptions = stats.get("assumptions")
+    if isinstance(assumptions, list):
+        for value in cast(list[object], assumptions):
+            print(f"assumption: {value}", file=stream)
+    print(f"failure_recovery: {stats.get('failure_recovery')}", file=stream)
+
+
 def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, object]:
     csf_parquet = args.parquet or args.output.with_suffix(".parquet")
     descriptor_parquet = args.descriptor_parquet or args.output.with_name(
@@ -835,6 +954,32 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
         raise ValueError("normalize is not supported by reversible V2 descriptors")
     if args.memory_budget_mib is not None and args.generation_storage != "disk":
         raise ValueError("memory_budget_mib requires disk generation storage")
+    if args.estimate_only and args.generation_storage != "disk":
+        raise ValueError(
+            "estimate_only covers the disk descriptor path; add --generate-descriptors"
+        )
+    if args.generation_storage == "disk":
+        estimate = dict(
+            estimate_disk_generation(
+                transcript,
+                args.threads,
+                memory_budget_mib=args.memory_budget_mib,
+            )
+        )
+        # The Rust pre-flight covers scratch and the staging volume; the final
+        # destinations are only known here, and publication copies into them.
+        destinations_by_path = {
+            args.output: _estimate_bytes(estimate, "csf_text"),
+            csf_parquet: _estimate_bytes(estimate, "csf_parquet"),
+            header: 0,
+            descriptor_parquet: _estimate_bytes(estimate, "descriptor"),
+            metadata: 0,
+        }
+        estimate["space_checks"] = _check_destination_space(estimate, destinations_by_path)
+        if args.estimate_only:
+            estimate["estimate_only"] = True
+            return estimate
+        _print_estimate_summary(estimate, file=sys.stderr)
 
     # The existing converters truncate their destinations. Run them only in a
     # private staging directory, then hold exclusive handles for publication.

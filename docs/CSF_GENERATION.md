@@ -274,6 +274,39 @@ estimate distribution (`minimum`/`p50`/`p95`/`maximum`), `unique_occupations`,
 equal `generated_count`; the benchmark fails rather than records the run when
 they disagree.
 
+### Capacity pre-flight
+
+The same counts size the run. Before the first segment is written, the disk path
+estimates the Arrow segments, root and recursive de-duplication buckets, the
+survivor bitsets and the published artifacts, applies a 25% safety margin and
+checks the scratch and staging volumes; the CLI additionally checks each final
+destination, because publication copies the staged set into paths only the CLI
+knows. A run that cannot fit is refused while the scratch directory is still
+empty.
+
+Every ratio comes from the registered B1/B2 runs and is reported in the result's
+`assumptions`, together with the quantities that were never measured — most
+importantly one full recursive repartition, which is assumed rather than assumed
+away. The estimate is therefore an upper bound with a visible derivation: on B2
+it lands 1.01x-1.62x above the measured run, the larger end being that recursive
+allowance. Ratios and their measured ranges are registered in
+[docs/benchmarks](benchmarks/README.md).
+
+`estimate_disk_generation` performs the same enumeration, counting and
+scheduling without creating scratch or writing anything, and the CLI exposes it
+as `csfsgenerate --estimate-only` (requires the disk descriptor path). The
+report's `failure_recovery` is `"restart"`: scratch is not bound to an input
+hash or a format version, so a failed run is restarted rather than resumed, and
+a pre-flight cannot promise otherwise.
+
+Managed memory and RSS are reported separately. On B1/B2 the managed peak was
+29-88 MiB against 371-660 MiB of process RSS: the accounting covers the
+structures the pipeline owns, not the allocator, thread stacks, Arrow/Parquet
+runtime buffers or the page cache. A reservation that would exceed the budget
+fails immediately with a resource error instead of waiting, so a brief
+concurrent overshoot produces one clear failure rather than a stall whose timing
+depends on which worker finishes first.
+
 
 Descriptor columns and sidecar subshells follow the final CSF header. The
 standalone `gen-descriptors` command still supports the legacy V1 layout only

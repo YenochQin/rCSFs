@@ -163,7 +163,7 @@ P0a 与 P1 已完成。剩余顺序为 `P0b → P5a → P1.5`；P6a 唯一性研
 - [x] 将 B1/B2 的完整、无私有数据依赖的 transcript 或可确定性生成 transcript 的输入固化，并记录内容 SHA-256；不只依赖段落中的口头参数。固化在 `tests/fixtures/b1_cc1_5spdfg_3exc.rcsfgenerate`、`b2_cc1_fullas_2exc.rcsfgenerate` 与 `b3_cc1_9spdfg_4exc.rcsfgenerate`，由 `tests/fixtures/transcripts.toml` 绑定哈希与登记计数。
 - [x] 修正总墙钟测量边界，不把临时输出删除时间计入生成耗时；如需评估清理，将其作为独立阶段。`wall_seconds` 只覆盖生成调用，删除时间单列为 `cleanup_seconds`。
 - [x] 基准脚本支持预热、至少 3 次重复、执行顺序记录，并保存 Git 版本、CPU/内存、操作系统、文件系统、线程数、预算、RSS、`resource_stats`、scratch 峰值、文件数和可获得的物理 I/O。默认预热 1 次、测量 3 次；macOS 不提供 `/proc/self/io`，物理 I/O 记为空而不是估算值。
-- [ ] 将本地 B1/B2 原始聚合测量及后续目标机器测量登记到 `docs/benchmarks/`，不记录机器专属绝对路径或生成的完整 CSF。本地 B1/B2、线程与预算矩阵及 B3 容量报告已登记，并已归一化机器路径；目标机器测量仍未做，仍是 B4 的前置条件。
+- [ ] 将本地 B1/B2 原始聚合测量及后续目标机器测量登记到 `docs/benchmarks/`，不记录机器专属绝对路径或生成的完整 CSF。本地 B1/B2、1/2/4/8 线程与低/中/高三档预算矩阵（[2026-09-22](benchmarks/v2_disk_generation_matrix_20260922.md)）及 B3 容量报告已登记，机器路径已归一化并由测试守住；目标机器测量仍未做，仍是 B4 的前置条件。
 
 完成条件（P0a，已满足）：同一 API/脚本能运行 B1/B2 并生成阶段报告；B0 的文本、V2 schema/行顺序和元数据回归通过；1/2/4/8 线程比较入口存在且不进入默认 pytest。
 

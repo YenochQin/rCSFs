@@ -1,0 +1,11 @@
+rcsfgenerate<< EOF
+ * ! Orbital order
+1
+2s(2,i)2p(6,i)3s(2,1)3p(6,i)3d(8,*)4s(2,*)
+2s(2,i)2p(6,i)3s(2,i)3p(6,5)3d(8,*)4s(2,*)
+
+5s,5p,5d,5f,5g
+8,8
+           3  ! Number of excitations
+n
+EOF

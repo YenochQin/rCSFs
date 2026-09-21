@@ -23,12 +23,16 @@ use super::{
     count_configuration_records, prepare_configuration, state_prefixes,
 };
 
-/// Default share of the estimated work handed to one task.
+/// Smallest estimate one task is allowed to carry.
 ///
-/// The target is derived from the total and the thread count rather than fixed,
-/// so a small run still has enough tasks to fill the pool and a huge run does
-/// not produce multi-gigabyte segment files.
-const RECORDS_PER_TASK_LOWER_BOUND: u64 = 250_000;
+/// The target comes from the total and the thread count, so this only binds on
+/// small inputs — and it must not bind hard enough to leave the pool idle. On
+/// the registered B2 input at 8 threads, a 250,000 floor produced 3 tasks and
+/// 5.55 s end to end, while 10,000-50,000 produced 11-56 tasks and 4.56-4.82 s,
+/// almost all of the difference in the generation stage. A 32,768 floor keeps
+/// the task count bounded for small inputs (at most `records / 32768`) without
+/// starving a 8-10 thread pool.
+const RECORDS_PER_TASK_LOWER_BOUND: u64 = 32_768;
 
 /// Upper bound of one task's estimated record count.
 ///
@@ -810,5 +814,21 @@ mod tests {
         );
         assert_eq!(choose_task_target(1, Some(8), Some(7)).unwrap(), 7);
         assert!(choose_task_target(1, Some(8), Some(0)).is_err());
+    }
+
+    /// The size target must not leave the pool idle on a small input.
+    ///
+    /// A floor that is too high is invisible in the plan (it is a valid size)
+    /// but shows up as a task count below the thread count.
+    #[test]
+    fn a_small_input_still_yields_more_tasks_than_threads() {
+        let threads = 8usize;
+        let total = 560_351; // the registered B2 input
+        let target = choose_task_target(total, Some(threads), None).unwrap();
+        let tasks = total.div_ceil(target);
+        assert!(
+            tasks >= threads as u64,
+            "{tasks} tasks for {threads} threads at a {target}-record target"
+        );
     }
 }

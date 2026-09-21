@@ -89,11 +89,22 @@ def test_config_generation_json_contains_stage_stats(
     assert payload["resource_stats"]["memory_budget_mib"] is None
     assert [stage["name"] for stage in payload["stage_stats"]] == [
         "enumeration",
+        "workload_planning",
         "csf_generation",
         "deduplication",
         "descriptor_merge",
         "csf_restore",
     ]
+    plan_stats = payload["plan_stats"]
+    assert plan_stats["task_count"] >= 1
+    assert plan_stats["unique_occupations"] == payload["unique_occupations"]
+    # The counted estimate is what the schedule and the capacity model trust, so
+    # it has to agree with what generation actually produced.
+    assert plan_stats["estimated_total_records"] == payload["generated_count"]
+    per_task = plan_stats["estimated_records_per_task"]
+    assert per_task["count"] == plan_stats["task_count"]
+    assert per_task["minimum"] <= per_task["p50"] <= per_task["p95"]
+    assert per_task["p95"] <= per_task["maximum"]
 
 
 def test_config_generation_reads_memory_budget(

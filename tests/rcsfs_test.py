@@ -421,11 +421,13 @@ def test_disk_generation_scratch_layout_and_v2_roundtrip(
     assert "Range progress:" in capfd.readouterr().err
     assert [stage["name"] for stage in stats["stage_stats"]] == [
         "enumeration",
+        "workload_planning",
         "csf_generation",
         "deduplication",
         "descriptor_merge",
         "csf_restore",
     ]
+    assert stats["plan_stats"]["estimated_total_records"] == stats["generated_count"]
     assert all(stage["elapsed_millis"] >= 0 for stage in stats["stage_stats"])
     assert all(
         stage["cpu_millis"] is None or stage["cpu_millis"] >= 0

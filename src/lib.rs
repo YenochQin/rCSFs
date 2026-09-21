@@ -476,5 +476,35 @@ fn generate_disk_outputs_from_transcript(
         stage_stats.append(item)?;
     }
     output.set_item("stage_stats", stage_stats)?;
+    let plan_stats = PyDict::new(py);
+    plan_stats.set_item("task_count", stats.plan_stats.task_count)?;
+    plan_stats.set_item(
+        "target_records_per_task",
+        stats.plan_stats.target_records_per_task,
+    )?;
+    plan_stats.set_item(
+        "estimated_total_records",
+        stats.plan_stats.estimated_total_records,
+    )?;
+    plan_stats.set_item("unique_occupations", stats.plan_stats.unique_occupations)?;
+    plan_stats.set_item(
+        "zero_record_configurations",
+        stats.plan_stats.zero_record_configurations,
+    )?;
+    plan_stats.set_item("unsplittable_tasks", stats.plan_stats.unsplittable_tasks)?;
+    plan_stats.set_item(
+        "unsplittable_records",
+        stats.plan_stats.unsplittable_records,
+    )?;
+    let per_task = PyDict::new(py);
+    let distribution = stats.plan_stats.estimated_records_per_task;
+    per_task.set_item("count", distribution.count)?;
+    per_task.set_item("total", distribution.total)?;
+    per_task.set_item("minimum", distribution.minimum)?;
+    per_task.set_item("p50", distribution.p50)?;
+    per_task.set_item("p95", distribution.p95)?;
+    per_task.set_item("maximum", distribution.maximum)?;
+    plan_stats.set_item("estimated_records_per_task", per_task)?;
+    output.set_item("plan_stats", plan_stats)?;
     Ok(output.into())
 }

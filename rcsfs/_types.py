@@ -126,6 +126,35 @@ class CsfGenerationResourceStats(TypedDict):
     occupation_bytes: int
 
 
+class CsfGenerationRecordDistribution(TypedDict):
+    """Distribution of the counted record estimate across scheduled tasks."""
+
+    count: int
+    total: int
+    minimum: int
+    p50: int
+    p95: int
+    maximum: int
+
+
+class CsfGenerationPlanStats(TypedDict):
+    """Counted workload and the schedule the disk path derived from it.
+
+    The estimates are pre-deduplication record counts taken before generation
+    starts. ``estimated_total_records`` is not a promise: ``generated_count``
+    reports what was actually produced, and the two are expected to agree.
+    """
+
+    task_count: int
+    target_records_per_task: int
+    estimated_records_per_task: CsfGenerationRecordDistribution
+    estimated_total_records: int
+    unique_occupations: int
+    zero_record_configurations: int
+    unsplittable_tasks: int
+    unsplittable_records: int
+
+
 class CsfGenerationStats(TypedDict):
     """Statistics returned from transcript-driven CSF generation."""
 
@@ -142,6 +171,7 @@ class CsfGenerationStats(TypedDict):
     descriptor_bytes: NotRequired[int]
     stage_stats: NotRequired[list[CsfGenerationStageStats]]
     resource_stats: NotRequired[CsfGenerationResourceStats]
+    plan_stats: NotRequired[CsfGenerationPlanStats]
     error: NotRequired[str]
 
 

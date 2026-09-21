@@ -187,6 +187,7 @@ pub(crate) fn generate_disk_outputs_from_transcript(
         "disk generation scratch directory already exists: {}",
         scratch_dir.display()
     );
+    eprintln!("Parsing transcript and enumerating configurations...");
     let request = ExcitationRequest::from_transcript(transcript)?;
     fs::create_dir(scratch_dir).with_context(|| {
         format!(
@@ -194,28 +195,41 @@ pub(crate) fn generate_disk_outputs_from_transcript(
             scratch_dir.display()
         )
     })?;
+    eprintln!("Generating CSFs and V2 descriptors to disk segments...");
     let generated = generate_v2_descriptor_segments(
         &request,
-        &scratch_dir.join("ranges"),
+        scratch_dir,
         &StreamingGenerationOptions {
             threads,
             ..StreamingGenerationOptions::default()
         },
     )?;
+    eprintln!("Generated {} CSFs across {} symmetry blocks", generated.record_count, count_blocks(&generated.segments));
+    print_j_value_summary(&generated.segments);
+
+    eprintln!("Deduplicating descriptor segments...");
     let deduplicated = deduplicate_v2_descriptor_segments(
         &generated,
         &scratch_dir.join("dedup"),
         &DeduplicationOptions::default(),
     )?;
+    eprintln!("Deduplicated: {} unique CSFs ({} duplicates removed)", deduplicated.unique_count, deduplicated.duplicate_count);
+
+    eprintln!("Writing generation header...");
     let header_lines = generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
     write_generation_header(header_output, header_lines.clone(), &deduplicated)?;
+
+    eprintln!("Merging deduplicated segments to final descriptor Parquet...");
     merge_v2_deduplicated_segments(&deduplicated, descriptor_output)?;
+
+    eprintln!("Restoring CSF text and Parquet outputs...");
     crate::csfs_descriptor::restore_v2_descriptor_parquet_to_outputs(
         descriptor_output,
         header_output,
         csf_output,
         Some(csf_parquet_output),
     )?;
+    eprintln!("Generation complete!");
     Ok(DiskGenerationStats {
         unique_occupations: generated.unique_occupations,
         generated_count: deduplicated.generated_count,
@@ -1072,6 +1086,30 @@ fn format_usize_list(values: &[usize]) -> String {
     text
 }
 
+fn count_blocks(segments: &[DescriptorSegment]) -> usize {
+    let mut blocks = std::collections::HashSet::new();
+    for segment in segments {
+        blocks.insert((segment.total_two_j, segment.parity == Parity::Odd));
+    }
+    blocks.len()
+}
+
+fn print_j_value_summary(segments: &[DescriptorSegment]) {
+    let mut blocks = BTreeMap::<(u16, bool), usize>::new();
+    for segment in segments {
+        *blocks.entry(block_key(segment.total_two_j, segment.parity))
+            .or_insert(0) += segment.record_count;
+    }
+
+    eprintln!("\nCSFs per J value:");
+    for ((total_two_j, odd), count) in blocks {
+        let parity = if odd { "odd" } else { "even" };
+        let j_value = f64::from(total_two_j) / 2.0;
+        eprintln!("  J = {:4.1} ({:>4}): {:10} CSFs", j_value, parity, count);
+    }
+    eprintln!();
+}
+
 fn generated_header_lines(core_subshells: &[Subshell], peel_subshells: &[String]) -> [String; 5] {
     [
         "Core subshells:".to_owned(),
@@ -1436,6 +1474,16 @@ impl BlockSegmentWriter {
     }
 
     fn open_next(&mut self) -> Result<()> {
+        // Ensure the range directory exists before creating files
+        if !self.range_dir.exists() {
+            fs::create_dir_all(&self.range_dir).with_context(|| {
+                format!(
+                    "failed to create range directory {}",
+                    self.range_dir.display()
+                )
+            })?;
+        }
+
         let parity = match self.parity {
             Parity::Even => "even",
             Parity::Odd => "odd",

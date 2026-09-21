@@ -31,6 +31,24 @@ fn header(labels: impl IntoIterator<Item = String>) -> String {
         .to_owned()
 }
 
+fn print_memory_j_value_summary(chunks: &[CompleteCsfFile]) {
+    let mut blocks = BTreeMap::<(u16, bool), usize>::new();
+    for chunk in chunks {
+        for block in &chunk.blocks {
+            *blocks.entry((block.total_two_j, block.parity == Parity::Odd))
+                .or_insert(0) += usize::try_from(block.record_len).unwrap_or(0);
+        }
+    }
+
+    eprintln!("\nCSFs per J value:");
+    for ((total_two_j, odd), count) in blocks {
+        let parity = if odd { "odd" } else { "even" };
+        let j_value = f64::from(total_two_j) / 2.0;
+        eprintln!("  J = {:4.1} ({:>4}): {:10} CSFs", j_value, parity, count);
+    }
+    eprintln!();
+}
+
 /// Statistics from ordering, merging and writing already-generated CSF chunks.
 pub struct WriteStats {
     pub record_count: usize,
@@ -134,8 +152,12 @@ pub fn generate_csfs_from_transcript(
 
     threads: Option<usize>,
 ) -> Result<TranscriptGenerationStats> {
+    eprintln!("Parsing transcript and enumerating configurations...");
     let request = ExcitationRequest::from_transcript(transcript)?;
     let occupations = enumerate_occupations(&request)?;
+    eprintln!("Enumerated {} unique occupation configurations", occupations.configurations.len());
+
+    eprintln!("Generating CSFs in memory...");
     let requests = occupations
         .configurations
         .iter()
@@ -147,7 +169,12 @@ pub fn generate_csfs_from_transcript(
         })
         .collect::<Vec<_>>();
     let chunks = generate_csfs_parallel(&requests, threads)?;
+
+    eprintln!("Writing CSF text file...");
     let write_stats = write_generated_csfs(&occupations.core_subshells, &chunks, output_path)?;
+    eprintln!("Generated {} CSFs across {} symmetry blocks", write_stats.record_count, write_stats.block_count);
+    print_memory_j_value_summary(&chunks);
+
     Ok(TranscriptGenerationStats {
         unique_occupations: occupations.configurations.len(),
         record_count: write_stats.record_count,

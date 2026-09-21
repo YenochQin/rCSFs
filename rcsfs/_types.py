@@ -44,6 +44,7 @@ class ConversionStats(TypedDict):
     success: bool
     input_file: NotRequired[str]
     output_file: NotRequired[str]
+    parquet_file: NotRequired[str]
     header_file: NotRequired[str]
     max_line_len: NotRequired[int]
     chunk_size: NotRequired[int]
@@ -113,6 +114,10 @@ class CsfGenerationStats(TypedDict):
     block_count: NotRequired[int]
     unique_occupations: NotRequired[int]
     descriptor_count: NotRequired[int]
+    generated_count: NotRequired[int]
+    duplicate_count: NotRequired[int]
+    csf_bytes: NotRequired[int]
+    descriptor_bytes: NotRequired[int]
     error: NotRequired[str]
 
 

@@ -94,6 +94,7 @@ pub(crate) struct DescriptorSegment {
 pub(crate) struct SegmentGeneration {
     pub(crate) layout: DescriptorLayout,
     pub(crate) peel_subshells: Vec<String>,
+    pub(crate) core_subshells: Vec<Subshell>,
     pub(crate) ranges: Vec<GenerationRange>,
     pub(crate) segments: Vec<DescriptorSegment>,
     pub(crate) unique_occupations: usize,
@@ -145,6 +146,85 @@ pub(crate) struct DeduplicatedSegments {
     pub(crate) duplicate_count: usize,
     pub(crate) hash_collision_count: usize,
     pub(crate) block_lengths: Vec<usize>,
+}
+
+/// Results from the disk generation pipeline before the caller publishes its
+/// private staging files as one output set.
+#[derive(Debug)]
+pub(crate) struct DiskGenerationStats {
+    pub(crate) unique_occupations: usize,
+    pub(crate) generated_count: usize,
+    pub(crate) unique_count: usize,
+    pub(crate) duplicate_count: usize,
+    pub(crate) block_count: usize,
+    pub(crate) csf_bytes: u64,
+    pub(crate) descriptor_bytes: u64,
+}
+
+/// Generate, exactly de-duplicate and restore a V2 descriptor through private
+/// staging paths.  The caller owns final publication, which keeps this deep
+/// module independent of CLI output naming and gives it all-or-nothing
+/// semantics when multiple products are requested.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn generate_disk_outputs_from_transcript(
+    transcript: &str,
+    csf_output: &Path,
+    csf_parquet_output: &Path,
+    descriptor_output: &Path,
+    header_output: &Path,
+    scratch_dir: &Path,
+    threads: Option<usize>,
+) -> Result<DiskGenerationStats> {
+    ensure!(
+        !csf_output.exists()
+            && !csf_parquet_output.exists()
+            && !descriptor_output.exists()
+            && !header_output.exists(),
+        "disk generation staging outputs must not already exist"
+    );
+    ensure!(
+        !scratch_dir.exists(),
+        "disk generation scratch directory already exists: {}",
+        scratch_dir.display()
+    );
+    let request = ExcitationRequest::from_transcript(transcript)?;
+    fs::create_dir(scratch_dir).with_context(|| {
+        format!(
+            "failed to create disk generation scratch directory {}",
+            scratch_dir.display()
+        )
+    })?;
+    let generated = generate_v2_descriptor_segments(
+        &request,
+        &scratch_dir.join("ranges"),
+        &StreamingGenerationOptions {
+            threads,
+            ..StreamingGenerationOptions::default()
+        },
+    )?;
+    let deduplicated = deduplicate_v2_descriptor_segments(
+        &generated,
+        &scratch_dir.join("dedup"),
+        &DeduplicationOptions::default(),
+    )?;
+    let header_lines = generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
+    write_generation_header(header_output, header_lines.clone(), &deduplicated)?;
+    merge_v2_deduplicated_segments(&deduplicated, descriptor_output)?;
+    crate::csfs_descriptor::restore_v2_descriptor_parquet_to_outputs(
+        descriptor_output,
+        header_output,
+        csf_output,
+        Some(csf_parquet_output),
+    )?;
+    Ok(DiskGenerationStats {
+        unique_occupations: generated.unique_occupations,
+        generated_count: deduplicated.generated_count,
+        unique_count: deduplicated.unique_count,
+        duplicate_count: deduplicated.duplicate_count,
+        block_count: deduplicated.block_lengths.len(),
+        csf_bytes: fs::metadata(csf_output)?.len(),
+        descriptor_bytes: fs::metadata(descriptor_output)?.len(),
+    })
 }
 
 /// Partition `configuration_count` inputs into fixed-size, stable ranges.
@@ -272,6 +352,7 @@ pub(crate) fn generate_v2_descriptor_segments(
     Ok(SegmentGeneration {
         layout,
         peel_subshells,
+        core_subshells: occupations.core_subshells,
         ranges,
         segments,
         unique_occupations: occupations.configurations.len(),
@@ -989,6 +1070,69 @@ fn format_usize_list(values: &[usize]) -> String {
     }
     text.push(']');
     text
+}
+
+fn generated_header_lines(core_subshells: &[Subshell], peel_subshells: &[String]) -> [String; 5] {
+    [
+        "Core subshells:".to_owned(),
+        format_header_labels(core_subshells.iter().map(ToString::to_string)),
+        "Peel subshells:".to_owned(),
+        format_header_labels(peel_subshells.iter().cloned()),
+        "CSF(s):".to_owned(),
+    ]
+}
+
+fn format_header_labels(labels: impl IntoIterator<Item = String>) -> String {
+    labels
+        .into_iter()
+        .map(|label| {
+            let display = if label.ends_with('-') {
+                label
+            } else {
+                format!("{label} ")
+            };
+            format!("{display:>5}")
+        })
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
+}
+
+fn write_generation_header(
+    path: &Path,
+    header_lines: [String; 5],
+    deduplicated: &DeduplicatedSegments,
+) -> Result<()> {
+    use crate::csfs_conversion::{BlockInfo, ConversionStats, HeaderData, HeaderInfo};
+
+    let header = HeaderData {
+        header_info: HeaderInfo {
+            header_lines: header_lines.into(),
+        },
+        block_info: BlockInfo {
+            block_lengths: deduplicated.block_lengths.clone(),
+            block_count: deduplicated.block_lengths.len(),
+        },
+        conversion_stats: ConversionStats {
+            csf_count: deduplicated.unique_count,
+            total_lines: deduplicated
+                .unique_count
+                .checked_mul(3)
+                .context("CSF line count overflow")?,
+            truncated_count: 0,
+        },
+    };
+    let text = toml::to_string_pretty(&header).context("failed to serialize generation header")?;
+    let mut file = File::options()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("failed to create header {}", path.display()))?;
+    file.write_all(text.as_bytes())
+        .with_context(|| format!("failed to write header {}", path.display()))?;
+    file.flush()
+        .with_context(|| format!("failed to flush header {}", path.display()))?;
+    Ok(())
 }
 
 fn validate_options(options: &StreamingGenerationOptions) -> Result<()> {
@@ -1920,6 +2064,7 @@ mod tests {
         let duplicated = SegmentGeneration {
             layout: generated.layout,
             peel_subshells: generated.peel_subshells.clone(),
+            core_subshells: generated.core_subshells.clone(),
             ranges: generated.ranges.clone(),
             segments: generated
                 .segments
@@ -2006,6 +2151,33 @@ mod tests {
         let output = root.join("unique.parquet");
         assert!(merge_v2_deduplicated_segments(&deduplicated, &output).is_err());
         assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn disk_pipeline_restores_the_same_csf_text_as_memory_generation() {
+        let root = temporary_directory("disk-pipeline");
+        fs::create_dir(&root).unwrap();
+        let expected = root.join("expected.c");
+        super::super::generate_csfs_from_transcript(transcript(), &expected, Some(1)).unwrap();
+        let generated = root.join("generated.c");
+        let csf_parquet = root.join("generated.parquet");
+        let descriptors = root.join("generated_descriptors.parquet");
+        let header = root.join("generated_header.toml");
+        let stats = generate_disk_outputs_from_transcript(
+            transcript(),
+            &generated,
+            &csf_parquet,
+            &descriptors,
+            &header,
+            &root.join("scratch"),
+            Some(1),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&generated).unwrap(), fs::read(&expected).unwrap());
+        assert_eq!(stats.unique_count, read_rows(&descriptors).unwrap().len());
+        assert!(stats.duplicate_count <= stats.generated_count);
+        assert!(csf_parquet.exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

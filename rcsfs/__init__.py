@@ -603,6 +603,34 @@ def generate_csfs_from_transcript(
     )
 
 
+def generate_disk_outputs_from_transcript(
+    transcript: str,
+    csf_output: str | Path,
+    csf_parquet_output: str | Path,
+    descriptor_output: str | Path,
+    header_output: str | Path,
+    scratch_dir: str | Path,
+    threads: int | None = None,
+) -> CsfGenerationStats:
+    """Generate staged CSF and reversible V2 descriptors with bounded memory.
+
+    This lower-level API intentionally writes only to caller-owned staging
+    paths. The CLI uses it inside its output transaction before it publishes
+    the CSF text, CSF Parquet, header and descriptor artifacts together.
+    """
+    from ._rcsfs import generate_disk_outputs_from_transcript as native_generate
+
+    return native_generate(
+        transcript=transcript,
+        csf_output=str(csf_output),
+        csf_parquet_output=str(csf_parquet_output),
+        descriptor_output=str(descriptor_output),
+        header_output=str(header_output),
+        scratch_dir=str(scratch_dir),
+        threads=threads,
+    )
+
+
 # ///////////////////////////////////////////////////////////////////////////////
 # Public API
 # ///////////////////////////////////////////////////////////////////////////////
@@ -624,6 +652,7 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     "select_interacting_csfs",
     # CSF generation
     "generate_csfs_from_transcript",
+    "generate_disk_outputs_from_transcript",
     # Type definitions
     "CsfHeaderInfo",
     "CsfBlockInfo",

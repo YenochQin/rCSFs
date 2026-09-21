@@ -294,6 +294,26 @@ impl CompleteCsfFile {
         Ok(())
     }
 
+    /// Format one independently owned record for fan-out to streaming sinks.
+    pub(crate) fn format_record_parts(
+        subshells: &[String],
+        occupied: &[OccupiedSubshell],
+        couplings: &[IntermediateCoupling],
+        total_two_j: u16,
+        parity: Parity,
+    ) -> Result<(String, String, String)> {
+        let record = CsfRecord {
+            occupied_start: 0,
+            occupied_len: u16::try_from(occupied.len()).context("too many occupied subshells")?,
+            coupling_start: 0,
+            coupling_len: u16::try_from(couplings.len())
+                .context("too many intermediate couplings")?,
+            total_two_j,
+            parity,
+        };
+        format_record(&record, subshells, occupied, couplings)
+    }
+
     /// Build an empty file ready to receive records via
     /// [`Self::append_generated_record`].
     ///

@@ -15,6 +15,7 @@ from typing import Literal, Protocol, cast
 
 from . import (
     convert_csfs,
+    generate_disk_outputs_from_transcript,
     generate_csfs_from_transcript,
     generate_descriptors_from_parquet,
     partition_csfs,
@@ -79,6 +80,8 @@ class CsfsGenerateArgs(Protocol):
 
     normalize: bool
     threads: int | None
+    generation_storage: Literal["memory", "disk"] | None
+    scratch_dir: Path | None
     json: bool
 
 
@@ -309,6 +312,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Rayon thread count for generation (default: all cores).",
+    )
+    _ = csfsgenerate.add_argument(
+        "--generation-storage",
+        choices=["memory", "disk"],
+        default=None,
+        help="Generation backend. disk streams reversible V2 records through scratch storage.",
+    )
+    _ = csfsgenerate.add_argument(
+        "--scratch-dir",
+        type=Path,
+        default=None,
+        help="Existing directory for disk-generation scratch data.",
     )
     _ = csfsgenerate.add_argument(
         "--json",
@@ -758,6 +773,8 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
                 transcript, args.output, normalize=args.normalize, threads=args.threads
             )
         )
+    if args.generation_storage == "disk" and args.normalize:
+        raise ValueError("normalize is not supported by reversible V2 descriptors")
 
     # The existing converters truncate their destinations. Run them only in a
     # private staging directory, then hold exclusive handles for publication.
@@ -770,31 +787,58 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
         parquet_dir.mkdir()
         parquet = parquet_dir / "csfs.parquet"
         descriptors = root / "features.parquet"
-        stats = dict(
-            generate_csfs_from_transcript(
-                transcript, csf, normalize=args.normalize, threads=args.threads
+        staged_header = parquet_dir / f"{csf.stem}_header.toml"
+        if args.generation_storage == "disk":
+            scratch_base = args.scratch_dir if args.scratch_dir is not None else root
+            if not scratch_base.is_dir():
+                raise FileNotFoundError(
+                    f"Scratch directory does not exist: {scratch_base}"
+                )
+            scratch = scratch_base / f"rcsfs-disk-{csf.stem}"
+            if scratch.exists():
+                raise FileExistsError(
+                    f"Disk-generation scratch already exists: {scratch}"
+                )
+            stats = dict(
+                generate_disk_outputs_from_transcript(
+                    transcript,
+                    csf,
+                    parquet,
+                    descriptors,
+                    staged_header,
+                    scratch,
+                    threads=args.threads,
+                )
             )
-        )
+            shutil.rmtree(scratch, ignore_errors=True)
+        else:
+            stats = dict(
+                generate_csfs_from_transcript(
+                    transcript, csf, normalize=args.normalize, threads=args.threads
+                )
+            )
         if stats.get("success") is not True:
             return stats
-        conversion = convert_csfs(csf, parquet)
-        if conversion.get("success") is not True:
-            return {
-                "success": False,
-                "error": conversion.get("error", "CSF conversion failed"),
-            }
-        staged_header = parquet_dir / f"{csf.stem}_header.toml"
+        if args.generation_storage != "disk":
+            conversion = convert_csfs(csf, parquet)
+            if conversion.get("success") is not True:
+                return {
+                    "success": False,
+                    "error": conversion.get("error", "CSF conversion failed"),
+                }
         shells = read_peel_subshells(staged_header)
-        descriptor_version = 1  # csfsgenerate does not yet expose V2 (plan step 13)
-        result = generate_descriptors_from_parquet(
-            parquet,
-            descriptors,
-            peel_subshells=shells,
-            normalize=args.normalize,
-            descriptor_version=descriptor_version,
-            header_path=staged_header,
-            compression="zstd",
-        )
+        if args.generation_storage == "disk":
+            result: Mapping[str, object] = stats
+        else:
+            result = generate_descriptors_from_parquet(
+                parquet,
+                descriptors,
+                peel_subshells=shells,
+                normalize=args.normalize,
+                descriptor_version=1,
+                header_path=staged_header,
+                compression="zstd",
+            )
         if result.get("success") is not True:
             return {
                 "success": False,
@@ -802,7 +846,7 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
             }
         sidecar = root / "features.toml"
         _ = sidecar.write_text(
-            'format_version = 1\nencoding = "parquet"\n'
+            f'format_version = {result.get("descriptor_version", 2)}\nencoding = "parquet"\n'
             f"normalized = {str(args.normalize).lower()}\n"
             f"record_count = {result['descriptor_count']}\n"
             f"subshells = {json.dumps(shells)}\n",
@@ -885,6 +929,13 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
                 )
             if not args.normalize:
                 args.normalize = _config_bool(output.get("normalize", False))
+            if args.generation_storage is None and generate.get("storage") is not None:
+                args.generation_storage = cast(
+                    Literal["memory", "disk"],
+                    _config_string(generate["storage"]),
+                )
+            if args.scratch_dir is None and generate.get("scratch_dir") is not None:
+                args.scratch_dir = Path(_config_string(generate["scratch_dir"]))
             if _config_bool(generate.get("continue_lists", False)):
                 raise ValueError("continue_lists is not supported yet; use false")
         except (OSError, KeyError, TypeError, ValueError) as exc:
@@ -904,6 +955,16 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
             file=sys.stderr,
         )
         return 1
+
+    if args.generation_storage is None:
+        args.generation_storage = (
+            "disk"
+            if args.generate_descriptors and args.config is not None
+            else "memory"
+        )
+    if args.generation_storage not in ("memory", "disk"):
+        print("Invalid generation storage: expected memory or disk", file=sys.stderr)
+        return 2
 
     transcript = "\n".join(
         [

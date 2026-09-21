@@ -69,6 +69,15 @@ def generate_csfs_from_transcript(
     normalize: bool = False,
     threads: int | None = None,
 ) -> CsfGenerationStats: ...
+def generate_disk_outputs_from_transcript(
+    transcript: str,
+    csf_output: str,
+    csf_parquet_output: str,
+    descriptor_output: str,
+    header_output: str,
+    scratch_dir: str,
+    threads: int | None = None,
+) -> CsfGenerationStats: ...
 def select_interacting_csfs(
     reference_csf: str,
     candidate_csf: str,

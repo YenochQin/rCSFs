@@ -13,8 +13,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::complete_csf::{IntermediateCoupling, OccupiedSubshell, Parity, SubshellState};
 #[cfg(test)]
 use crate::descriptor_schema::MISSING;
-use crate::descriptor_schema::{DescriptorLayout, DescriptorVersion, validate_record};
-use crate::descriptor_v2::write_feature_row;
+use crate::descriptor_schema::{
+    DescriptorLayout, DescriptorVersion, output_schema, validate_record,
+};
+use crate::descriptor_v2::{decode_v2_into, write_feature_row};
 
 pub(crate) fn parse_peel_subshells_from_header_lines(
     header_lines: &[String],
@@ -42,6 +44,260 @@ pub(crate) fn parse_peel_subshells_from_header_lines(
         ));
     }
     Ok(subshells)
+}
+
+/// Restore a complete V2 descriptor Parquet file without materializing its
+/// rows or a `CompleteCsfFile` in memory.
+///
+/// The descriptor's row order is already the final CSF order.  Header block
+/// lengths therefore let this function emit each separator while scanning
+/// record batches, with only one row's integer and decoded-state buffers.
+pub(crate) fn restore_v2_descriptor_parquet_stream(
+    descriptor_path: &Path,
+    header_path: &Path,
+    output_path: &Path,
+) -> Result<(usize, u64)> {
+    restore_v2_descriptor_parquet_to_outputs(descriptor_path, header_path, output_path, None)
+}
+
+/// Stream V2 descriptors once and fan out canonical records to CSF text and,
+/// when requested, the existing three-line CSF Parquet representation.
+pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
+    descriptor_path: &Path,
+    header_path: &Path,
+    output_path: &Path,
+    csf_parquet_path: Option<&Path>,
+) -> Result<(usize, u64)> {
+    use crate::atomic_output::{
+        create_temporary_output, ensure_output_does_not_alias_input, publish_temporary_output,
+    };
+    use crate::complete_csf::CompleteCsfFile;
+    use arrow::array::{Array, ArrayBuilder, Int32Array, StringBuilder, UInt64Builder};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::arrow_writer::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+    use std::fs::File;
+    use std::io::{BufWriter, Write};
+
+    ensure_output_does_not_alias_input(output_path, descriptor_path, "descriptor")?;
+    ensure_output_does_not_alias_input(output_path, header_path, "header")?;
+    let header_toml = std::fs::read_to_string(header_path)
+        .with_context(|| format!("failed to read {}", header_path.display()))?;
+    let (header_lines, block_lengths) = parse_restore_header_from_toml(&header_toml)?;
+    ensure!(
+        !block_lengths.is_empty() && block_lengths.iter().all(|&length| length > 0),
+        "header block_lengths must contain only non-empty blocks"
+    );
+    let peel_subshells = parse_peel_subshells_from_header_lines(&header_lines)?;
+    let expected_hash = crate::descriptor_schema::hash_header_file(header_path)?;
+
+    let file = File::open(descriptor_path)
+        .with_context(|| format!("failed to open {}", descriptor_path.display()))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .context("failed to create descriptor Parquet reader")?;
+    let metadata = builder.metadata().file_metadata().clone();
+    let kv = metadata
+        .key_value_metadata()
+        .context("descriptor file has no key-value metadata; cannot verify version")?;
+    let get = |key: &str| {
+        kv.iter()
+            .find(|entry| entry.key == key)
+            .and_then(|entry| entry.value.clone())
+    };
+    let version_tag: u8 = get("descriptor_version")
+        .context("descriptor file is missing descriptor_version metadata")?
+        .parse()
+        .context("descriptor_version metadata is not a valid integer")?;
+    ensure!(
+        DescriptorVersion::from_tag(version_tag)? == DescriptorVersion::V2,
+        "streaming restoration only supports V2 descriptor files"
+    );
+    let subshell_count: usize = get("subshell_count")
+        .context("descriptor file is missing subshell_count metadata")?
+        .parse()
+        .context("subshell_count metadata is not a valid integer")?;
+    ensure!(
+        subshell_count == peel_subshells.len(),
+        "descriptor subshell_count {subshell_count} differs from header Peel count {}",
+        peel_subshells.len()
+    );
+    if let Some(stored_hash) = get("source_header_sha256") {
+        ensure!(
+            stored_hash == expected_hash,
+            "header file does not match the hash recorded in the descriptor file"
+        );
+    }
+    let expected_rows = block_lengths.iter().try_fold(0usize, |total, &length| {
+        total
+            .checked_add(length)
+            .context("header block count overflow")
+    })?;
+    ensure!(
+        usize::try_from(metadata.num_rows()).ok() == Some(expected_rows),
+        "descriptor has {} rows but header block_lengths total {expected_rows}",
+        metadata.num_rows()
+    );
+    let layout = DescriptorLayout::new(DescriptorVersion::V2, subshell_count);
+    let expected_schema = output_schema(layout, false)?;
+    let schema = builder.schema();
+    ensure!(
+        schema.fields().len() == expected_schema.fields().len(),
+        "descriptor schema has {} columns, expected {}",
+        schema.fields().len(),
+        expected_schema.fields().len()
+    );
+    for (actual, expected) in schema.fields().iter().zip(expected_schema.fields()) {
+        ensure!(
+            actual.name() == expected.name()
+                && actual.data_type() == expected.data_type()
+                && !actual.is_nullable(),
+            "descriptor schema field {:?} does not match V2 contract",
+            actual.name()
+        );
+    }
+
+    let mut reader = builder
+        .build()
+        .context("failed to build descriptor Parquet reader")?;
+    let (temporary, file) = create_temporary_output(output_path)?;
+    let mut writer = BufWriter::new(file);
+    let mut csf_parquet = if let Some(path) = csf_parquet_path {
+        ensure!(
+            !path.exists(),
+            "CSF Parquet output already exists: {}",
+            path.display()
+        );
+        ensure_output_does_not_alias_input(path, descriptor_path, "descriptor")?;
+        ensure_output_does_not_alias_input(path, header_path, "header")?;
+        let file = File::options()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .with_context(|| format!("failed to create CSF Parquet {}", path.display()))?;
+        let schema = std::sync::Arc::new(Schema::new(vec![
+            Field::new("idx", DataType::UInt64, false),
+            Field::new("line1", DataType::Utf8, false),
+            Field::new("line2", DataType::Utf8, false),
+            Field::new("line3", DataType::Utf8, false),
+        ]));
+        let properties = WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .build();
+        Some((
+            path,
+            schema.clone(),
+            ArrowWriter::try_new(file, schema, Some(properties))
+                .context("failed to create CSF Parquet writer")?,
+        ))
+    } else {
+        None
+    };
+    for line in &header_lines {
+        writeln!(writer, "{line}")?;
+    }
+    let mut row_values = vec![0; layout.row_len()];
+    let mut occupied = Vec::new();
+    let mut couplings = Vec::new();
+    let mut record_count = 0usize;
+    let mut block_index = 0usize;
+    let mut records_in_block = 0usize;
+    for batch in &mut reader {
+        let batch = batch.context("failed to decode descriptor record batch")?;
+        ensure!(
+            batch.num_columns() == layout.row_len(),
+            "descriptor batch has {} columns, expected {}",
+            batch.num_columns(),
+            layout.row_len()
+        );
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|column| {
+                ensure!(
+                    column.null_count() == 0,
+                    "descriptor columns must not contain nulls"
+                );
+                column
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .context("descriptor column is not Int32")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut indices = UInt64Builder::with_capacity(batch.num_rows());
+        let mut line1 = StringBuilder::new();
+        let mut line2 = StringBuilder::new();
+        let mut line3 = StringBuilder::new();
+        for row in 0..batch.num_rows() {
+            if records_in_block == block_lengths[block_index] {
+                block_index += 1;
+                records_in_block = 0;
+                ensure!(
+                    block_index < block_lengths.len(),
+                    "descriptor exceeds header blocks"
+                );
+                writeln!(writer, " *")?;
+            }
+            for (value, column) in row_values.iter_mut().zip(&columns) {
+                *value = column.value(row);
+            }
+            let (total_two_j, parity) =
+                decode_v2_into(&row_values, layout, &mut occupied, &mut couplings)?;
+            validate_record(&peel_subshells, &occupied, &couplings)?;
+            let (formatted1, formatted2, formatted3) = CompleteCsfFile::format_record_parts(
+                &peel_subshells,
+                &occupied,
+                &couplings,
+                total_two_j,
+                parity,
+            )?;
+            writeln!(writer, "{formatted1}")?;
+            writeln!(writer, "{formatted2}")?;
+            writeln!(writer, "{formatted3}")?;
+            if csf_parquet.is_some() {
+                indices.append_value(u64::try_from(record_count)?);
+                line1.append_value(formatted1);
+                line2.append_value(formatted2);
+                line3.append_value(formatted3);
+            }
+            record_count = record_count
+                .checked_add(1)
+                .context("restored CSF record count overflow")?;
+            records_in_block += 1;
+        }
+        if let Some((_, schema, parquet_writer)) = &mut csf_parquet {
+            if indices.len() > 0 {
+                let record_batch = arrow::record_batch::RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        std::sync::Arc::new(indices.finish()),
+                        std::sync::Arc::new(line1.finish()),
+                        std::sync::Arc::new(line2.finish()),
+                        std::sync::Arc::new(line3.finish()),
+                    ],
+                )?;
+                parquet_writer
+                    .write(&record_batch)
+                    .context("failed to write CSF Parquet batch")?;
+            }
+        }
+    }
+    ensure!(
+        record_count == expected_rows
+            && block_index + 1 == block_lengths.len()
+            && records_in_block == block_lengths[block_index],
+        "descriptor row count or block boundaries disagree with header"
+    );
+    writer.flush()?;
+    drop(writer);
+    if let Some((_, _, parquet_writer)) = csf_parquet {
+        parquet_writer
+            .close()
+            .context("failed to close CSF Parquet writer")?;
+    }
+    let output_bytes = std::fs::metadata(temporary.path())?.len();
+    publish_temporary_output(temporary.path(), output_path, false)?;
+    Ok((record_count, output_bytes))
 }
 
 /// Parquet reading/writing support
@@ -1930,6 +2186,13 @@ fn py_restore_csfs_from_descriptors(
 
     let stats = py
         .detach(|| -> anyhow::Result<(usize, u64)> {
+            if indices.is_none() {
+                return restore_v2_descriptor_parquet_stream(
+                    &descriptor_path,
+                    &header_path_buf,
+                    &output_path,
+                );
+            }
             ensure_output_does_not_alias_input(&output_path, &descriptor_path, "descriptor")?;
             ensure_output_does_not_alias_input(&output_path, &header_path_buf, "header")?;
 
@@ -2024,7 +2287,6 @@ fn py_restore_csfs_from_descriptors(
     Ok(dict.into())
 }
 
-#[cfg(feature = "python")]
 fn parse_restore_header_from_toml(toml_content: &str) -> Result<([String; 5], Vec<usize>)> {
     use toml::Value;
 

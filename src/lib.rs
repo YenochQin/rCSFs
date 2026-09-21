@@ -27,6 +27,7 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
     m.add_function(wrap_pyfunction!(partition_csfs, m)?)?;
     m.add_function(wrap_pyfunction!(generate_csfs_from_transcript, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_disk_outputs_from_transcript, m)?)?;
     m.add_function(wrap_pyfunction!(select_interacting_csfs, m)?)?;
 
     // Register CSF descriptor module
@@ -390,4 +391,53 @@ fn generate_csfs_from_transcript(
             Ok(d.into())
         }
     }
+}
+
+/// Generate private staged CSF and V2 descriptor files through the bounded
+/// disk pipeline.  Python owns the final multi-file transaction and optional
+/// CSF-three-line Parquet conversion.
+#[pyfunction]
+#[pyo3(signature = (transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None))]
+#[allow(clippy::too_many_arguments)]
+fn generate_disk_outputs_from_transcript(
+    py: Python,
+    transcript: String,
+    csf_output: String,
+    csf_parquet_output: String,
+    descriptor_output: String,
+    header_output: String,
+    scratch_dir: String,
+    threads: Option<usize>,
+) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    if matches!(threads, Some(0)) {
+        return Err(PyValueError::new_err("threads must be greater than 0"));
+    }
+    let stats = py
+        .detach(|| {
+            crate::csf_generation::streaming::generate_disk_outputs_from_transcript(
+                &transcript,
+                Path::new(&csf_output),
+                Path::new(&csf_parquet_output),
+                Path::new(&descriptor_output),
+                Path::new(&header_output),
+                Path::new(&scratch_dir),
+                threads,
+            )
+        })
+        .map_err(|error| PyIOError::new_err(error.to_string()))?;
+    let output = PyDict::new(py);
+    output.set_item("success", true)?;
+    output.set_item("output_file", csf_output)?;
+    output.set_item("parquet_file", csf_parquet_output)?;
+    output.set_item("descriptor_file", descriptor_output)?;
+    output.set_item("header_file", header_output)?;
+    output.set_item("unique_occupations", stats.unique_occupations)?;
+    output.set_item("generated_count", stats.generated_count)?;
+    output.set_item("record_count", stats.unique_count)?;
+    output.set_item("descriptor_count", stats.unique_count)?;
+    output.set_item("duplicate_count", stats.duplicate_count)?;
+    output.set_item("block_count", stats.block_count)?;
+    output.set_item("csf_bytes", stats.csf_bytes)?;
+    output.set_item("descriptor_bytes", stats.descriptor_bytes)?;
+    Ok(output.into())
 }

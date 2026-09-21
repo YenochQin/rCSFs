@@ -393,3 +393,43 @@ def test_restore_csfs_cli_roundtrip(tmp_path: Path) -> None:
     )
     assert subset_stats["success"] is True
     assert subset_stats["record_count"] == 1
+
+
+def test_config_generation_uses_disk_v2_pipeline(tmp_path: Path) -> None:
+    """A descriptor-producing TOML run uses bounded disk generation by default."""
+    from rcsfs import cli
+
+    csf = tmp_path / "calculation.c"
+    parquet = tmp_path / "calculation.parquet"
+    descriptors = tmp_path / "calculation_descriptors.parquet"
+    config = tmp_path / "gencsfs.toml"
+    config.write_text(
+        f"""
+[generate]
+order = "*"
+core = 0
+references = ["2p(2,*)"]
+active_orbitals = "3s,3p,3d"
+j_min = 0
+j_max = 4
+excitations = 2
+continue_lists = false
+
+[output]
+generate_descriptors = true
+csf = "{csf}"
+parquet = "{parquet}"
+descriptor_parquet = "{descriptors}"
+normalize = false
+""",
+        encoding="utf-8",
+    )
+
+    assert cli.main(["csfsgenerate", "--config", str(config)]) == 0
+    assert csf.exists()
+    assert parquet.exists()
+    assert descriptors.exists()
+    assert (tmp_path / "calculation_header.toml").exists()
+    assert (
+        get_parquet_info(descriptors)["key_value_metadata"]["descriptor_version"] == "2"
+    )

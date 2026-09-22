@@ -679,7 +679,10 @@ def estimate_disk_generation(
     and each phase is compared by its maximum. ``destinations`` maps an artifact
     kind (``"csf_text"``, ``"csf_parquet"``, ``"descriptor"``, ``"metadata"``)
     to the path that will receive it, so the model charges each volume the size
-    that artifact actually takes.
+    that artifact actually takes. Kinds are ``"csf_text"``, ``"csf_parquet"``,
+    ``"descriptor"``, ``"header"`` and ``"descriptor_metadata"``; a kind may
+    appear once per destination, since two artifacts of one kind can be
+    published to different volumes.
 
     The checks are *reported*, never enforced: an estimate exists to answer
     whether a run would fit, so an insufficient or unmeasurable volume appears

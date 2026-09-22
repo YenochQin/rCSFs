@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -139,15 +140,48 @@ def _git_metadata() -> dict[str, Any]:
             return None
         return completed.stdout.strip()
 
-    status = run("status", "--porcelain")
-    return {
+    # The registered reports are this harness's own output, so writing one must
+    # not make the next report claim a dirty source. Everything else counts.
+    status = run("status", "--porcelain", "--", ":!docs/benchmarks")
+    dirty = None if status is None else bool(status)
+    metadata: dict[str, Any] = {
         "commit": run("rev-parse", "HEAD"),
+        # The tree hash identifies the source state even if the commit is later
+        # rewritten or the branch moves, so a reader can check what was built.
+        "tree": run("rev-parse", "HEAD^{tree}"),
         "describe": run("describe", "--tags", "--always", "--dirty"),
         "branch": run("rev-parse", "--abbrev-ref", "HEAD"),
         # A dirty tree is reported rather than rejected: a local measurement of
         # uncommitted work is still useful, but it must not be mistaken for a
         # reproducible baseline.
-        "dirty": None if status is None else bool(status),
+        "dirty": dirty,
+        "dirty_ignores": ["docs/benchmarks"],
+    }
+    if dirty:
+        # A dirty measurement is only auditable if the uncommitted part is
+        # identified, so its diff is hashed too.
+        diff = run("diff", "HEAD")
+        metadata["dirty_diff_sha256"] = (
+            None if diff is None else hashlib.sha256(diff.encode()).hexdigest()
+        )
+    return metadata
+
+
+def extension_metadata() -> dict[str, Any]:
+    """Identify the extension this process actually loaded.
+
+    A commit hash says which source was checked out, not which binary was
+    measured. Recording the loaded module's hash lets a reader rebuild the
+    reported tree and compare.
+    """
+    import rcsfs._rcsfs as native
+
+    path = Path(str(native.__file__))
+    return {
+        "version": str(native.__version__),
+        "module": path.name,
+        "module_sha256": sha256_file(path),
+        "path": str(path),
     }
 
 
@@ -217,20 +251,66 @@ def environment() -> dict[str, Any]:
         "cpu_count": os.cpu_count(),
         "total_memory_bytes": _total_memory_bytes(),
         "git": _git_metadata(),
+        "extension": extension_metadata(),
     }
 
 
+#: A Windows drive-absolute path, with either separator.
+_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+#: A Windows UNC path (\\server\share\...).
+_WINDOWS_UNC = re.compile(r"^\\\\[^\\/]+[\\/][^\\/]+")
+
+
+def _looks_windows(value: str) -> bool:
+    """Whether a path is written in Windows form rather than POSIX form."""
+    return bool(_WINDOWS_DRIVE.match(value)) or "\\" in value
+
+
+def _is_absolute(value: str) -> bool:
+    return (
+        value.startswith("/")
+        or bool(_WINDOWS_DRIVE.match(value))
+        or bool(_WINDOWS_UNC.match(value))
+    )
+
+
+def _last_component(value: str) -> str:
+    return re.split(r"[\\/]", value.rstrip("\\/"))[-1]
+
+
+def _matches_prefix(value: str, prefix: str) -> bool:
+    """Whether `value` is inside `prefix`, tolerating the platform's spelling.
+
+    Windows paths are compared case-insensitively because the filesystems are;
+    POSIX paths are compared exactly, where `/Home` and `/home` are different
+    directories.
+    """
+    separator = "\\" if _looks_windows(value) else "/"
+    trimmed = prefix.rstrip("/\\")
+    if _looks_windows(value) or _looks_windows(prefix):
+        return value.casefold().replace("\\", "/").startswith(
+            trimmed.casefold().replace("\\", "/") + "/"
+        )
+    return value.startswith(trimmed + separator)
+
+
 def normalize_path(value: str) -> str:
-    """Replace the machine-specific part of an absolute path."""
+    """Replace the machine-specific part of an absolute path.
+
+    Both spellings are handled: a report may be written on one platform from
+    measurements taken on another, and `/var/folders/...` and
+    `C:\\Users\\...\\Temp\\...` are equally machine-specific.
+    """
     for prefix, placeholder in _PATH_PLACEHOLDERS:
-        if value == prefix:
+        if value == prefix or value.casefold() == prefix.casefold():
             return placeholder
-        if value.startswith(prefix.rstrip("/") + "/"):
-            return placeholder + value[len(prefix) :]
-    if value.startswith("/"):
+        if _matches_prefix(value, prefix):
+            remainder = value[len(prefix) :].lstrip("/\\")
+            return f"{placeholder}/{remainder}"
+    if _is_absolute(value):
         # An absolute path outside the known roots is machine-specific too. Keep
         # its last component so the shape of the layout stays legible.
-        return "<path>/" + value.rstrip("/").rsplit("/", 1)[-1]
+        return "<path>/" + _last_component(value)
     return value
 
 

@@ -170,7 +170,10 @@ pub(crate) struct GenerationPlan {
 impl GenerationPlan {
     pub(crate) fn task_record_distribution(&self) -> RecordDistribution {
         RecordDistribution::from_samples(
-            self.tasks.iter().map(|task| task.estimated_records).collect(),
+            self.tasks
+                .iter()
+                .map(|task| task.estimated_records)
+                .collect(),
         )
     }
 
@@ -221,10 +224,7 @@ pub(crate) fn report_plan(plan: &GenerationPlan) {
     );
     eprintln!(
         "Task size target {} CSFs; per-task p50 {} p95 {} max {}",
-        stats.target_records_per_task,
-        distribution.p50,
-        distribution.p95,
-        distribution.maximum
+        stats.target_records_per_task, distribution.p50, distribution.p95, distribution.maximum
     );
     if stats.zero_record_configurations > 0 {
         eprintln!(
@@ -320,10 +320,7 @@ pub(crate) fn choose_task_target(
     let workers = threads.unwrap_or_else(rayon::current_num_threads).max(1);
     let workers = u64::try_from(workers).context("worker count exceeds u64")?;
     let share = total_records / workers.saturating_mul(TASKS_PER_THREAD).max(1);
-    Ok(share.clamp(
-        RECORDS_PER_TASK_LOWER_BOUND,
-        RECORDS_PER_TASK_UPPER_BOUND,
-    ))
+    Ok(share.clamp(RECORDS_PER_TASK_LOWER_BOUND, RECORDS_PER_TASK_UPPER_BOUND))
 }
 
 /// Cut the counted workload into tasks of comparable size.
@@ -514,7 +511,9 @@ fn split_configuration(
     // target that is counted but never scheduled.
     let scheduled = tasks[first_task..]
         .iter()
-        .try_fold(0u64, |total, task| total.checked_add(task.estimated_records))
+        .try_fold(0u64, |total, task| {
+            total.checked_add(task.estimated_records)
+        })
         .context("configuration schedule total overflow")?;
     ensure!(
         scheduled == records,

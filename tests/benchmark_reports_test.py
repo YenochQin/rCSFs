@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -18,6 +19,15 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_DIRECTORY = REPO_ROOT / "docs" / "benchmarks"
 FIXTURE_DIRECTORY = REPO_ROOT / "tests" / "fixtures"
+
+#: Reports measured before source identity was captured. Their numbers are the
+#: pre-planning baseline and are kept as recorded; the revision, tree and
+#: extension of that run cannot be reconstructed now, and the 2026-09-22 matrix
+#: supersedes them for every comparison a reader would make today.
+LEGACY_REPORTS = {
+    "v2_disk_generation_p0b_b1_20260921.json",
+    "v2_disk_generation_p0b_b2_20260921.json",
+}
 
 
 def _load_support() -> object:
@@ -39,11 +49,18 @@ def _load_support() -> object:
 support = _load_support()
 
 
+WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
 def _absolute_paths(value: object, path: str = "") -> list[str]:
     """Every string in a report that looks like an absolute filesystem path."""
     found: list[str] = []
     if isinstance(value, str):
-        if value.startswith("/") or (len(value) > 2 and value[1:3] == ":\\"):
+        if (
+            value.startswith("/")
+            or WINDOWS_ABSOLUTE.match(value)
+            or value.startswith("\\\\")
+        ):
             found.append(f"{path}={value}")
     elif isinstance(value, dict):
         for key, item in value.items():
@@ -62,6 +79,40 @@ def test_registered_report_has_no_machine_paths(report: Path) -> None:
     offenders = _absolute_paths(document)
     assert offenders == [], (
         f"{report.name} records machine-specific paths: {offenders[:5]}"
+    )
+
+
+def test_environment_identifies_the_source_and_the_binary() -> None:
+    """A report must let a reader tell which source produced the measurement.
+
+    A commit hash alone does not: the tree may have been dirty, and the loaded
+    extension may not have been rebuilt from that commit.
+    """
+    environment = support.environment()
+    git = environment["git"]
+    assert git["commit"] and git["tree"]
+    assert git["dirty"] in (True, False, None)
+    if git["dirty"]:
+        assert git["dirty_diff_sha256"], "a dirty report must identify its diff"
+    else:
+        assert "dirty_diff_sha256" not in git
+    extension = environment["extension"]
+    assert extension["module_sha256"]
+    assert extension["module"].startswith("_rcsfs")
+
+
+@pytest.mark.parametrize(
+    "report", sorted(BENCHMARK_DIRECTORY.glob("*.json")), ids=lambda path: path.name
+)
+def test_registered_report_names_its_source(report: Path) -> None:
+    """Every registered report records the revision and the binary it measured."""
+    if report.name in LEGACY_REPORTS:
+        pytest.skip("measured before source identity was captured")
+    document = json.loads(report.read_text(encoding="utf-8"))
+    git = document["environment"]["git"]
+    assert git["tree"], f"{report.name} does not record the source tree"
+    assert document["environment"]["extension"]["module_sha256"], (
+        f"{report.name} does not record the measured extension"
     )
 
 
@@ -91,3 +142,43 @@ def test_report_paths_are_normalized_before_being_written() -> None:
         "scratch_root": "<system-temp>/rcsfs-report-check",
         "counts": ["<system-temp>/rcsfs-report-check/x"],
     }
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        # A drive-absolute path, in either separator spelling.
+        ("C:\\Users\\alice\\Temp\\rcsfs-run", "<path>/rcsfs-run"),
+        ("C:/Users/alice/Temp/rcsfs-run", "<path>/rcsfs-run"),
+        ("D:\\scratch", "<path>/scratch"),
+        # A UNC path.
+        ("\\\\server\\share\\scratch", "<path>/scratch"),
+        # A POSIX path is still handled.
+        ("/mnt/data/scratch", "<path>/scratch"),
+        # A relative path is left alone: it is not machine-specific.
+        ("docs/benchmarks/report.json", "docs/benchmarks/report.json"),
+        ("report.json", "report.json"),
+    ],
+)
+def test_paths_of_either_platform_are_normalized(value: str, expected: str) -> None:
+    """A report may be written on one platform from measurements on another."""
+    assert support.normalize_path(value) == expected
+
+
+def test_a_windows_root_is_matched_case_insensitively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows filesystems are case-insensitive, and its roots must match too."""
+    monkeypatch.setattr(
+        support,
+        "_PATH_PLACEHOLDERS",
+        ((r"C:\Users\Alice\AppData\Local\Temp", "<system-temp>"),),
+    )
+    assert support.normalize_path(
+        r"c:\users\alice\appdata\local\temp\rcsfs-run"
+    ) == "<system-temp>/rcsfs-run"
+    assert support.normalize_path(r"C:/Users/Alice/AppData/Local/Temp/rcsfs-run") == (
+        "<system-temp>/rcsfs-run"
+    )
+    # A different directory is not swallowed by the root above it.
+    assert support.normalize_path(r"C:\Users\Alice\Other") == "<path>/Other"

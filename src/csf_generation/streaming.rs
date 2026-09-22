@@ -356,6 +356,9 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
     );
     let mut stage_stats = Vec::new();
     eprintln!("Parsing transcript and enumerating configurations...");
+    // Parsing and scratch creation are part of the call the caller times, so
+    // they are part of what the stages must account for.
+    let setup_timer = StageTimer::start();
     let request = ExcitationRequest::from_transcript(transcript)?;
     fs::create_dir(scratch_dir).with_context(|| {
         format!(
@@ -363,6 +366,7 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
             scratch_dir.display()
         )
     })?;
+    stage_stats.push(setup_timer.finish("setup", 0, 0, 0, 0));
     eprintln!("Generating CSFs and V2 descriptors to disk segments...");
     // Refuse a run whose estimate does not fit the scratch or staging volumes,
     // while the scratch directory still holds nothing but the empty root.
@@ -440,8 +444,20 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
     }
 
     eprintln!("Writing generation header...");
+    let header_timer = StageTimer::start();
     let header_lines = generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
     write_generation_header(header_output, header_lines.clone(), &deduplicated)?;
+    stage_stats.push(
+        header_timer.finish(
+            "header_write",
+            deduplicated.unique_count,
+            deduplicated.unique_count,
+            0,
+            fs::metadata(header_output)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0),
+        ),
+    );
 
     eprintln!("Building final descriptor and CSF outputs from segments...");
     let final_stats = super::final_encoding::build_final_outputs_from_segments(
@@ -3331,13 +3347,14 @@ mod tests {
                 )
                 .unwrap();
                 assert_eq!(stats.record_count, deduplicated.unique_count);
-                // Every phase is reported, and the five of them together are
-                // the pass: `prepare` plus the two artifact families, each split
-                // into its compute and its write half.
+                // Every phase is reported, and the six of them together are the
+                // pass: selection, parallel preparation, and each artifact
+                // family split into its compute and its write half.
                 let entries = stats.phase_entries();
                 assert_eq!(
                     entries.map(|(name, _, _)| name),
                     [
+                        "final_encoding_select",
                         "final_encoding_prepare",
                         "final_encoding_descriptor_encode",
                         "final_encoding_descriptor_write",
@@ -3345,9 +3362,8 @@ mod tests {
                         "final_encoding_csf_outputs_write",
                     ]
                 );
-                let prepare =
-                    entries[0].1 + entries[1].1 + entries[2].1 + entries[3].1 + entries[4].1;
-                assert!(prepare <= stats.record_count as u128 * 1000);
+                let pass: u128 = entries.iter().map(|(_, millis, _)| millis).sum();
+                assert!(pass <= stats.record_count as u128 * 1000);
             } else {
                 merge_v2_deduplicated_segments(&deduplicated, &descriptors).unwrap();
                 crate::csfs_descriptor::restore_v2_descriptor_parquet_to_outputs(

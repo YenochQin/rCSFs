@@ -420,10 +420,13 @@ def test_disk_generation_scratch_layout_and_v2_roundtrip(
     assert stats["record_count"] > 0
     assert "Range progress:" in capfd.readouterr().err
     assert [stage["name"] for stage in stats["stage_stats"]] == [
+        "setup",
         "enumeration",
         "workload_planning",
         "csf_generation",
         "deduplication",
+        "header_write",
+        "final_encoding_select",
         "final_encoding_prepare",
         "final_encoding_descriptor_encode",
         "final_encoding_descriptor_write",

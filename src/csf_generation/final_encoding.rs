@@ -142,6 +142,9 @@ pub(crate) struct FinalEncodingStats {
     pub(crate) descriptor_bytes: u64,
     pub(crate) csf_bytes: u64,
     pub(crate) csf_parquet_bytes: u64,
+    /// Filtering each batch's rows by the survivor bitset and gathering the
+    /// selected columns: serial, and the only phase that touches every row.
+    pub(crate) select: PhaseAccumulator,
     pub(crate) prepare: PhaseAccumulator,
     pub(crate) descriptor: PhaseAccumulator,
     pub(crate) descriptor_io_nanos: Arc<AtomicU64>,
@@ -157,8 +160,13 @@ impl FinalEncodingStats {
     /// CPU is reported on the compute side only: `getrusage` cannot attribute a
     /// syscall's CPU to the caller that made it, and inventing a split would be
     /// worse than saying so.
-    pub(crate) fn phase_entries(&self) -> [(&'static str, u128, Option<u128>); 5] {
+    pub(crate) fn phase_entries(&self) -> [(&'static str, u128, Option<u128>); 6] {
         [
+            (
+                "final_encoding_select",
+                self.select.elapsed_millis(),
+                self.select.cpu_millis(),
+            ),
             (
                 "final_encoding_prepare",
                 self.prepare.elapsed_millis(),
@@ -285,6 +293,7 @@ fn build_final_outputs_from_segments_inner(
     )
     .context("failed to create CSF Parquet writer")?;
 
+    let mut select = PhaseAccumulator::default();
     let mut prepare = PhaseAccumulator::default();
     let mut descriptor = PhaseAccumulator::default();
     let mut csf_outputs = PhaseAccumulator::default();
@@ -359,24 +368,38 @@ fn build_final_outputs_from_segments_inner(
                 // The filter pass keeps the ordinal accounting the merge stage
                 // performed, so a bitset or segment disagreement fails here
                 // exactly as it would have failed the merge.
-                let mut survivors: Vec<usize> = Vec::new();
-                for row in 0..batch.num_rows() {
-                    ensure!(
-                        range_column.value(row) == segment.range_ordinal,
-                        "segment range ordinal does not match file metadata"
-                    );
-                    ensure!(
-                        local_column.value(row) == next_local,
-                        "segment local ordinal is not contiguous"
-                    );
-                    next_local += 1;
-                    if bitset.contains(ordinal)? {
-                        survivors.push(row);
+                let (survivors, mut selected_columns) = select.add(|| {
+                    let mut survivors: Vec<usize> = Vec::new();
+                    for row in 0..batch.num_rows() {
+                        ensure!(
+                            range_column.value(row) == segment.range_ordinal,
+                            "segment range ordinal does not match file metadata"
+                        );
+                        ensure!(
+                            local_column.value(row) == next_local,
+                            "segment local ordinal is not contiguous"
+                        );
+                        next_local += 1;
+                        if bitset.contains(ordinal)? {
+                            survivors.push(row);
+                        }
+                        ordinal = ordinal
+                            .checked_add(1)
+                            .context("survivor ordinal overflow")?;
                     }
-                    ordinal = ordinal
-                        .checked_add(1)
-                        .context("survivor ordinal overflow")?;
-                }
+                    // Sized for exactly the rows that survive, so the columns
+                    // never hold a batch's worth of memory the reservation did
+                    // not cover.
+                    let mut selected_columns = (0..row_len)
+                        .map(|_| Vec::with_capacity(survivors.len()))
+                        .collect::<Vec<_>>();
+                    for (selected, column) in selected_columns.iter_mut().zip(&data_columns) {
+                        for &row in &survivors {
+                            selected.push(column.value(row));
+                        }
+                    }
+                    Ok::<_, anyhow::Error>((survivors, selected_columns))
+                })?;
                 if survivors.is_empty() {
                     continue;
                 }
@@ -393,15 +416,6 @@ fn build_final_outputs_from_segments_inner(
                 let _batch_permit = deduplicated
                     .budget
                     .try_reserve(batch_bytes, "final-encoding batch")?;
-
-                let mut selected_columns = (0..row_len)
-                    .map(|_| Vec::with_capacity(survivors.len()))
-                    .collect::<Vec<_>>();
-                for (selected, column) in selected_columns.iter_mut().zip(&data_columns) {
-                    for &row in &survivors {
-                        selected.push(column.value(row));
-                    }
-                }
 
                 // Prepare every surviving row in parallel: decode, validate and
                 // format. The publication side stays in row order below, so the
@@ -470,6 +484,12 @@ fn build_final_outputs_from_segments_inner(
                 block_count = block_count
                     .checked_add(formatted.len())
                     .context("final-encoding block count overflow")?;
+                // Releasing the batch's formatted records is real work — three
+                //Strings per row, tens of millions of them on a large input —
+                // and it belongs to a phase. Left to the end of the iteration it
+                // would appear as an unexplained gap between the stages and the
+                // call the caller times.
+                csf_outputs.add(|| drop(formatted));
             }
         }
         ensure!(
@@ -541,6 +561,7 @@ fn build_final_outputs_from_segments_inner(
     let csf_parquet_bytes = std::fs::metadata(csf_parquet_output)?.len();
     Ok(FinalEncodingStats {
         record_count,
+        select,
         descriptor_bytes,
         csf_bytes,
         csf_parquet_bytes,

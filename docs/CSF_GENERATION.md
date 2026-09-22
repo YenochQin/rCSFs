@@ -274,6 +274,20 @@ estimate distribution (`minimum`/`p50`/`p95`/`maximum`), `unique_occupations`,
 equal `generated_count`; the benchmark fails rather than records the run when
 they disagree.
 
+### De-duplication
+
+The disk path still runs the exact de-duplication stage, and its
+`duplicate_count` is a real measurement, but for this generation path it can
+never remove a row: the enumeration emits pairwise distinct occupations, a
+row's occupation columns identify its configuration, and one traversal of the
+state table produces at most one record whose row identifies that traversal.
+[V2_GENERATION_UNIQUENESS.md](V2_GENERATION_UNIQUENESS.md) proves this and
+`tests/p6a_uniqueness_test.rs` searches for a counterexample by exhaustive
+differential over bounded systems. The stage exists as the safety net for
+inputs outside that argument — most importantly external CSF text, and any
+future path that can schedule the same configuration twice — so it is not
+removed; what the proof rules out is paying to *optimize* it for this path.
+
 ### Capacity pre-flight
 
 The same counts size the run. Before the first segment is written, the disk path

@@ -22,12 +22,18 @@ They are not part of the test suite: no file in this directory is run by
   `git.dirty_diff_sha256`, a fingerprint over the tracked diff and the name and
   content of every untracked file. A reader can rebuild the recorded tree and
   compare binaries.
-- The scripts **refuse to write a report from a dirty tree** unless
-  `--allow-dirty-source` is given: a measurement taken while the source is being
-  edited is not a baseline, and one of the 2026-09-22 rounds was discarded for
-  exactly that reason. The dirty check, and the fingerprint, both ignore
-  `docs/benchmarks`, because writing one report must not make the next one claim
-  a dirty source.
+- The scripts **refuse to run against a dirty tree** unless
+  `--allow-dirty-source` is given, and check it before doing any work: a
+  measurement taken while the source is being edited is not a baseline, and one
+  of the 2026-09-22 rounds was discarded for exactly that reason. The dirty
+  check, and the fingerprint, both ignore `docs/benchmarks`, because writing one
+  report must not make the next one claim a dirty source.
+- The identity is captured **before** the run, and the report carries that
+  snapshot, because the code and extension a process loaded cannot change under
+  it. It is captured again afterwards and compared: a commit, checkout or
+  rebuild during a long run would otherwise let the report name a revision, or a
+  binary, that was never measured. `--allow-dirty-source` accepts a stable dirty
+  tree, not a moving one.
 
 ## Registered inputs
 

@@ -29,13 +29,15 @@ from rcsfs import estimate_disk_generation
 
 from benchmark_support import (
     DEFAULT_MANIFEST,
+    add_source_identity_arguments,
     environment,
+    finalize_report,
     filesystem_metadata,
     load_manifest,
     require_clean_source,
     sha256_file,
+    source_identity,
     verify_registered_transcript,
-    write_report,
 )
 
 REPORT_SCHEMA = "rcsfs-v2-generation-capacity/1"
@@ -47,15 +49,6 @@ def main() -> int:
     _ = parser.add_argument("--threads", type=int, default=None)
     _ = parser.add_argument("--memory-budget-mib", type=int, default=None)
     _ = parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    _ = parser.add_argument(
-        "--allow-dirty-source",
-        action="store_true",
-        help=(
-            "Register this report even though the source tree has uncommitted "
-            "changes. The report records the tree hash, the changed paths and a "
-            "fingerprint of the changes, but it is not a clean-revision baseline."
-        ),
-    )
     _ = parser.add_argument(
         "--scratch-dir",
         type=Path,
@@ -87,6 +80,7 @@ def main() -> int:
             "its checks, so an unmeasurable volume is recorded as unchecked either way."
         ),
     )
+    add_source_identity_arguments(parser)
     _ = parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
     if args.threads is not None and args.threads <= 0:
@@ -105,6 +99,11 @@ def main() -> int:
             # a requirement the run never reaches.
             parser.error(f"--destination {kind} was given more than once")
         destinations[kind] = path
+
+    # Snapshot and gate first: a source that cannot be registered must not cost
+    # a full estimate, and the snapshot is what the process will actually run.
+    start_identity = source_identity()
+    require_clean_source(start_identity, args.allow_dirty_source)
 
     transcript = args.transcript.read_text(encoding="utf-8")
     started = time.perf_counter()
@@ -150,8 +149,7 @@ def main() -> int:
         "filesystem": filesystem_metadata(Path.cwd()),
         "estimate": estimate,
     }
-    require_clean_source(report["environment"]["git"], args.allow_dirty_source)
-    write_report(report, args.output)
+    finalize_report(report, args.output, start_identity, args.allow_dirty_source)
     return 0
 
 

@@ -28,18 +28,23 @@
   这条受支持的"多线程编码"路径（`temp/parquet_probe`），产物逻辑内容与 `ArrowWriter`
   一致、字节布局不同；先前"无受支持入口"的说法是错的，已在计划中更正。
 
-计量（干净树 `de97127`，8 线程，默认 `verified_unique`，见
+计量（干净树 `e6f3b3e`，8 线程，默认 `verified_unique`；**修正版**，见
 [报告](benchmarks/v2_disk_generation_final_encoding_20260922.md)）：
 
-- 尾部（转换+写出）提速 2.36–2.47×（B1 8.536 → 3.450 秒，B2 2.575 → 1.090 秒），端到端
-  B1 9.263 → 5.819 秒（−37.2%）、B2 2.914 → 2.218 秒（−23.9%）；相对基线 `7ad18b1`
-  的 8 线程累计 **2.47× / 2.18×**，达到 P4 的"≥2×"目标（本机、本输入）。
-- 新尾部发布的 CSF 文本、descriptor 与 header 的 SHA-256 与两遍尾部逐一相同；只有
-  CSF Parquet 的摘要变化（其 row group 边界随批次划分，不属于契约）。该跨活动对照已
-  由 `tests/benchmark_reports_test.py::test_the_one_pass_tail_published_what_the_two_pass_tail_published`
+- **撤回**先前的"尾部 2.36–2.47×"：当时的相位计时不含两个 writer 的 close/footer、文本
+  flush、发布，也不含逐行筛选/收集与释放格式化字符串这两段随数据增长的工作（B1 的相位
+  之和比调用墙钟少 1.6 秒）。现在按六个相位完整计时（select、prepare、每个产物族的
+  encode/write），并把 `setup`/`header_write` 也计入，**相位之和与调用墙钟相差 2–4%**。
+- 完整计时下：尾部 B1 8.536 → 3.704 秒（**2.30×**）、B2 2.575 → 1.213 秒（**2.12×**），
+  达到"并行转换阶段 ≥2×"；端到端 B1 9.263 → 4.503 秒、B2 2.914 → 1.581 秒；累计相对
+  基线 `7ad18b1` 的 8 线程为 **3.20× / 3.05×**（开 zstd 时 3.07× / 2.89×）。
+- 发布内容未变：CSF 文本、descriptor 与 header 的 SHA-256 与修正前、与 `exact` 策略
+  逐一相同；只有 CSF Parquet 的摘要随批次划分变化（row group 边界不属契约，其逻辑行由
+  Rust 差分逐行比对）。该跨活动对照已由
+  `tests/benchmark_reports_test.py::test_the_one_pass_tail_published_what_the_two_pass_tail_published`
   作为回归测试固定下来。
-- 相位分离证实"并行准备 + 串行编码"：prepare 为 7.8–7.9× 并行度，encode 与 write 为
-  1.0×；encode 因此成为尾部最大单项（B1 1.387 秒、B2 0.655 秒），即未实施的并行
+- 相位分离证实"并行准备 + 串行编码"：prepare 为 7.8× 并行度，encode 与 write 为 1.0×；
+  descriptor encode 因此成为尾部最大单项（B1 1.373 秒 = 尾部的 37%），即未实施的并行
   Parquet 列块编码所指向的收益点。
 
 

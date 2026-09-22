@@ -109,6 +109,12 @@ CSF Parquet, descriptor and header, compares the two de-duplication strategies
 within one invocation, and refuses to write a report when their counts or any
 published artifact differ.
 
+Every successful measurement records `stage_seconds` and the residual
+`unattributed_seconds`, and the script **refuses to write a report** when the
+residual exceeds 10% (or 50 ms) of the call: a phase that grew without a timer
+would otherwise turn the reported stage numbers into a claim that cannot be
+checked against the end-to-end time.
+
 The script verifies the transcript against the manifest and runs every warm-up
 and measured combination in a fresh spawned process. Process creation and
 artifact hashing are outside the timed generation call; this keeps `ru_maxrss`
@@ -141,7 +147,7 @@ contract. A difference in the first three would have refused the report.
 | `v2_disk_generation_budget_b1/b2_20260922.json` | Low (rejected), mid and high `memory_budget_mib` at 8 threads |
 | `v2_disk_generation_codec_b1/b2_20260922.json` | Uncompressed / LZ4 / ZSTD temporary segments at 8 threads; first round `3588df1`, re-measured with per-run RSS and digests at `47e04ea` |
 | `v2_disk_generation_dedup_b1/b2_20260922.json` | Verified-unique vs exact de-duplication, each with and without zstd segments; first round `bbcd714`, re-measured with content digests at `47e04ea` |
-| `v2_disk_generation_final_encoding_b1/b2_20260922.json` | One-pass final encoding vs the two-pass merge+restore tail at 8 threads, `de97127` |
+| `v2_disk_generation_final_encoding_b1/b2_20260922.json` | One-pass final encoding vs the two-pass merge+restore tail at 8 threads; first round `de97127`, corrected accounting at `e6f3b3e` |
 | `v2_disk_generation_p0b_*_20260921.json` | (legacy) measured before source identity was captured |
 | `v2_disk_generation_b3_capacity_20260921.json` | Full-scale capacity, workload and time-range estimate (no generation) |
 | `v2_disk_generation_matrix_20260922.md` | What the three 2026-09-22 campaigns show |

@@ -18,6 +18,8 @@ from rcsfs import (
 )
 from rcsfs._rcsfs import generate_csfs_from_transcript
 
+FIXTURES = Path(__file__).parent / "fixtures"
+
 
 def test_generation_estimate_type_names_the_deduplication_strategy() -> None:
     """The public type must describe every field the extension always returns."""
@@ -101,8 +103,10 @@ def test_config_generation_json_contains_stage_stats(
         "csf_generation",
         "deduplication",
         "final_encoding_prepare",
-        "final_encoding_encode",
-        "final_encoding_write",
+        "final_encoding_descriptor_encode",
+        "final_encoding_descriptor_write",
+        "final_encoding_csf_outputs_encode",
+        "final_encoding_csf_outputs_write",
     ]
     plan_stats = payload["plan_stats"]
     assert plan_stats["task_count"] >= 1
@@ -242,6 +246,63 @@ def test_the_estimate_prices_the_strategy_the_run_will_use(
     assert (
         exact["bytes"]["scratch_peak"] > verified["bytes"]["scratch_peak"]
     ), "the exact path writes buckets the verified path does not"
+
+
+def test_the_final_encoding_charges_its_structures_before_allocating(
+    tmp_path: Path,
+) -> None:
+    """A budget must be spent on what the run is about to hold, not after.
+
+    The one-pass final encoding holds a batch's selected columns, its formatted
+    three-line records and two live Parquet writers at once. Each of those has to
+    be reserved *before* it exists and for what it really is, or a low budget
+    fails only after the allocation it was meant to prevent and then reports a
+    managed peak lower than the process held. The ladder below is the observable
+    form of that: as the budget rises the refusal moves from the generation
+    batch to the CSF Parquet writer to the final-encoding batch, and only a
+    budget covering all of them runs.
+    """
+    transcript = (FIXTURES / "o1_cc1as1.rcsfgenerate").read_text(encoding="utf-8")
+
+    def run(budget_mib: int) -> tuple[str, float]:
+        directory = tmp_path / f"budget-{budget_mib}"
+        directory.mkdir()
+        try:
+            stats = generate_disk_outputs_from_transcript(
+                transcript,
+                directory / "out.c",
+                directory / "out.parquet",
+                directory / "descriptors.parquet",
+                directory / "header.toml",
+                directory / "scratch",
+                threads=1,
+                memory_budget_mib=budget_mib,
+            )
+        except (OSError, ValueError) as error:
+            return str(error), 0.0
+        resource_stats = stats["resource_stats"]
+        return "ok", resource_stats["peak_managed_bytes"] / 2**20
+
+    # Far too small: the generation stage's own batch reservation refuses first.
+    message, _ = run(8)
+    assert "descriptor generation batch" in message, message
+
+    # Enough for generation, not for the final encoding: the refusal must name a
+    # reservation this stage makes, which is what proves the charge exists and
+    # happens before the allocation.
+    for budget in (12, 16, 20):
+        message, _ = run(budget)
+        assert message != "ok", f"{budget} MiB was accepted; the charges are too small"
+        assert any(
+            label in message
+            for label in ("CSF Parquet encoding", "final descriptor encoding", "final-encoding batch")
+        ), f"{budget} MiB refused for an unrelated reason: {message}"
+
+    # And the two writers are charged separately: a budget that covers one
+    # writer's allowance plus the batch is not automatically enough for both.
+    outcome, peak = run(24)
+    assert outcome == "ok", outcome
+    assert 16.0 <= peak <= 24.0, peak
 
 
 def test_config_generation_reads_memory_budget(

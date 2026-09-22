@@ -7,6 +7,7 @@
 
 pub(crate) mod capacity;
 pub(crate) mod counting;
+mod final_encoding;
 mod occupations;
 mod options;
 mod pipeline;

@@ -72,11 +72,8 @@ pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
         create_temporary_output, ensure_output_does_not_alias_input, publish_temporary_output,
     };
     use crate::complete_csf::CompleteCsfFile;
-    use arrow::array::{Array, ArrayBuilder, Int32Array, StringBuilder, UInt64Builder};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{Array, Int32Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    use parquet::arrow::arrow_writer::ArrowWriter;
-    use parquet::file::properties::WriterProperties;
     use std::fs::File;
     use std::io::{BufWriter, Write};
 
@@ -175,21 +172,7 @@ pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
             .create_new(true)
             .open(path)
             .with_context(|| format!("failed to create CSF Parquet {}", path.display()))?;
-        let schema = std::sync::Arc::new(Schema::new(vec![
-            Field::new("idx", DataType::UInt64, false),
-            Field::new("line1", DataType::Utf8, false),
-            Field::new("line2", DataType::Utf8, false),
-            Field::new("line3", DataType::Utf8, false),
-        ]));
-        let properties = WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
-            .build();
-        Some((
-            path,
-            schema.clone(),
-            ArrowWriter::try_new(file, schema, Some(properties))
-                .context("failed to create CSF Parquet writer")?,
-        ))
+        Some((path, csf_parquet::schema(), csf_parquet::writer(file)?))
     } else {
         None
     };
@@ -224,10 +207,9 @@ pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
                     .context("descriptor column is not Int32")
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut indices = UInt64Builder::with_capacity(batch.num_rows());
-        let mut line1 = StringBuilder::new();
-        let mut line2 = StringBuilder::new();
-        let mut line3 = StringBuilder::new();
+        let mut batches = csf_parquet
+            .as_ref()
+            .map(|(_, schema, _)| csf_parquet::BatchBuilder::new(schema.clone(), batch.num_rows()));
         for row in 0..batch.num_rows() {
             if records_in_block == block_lengths[block_index] {
                 block_index += 1;
@@ -244,42 +226,32 @@ pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
             let (total_two_j, parity) =
                 decode_v2_into(&row_values, layout, &mut occupied, &mut couplings)?;
             validate_record(&peel_subshells, &occupied, &couplings)?;
-            let (formatted1, formatted2, formatted3) = CompleteCsfFile::format_record_parts(
+            let formatted = CompleteCsfFile::format_record_parts(
                 &peel_subshells,
                 &occupied,
                 &couplings,
                 total_two_j,
                 parity,
             )?;
+            let (formatted1, formatted2, formatted3) = formatted;
             writeln!(writer, "{formatted1}")?;
             writeln!(writer, "{formatted2}")?;
             writeln!(writer, "{formatted3}")?;
-            if csf_parquet.is_some() {
-                indices.append_value(u64::try_from(record_count)?);
-                line1.append_value(formatted1);
-                line2.append_value(formatted2);
-                line3.append_value(formatted3);
+            if let Some(builder) = &mut batches {
+                builder.push(
+                    u64::try_from(record_count)?,
+                    &[formatted1, formatted2, formatted3],
+                )?;
             }
             record_count = record_count
                 .checked_add(1)
                 .context("restored CSF record count overflow")?;
             records_in_block += 1;
         }
-        if let Some((_, schema, parquet_writer)) = &mut csf_parquet {
-            if indices.len() > 0 {
-                let record_batch = arrow::record_batch::RecordBatch::try_new(
-                    schema.clone(),
-                    vec![
-                        std::sync::Arc::new(indices.finish()),
-                        std::sync::Arc::new(line1.finish()),
-                        std::sync::Arc::new(line2.finish()),
-                        std::sync::Arc::new(line3.finish()),
-                    ],
-                )?;
-                parquet_writer
-                    .write(&record_batch)
-                    .context("failed to write CSF Parquet batch")?;
-            }
+        if let (Some((_, _, parquet_writer)), Some(builder)) = (&mut csf_parquet, batches) {
+            parquet_writer
+                .write(&builder.finish()?)
+                .context("failed to write CSF Parquet batch")?;
         }
     }
     ensure!(
@@ -298,6 +270,114 @@ pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
     let output_bytes = std::fs::metadata(temporary.path())?.len();
     publish_temporary_output(temporary.path(), output_path, false)?;
     Ok((record_count, output_bytes))
+}
+
+/// The three-line CSF Parquet representation, shared by every producer.
+///
+/// Both the descriptor restore path and the disk pipeline's one-pass final
+/// encoding write this file, and their outputs are compared for equality. A
+/// schema or writer property that drifted between the two would be a silent
+/// difference in a published artifact, so the definition lives here and neither
+/// producer builds its own.
+pub mod csf_parquet {
+    use arrow::array::{ArrayRef, StringBuilder, UInt64Builder};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::arrow_writer::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+    use std::fs::File;
+    use std::sync::Arc;
+
+    use anyhow::{Context, Result};
+
+    use crate::descriptor_schema::DescriptorLayout;
+
+    /// The published column layout: a global index plus the three CSF lines.
+    pub fn schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("idx", DataType::UInt64, false),
+            Field::new("line1", DataType::Utf8, false),
+            Field::new("line2", DataType::Utf8, false),
+            Field::new("line3", DataType::Utf8, false),
+        ]))
+    }
+
+    /// The writer properties this file is always written with.
+    pub fn properties() -> WriterProperties {
+        WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .build()
+    }
+
+    /// Open the file with the schema and properties above.
+    pub fn writer(file: File) -> Result<ArrowWriter<File>> {
+        ArrowWriter::try_new(file, schema(), Some(properties()))
+            .context("failed to create CSF Parquet writer")
+    }
+
+    /// Accumulates one batch of formatted records into Arrow arrays.
+    pub struct BatchBuilder {
+        schema: SchemaRef,
+        indices: UInt64Builder,
+        lines: [StringBuilder; 3],
+    }
+
+    impl BatchBuilder {
+        pub fn new(schema: SchemaRef, capacity: usize) -> Self {
+            Self {
+                schema,
+                indices: UInt64Builder::with_capacity(capacity),
+                lines: [
+                    StringBuilder::new(),
+                    StringBuilder::new(),
+                    StringBuilder::new(),
+                ],
+            }
+        }
+
+        /// Append one record's global index and its three formatted lines.
+        pub fn push(&mut self, index: u64, lines: &[String; 3]) -> Result<()> {
+            self.indices.append_value(index);
+            for (builder, line) in self.lines.iter_mut().zip(lines) {
+                builder.append_value(line);
+            }
+            Ok(())
+        }
+
+        pub fn finish(mut self) -> Result<RecordBatch> {
+            let arrays: Vec<ArrayRef> = vec![
+                Arc::new(self.indices.finish()),
+                Arc::new(self.lines[0].finish()),
+                Arc::new(self.lines[1].finish()),
+                Arc::new(self.lines[2].finish()),
+            ];
+            RecordBatch::try_new(self.schema, arrays)
+                .context("failed to construct the CSF Parquet batch")
+        }
+    }
+
+    /// The managed bytes one in-flight CSF Parquet row group may hold.
+    ///
+    /// The fixups above size the descriptor writer; this one sizes the
+    /// three-line representation, whose per-row width is a record's text rather
+    /// than a fixed number of integers.
+    pub(crate) fn writer_managed_bytes(layout: DescriptorLayout, rows: usize) -> Result<u64> {
+        let fields = layout.row_len() / 4;
+        let line_bytes = fields
+            .checked_mul(crate::complete_csf::FIELD_WIDTH)
+            .and_then(|bytes| bytes.checked_add(2))
+            .context("CSF line width overflow")?;
+        let per_row = line_bytes
+            .checked_mul(3)
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<u64>()))
+            .context("CSF Parquet row width overflow")?;
+        let rows_bytes = rows
+            .checked_mul(per_row)
+            .and_then(|bytes| bytes.checked_mul(2))
+            .and_then(|bytes| bytes.checked_add(1 << 20))
+            .context("CSF Parquet writer byte count overflow")?;
+        u64::try_from(rows_bytes).context("CSF Parquet writer bytes exceed u64")
+    }
 }
 
 /// Parquet reading/writing support

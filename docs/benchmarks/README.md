@@ -96,6 +96,11 @@ python scripts/benchmark_v2_generation.py tests/fixtures/b1_cc1_5spdfg_3exc.rcsf
   --output docs/benchmarks/<name>.json
 ```
 
+`--segment-codec` (P2a) measures temporary-segment codecs the same way; the
+extension reads the codec from `RCSFS_SEGMENT_CODEC` and reports back which one
+it wrote with, and the script refuses a run whose report disagrees with the
+request. A codec is a storage choice: the published bytes are unchanged.
+
 The script verifies the transcript against the manifest, discards a warm-up run
 per combination, records execution order, and reports wall-clock per stage
 (the temporary output set's deletion is timed separately), peak RSS, managed
@@ -109,9 +114,11 @@ match is rejected rather than silently recorded.
 | --- | --- |
 | `v2_disk_generation_threads_b1/b2_20260922.json` | 1/2/4/8 threads at the derived task size, revision `1d1f29a` |
 | `v2_disk_generation_budget_b1/b2_20260922.json` | Low (rejected), mid and high `memory_budget_mib` at 8 threads |
+| `v2_disk_generation_codec_b1/b2_20260922.json` | Uncompressed / LZ4 / ZSTD temporary segments at 8 threads, revision `3588df1` |
 | `v2_disk_generation_p0b_*_20260921.json` | (legacy) measured before source identity was captured |
 | `v2_disk_generation_b3_capacity_20260921.json` | Full-scale capacity, workload and time-range estimate (no generation) |
 | `v2_disk_generation_matrix_20260922.md` | What the three 2026-09-22 campaigns show |
+| `v2_disk_generation_codec_20260922.md` | What the P2a codec experiment shows |
 
 A rejected configuration is part of the matrix, not a hole in it: the plan asks
 for a low budget to be reported as a resource rejection rather than being

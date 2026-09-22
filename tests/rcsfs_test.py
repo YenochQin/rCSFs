@@ -426,6 +426,7 @@ def test_disk_generation_scratch_layout_and_v2_roundtrip(
         "csf_generation",
         "deduplication",
         "header_write",
+        "final_encoding_read",
         "final_encoding_select",
         "final_encoding_prepare",
         "final_encoding_descriptor_encode",

@@ -634,6 +634,17 @@ def test_the_harness_refuses_a_run_whose_stages_do_not_cover_the_call() -> None:
     with pytest.raises(SystemExit, match="outside every stage timer"):
         benchmark._check_stage_coverage(refused)
 
+    over_counted = [
+        {
+            "outcome": "measured",
+            "wall_seconds": 1.0,
+            "stage_seconds": 1.30,
+            "unattributed_seconds": -0.30,
+        }
+    ]
+    with pytest.raises(SystemExit, match="overlap or double-count"):
+        benchmark._check_stage_coverage(over_counted)
+
     # A rejected run has no stage timings to check, and a small residual is
     # normal: parsing the transcript and the pre-flight's statvfs calls are not
     # stages of their own.

@@ -133,11 +133,13 @@ digests — while the older campaigns (threads, budget, 2026-09-21 baselines)
 remain valid for timings, logical I/O, scratch and managed memory but not for
 per-combination RSS or content differential claims.
 
-The final-encoding campaign also demonstrates what the harness's digests are
-for: the one-pass tail reproduces the two-pass tail's CSF text, descriptor and
-header digests exactly while the CSF Parquet digest changes, because that file's
-row-group boundaries follow whichever path batched it and are not part of its
-contract. A difference in the first three would have refused the report.
+The historical final-encoding campaign also demonstrates what the harness's
+digests are for: at `45618fc`, the one-pass tail reproduced the two-pass tail's
+CSF text, descriptor and header digests exactly while the CSF Parquet digest
+changed. The later bounded-row-group fix intentionally changes descriptor's
+physical Parquet layout; current correctness is therefore checked by live
+logical-row differentials plus stable CSF/header bytes, not by freezing that
+historical descriptor digest.
 
 ## Registered campaigns
 
@@ -147,7 +149,7 @@ contract. A difference in the first three would have refused the report.
 | `v2_disk_generation_budget_b1/b2_20260922.json` | Low (rejected), mid and high `memory_budget_mib` at 8 threads |
 | `v2_disk_generation_codec_b1/b2_20260922.json` | Uncompressed / LZ4 / ZSTD temporary segments at 8 threads; first round `3588df1`, re-measured with per-run RSS and digests at `47e04ea` |
 | `v2_disk_generation_dedup_b1/b2_20260922.json` | Verified-unique vs exact de-duplication, each with and without zstd segments; first round `bbcd714`, re-measured with content digests at `47e04ea` |
-| `v2_disk_generation_final_encoding_b1/b2_20260922.json` | One-pass final encoding vs the two-pass merge+restore tail at 8 threads; first round `de97127`, corrected accounting at `e6f3b3e` |
+| `v2_disk_generation_final_encoding_b1/b2_20260922.json` | Historical one-pass final encoding vs the two-pass merge+restore tail at 8 threads; latest clean report `45618fc`, superseded by the seven-phase/bounded-row-group fix and awaiting remeasurement |
 | `v2_disk_generation_p0b_*_20260921.json` | (legacy) measured before source identity was captured |
 | `v2_disk_generation_b3_capacity_20260921.json` | Full-scale capacity, workload and time-range estimate (no generation) |
 | `v2_disk_generation_matrix_20260922.md` | What the three 2026-09-22 campaigns show |

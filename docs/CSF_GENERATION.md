@@ -238,7 +238,7 @@ memory_budget_mib = 8192
 
 The CLI flag `--memory-budget-mib` overrides the TOML value. The returned JSON
 contains `stage_stats` for enumeration, workload planning, generation,
-de-duplication, and the three final-encoding phases, plus
+de-duplication, and the seven final-encoding phases, plus
 `resource_stats.memory_budget_mib`, `budget_bytes`, `peak_managed_bytes`,
 `current_managed_bytes`, and `occupation_bytes`. The budget accounts for
 selected internal data structures; it is not an operating-system RSS limit.
@@ -253,16 +253,18 @@ surviving row from its segment exactly once: its integers go straight into the
 descriptor Parquet, and its decoded record is validated and formatted for the
 CSF text and CSF Parquet.
 
-The three phases are timed and reported separately, because they are
-separately real (`final_encoding_prepare`, `final_encoding_encode`,
-`final_encoding_write`): decoding, validation and formatting run in the thread
-pool over each batch's rows — the pool sized by `threads`, with the CSF-wide
-CPU time visible as `cpu_millis` above the wall clock — while the descriptor
-Parquet still has a single writer and the CSF text a single pen. That is
-parallel preparation over a serial encoder, and the statistics do not present
-it as fully parallel encoding. Block separators and the global `idx` sequence
-are emitted by the ordered publication side, so batch or thread boundaries
-cannot land a row in the wrong block.
+Seven phases are timed and reported separately because they are separately
+real: `final_encoding_read` covers IPC read/decompression and batch checks,
+`final_encoding_select` covers survivor filtering and column gathering,
+`final_encoding_prepare` covers V2 decode/validation/formatting, and each output
+family has separate `_encode` and `_write` phases. Preparation runs in the
+thread pool over each batch's rows — the pool sized by `threads`, with CSF-wide
+CPU time visible as `cpu_millis` above wall clock — while descriptor Parquet
+still has a single writer and CSF text a single pen. The two Parquet writers
+cap row groups at 8,192 rows, matching their managed-memory allowances; source
+batches are reserved before IPC decoding. Block separators and the global
+`idx` sequence are emitted by the ordered publication side, so batch or thread
+boundaries cannot land a row in the wrong block.
 
 The old two-pass tail (`merge_v2_deduplicated_segments` plus the descriptor
 read-back) is kept as the reference implementation and differentially checked

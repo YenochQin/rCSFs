@@ -3,17 +3,19 @@
     "cpu_count": 10,
     "extension": {
       "module": "_rcsfs.cpython-314-darwin.so",
-      "module_sha256": "110d4381a8ab0a6f04052df871d9fe85bbd286d06029153c83c9af18c8925210",
+      "module_sha256": "d88c699089f1ce4b5210039b11e278cd31bbb3de1493b2d34f924f4a4e1cfaf9",
       "path": "<repo-root>/rcsfs/_rcsfs.cpython-314-darwin.so",
       "version": "1.3.1"
     },
     "git": {
       "branch": "1.3.1-beta2",
-      "commit": "bec91108642b5c1dd4ff8f72aae4c299a2013642",
-      "describe": "bec9110-dirty",
-      "dirty": true,
-      "dirty_diff_sha256": "99df125be2bc98a6392e2401aa9b526eb8267760ec3e567c1d534c46d4875a14",
-      "tree": "03bb0b16d2ba29a6eea0dbd55250fe131dced966"
+      "commit": "1d1f29a714c0613c3cda9dbcb984e0bfdac6b6fc",
+      "describe": "1d1f29a-dirty",
+      "dirty": false,
+      "dirty_ignores": [
+        "docs/benchmarks"
+      ],
+      "tree": "96fdfa4841cdac1cdec077169cc68c219d32c23e"
     },
     "machine": "arm64",
     "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
@@ -48,7 +50,7 @@
       "staged_outputs": 2303925198597,
       "survivor_bitsets": 726772028
     },
-    "enumeration_millis": 14551,
+    "enumeration_millis": 14799,
     "failure_recovery": "restart",
     "peel_subshells": 56,
     "plan_stats": {
@@ -68,11 +70,11 @@
       "unsplittable_tasks": 0,
       "zero_record_configurations": 14185
     },
-    "planning_millis": 8233,
+    "planning_millis": 8080,
     "pre_deduplication_records": 5814175207,
     "space_checks": [
       {
-        "free_bytes": 75935182848,
+        "free_bytes": 75470151680,
         "path": ".",
         "required_bytes": 24153428501892,
         "sufficient": false
@@ -83,12 +85,12 @@
     "v2_columns": 226
   },
   "filesystem": {
-    "free_bytes": 75935387648,
+    "free_bytes": 75470127104,
     "path": "<repo-root>",
     "total_bytes": 245107195904,
     "type": "apfs"
   },
-  "generated_at_unix_seconds": 1790050991.5184152,
+  "generated_at_unix_seconds": 1790052449.0896618,
   "schema": "rcsfs-v2-generation-capacity/1",
   "settings": {
     "counted_records_are": "pre-de-duplication",
@@ -106,5 +108,5 @@
     "sha256": "1ec027bcbe6532e6855d82c965a1c4713ee9e0396ef461fb6f709cd9070dd1a8",
     "size_bytes": 190
   },
-  "wall_seconds": 23.047467374999542
+  "wall_seconds": 23.08427550000488
 }

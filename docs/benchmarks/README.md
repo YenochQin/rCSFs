@@ -92,9 +92,9 @@ match is rejected rather than silently recorded.
 
 | Report | What it measures |
 | --- | --- |
-| `v2_disk_generation_p0b_b1/b2_20260921.json` | The pre-planning baseline at revision `a993ca4`, one run per input |
-| `v2_disk_generation_threads_b1/b2_20260922.json` | 1/2/4/8 threads at the derived task size |
+| `v2_disk_generation_threads_b1/b2_20260922.json` | 1/2/4/8 threads at the derived task size, revision `1d1f29a` |
 | `v2_disk_generation_budget_b1/b2_20260922.json` | Low (rejected), mid and high `memory_budget_mib` at 8 threads |
+| `v2_disk_generation_p0b_*_20260921.json` | (legacy) measured before source identity was captured |
 | `v2_disk_generation_b3_capacity_20260921.json` | Full-scale capacity, workload and time-range estimate (no generation) |
 | `v2_disk_generation_matrix_20260922.md` | What the three 2026-09-22 campaigns show |
 

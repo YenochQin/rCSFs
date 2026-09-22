@@ -632,10 +632,10 @@ def generate_disk_outputs_from_transcript(
     not cap process RSS, allocator overhead, or thread stacks.
 
     The run is refused before the first segment when the scratch or staging
-    volume cannot hold the estimated data. If a volume's free space cannot be
-    measured on this platform, the run is refused too unless
-    ``allow_unchecked_space`` is set: skipping the pre-flight silently is the
-    outcome the pre-flight exists to prevent.
+    volume cannot hold the estimated data; that refusal is not optional. If a
+    volume's free space cannot be *measured* on this platform the run is refused
+    too, unless ``allow_unchecked_space`` accepts the unknown — skipping the
+    pre-flight silently is the outcome the pre-flight exists to prevent.
     """
     from ._rcsfs import generate_disk_outputs_from_transcript as native_generate
 
@@ -677,18 +677,17 @@ def estimate_disk_generation(
     Passing ``scratch_dir``, ``staging_dir`` and ``destinations`` adds space
     checks that share this model: requirements on one volume are added together
     and each phase is compared by its maximum. ``destinations`` maps an artifact
-    kind (``"csf_text"``, ``"csf_parquet"``, ``"descriptor"``, ``"metadata"``)
-    to the path that will receive it, so the model charges each volume the size
-    that artifact actually takes. Kinds are ``"csf_text"``, ``"csf_parquet"``,
-    ``"descriptor"``, ``"header"`` and ``"descriptor_metadata"``; a kind may
-    appear once per destination, since two artifacts of one kind can be
-    published to different volumes.
+    kind to the path that will receive it — ``"csf_text"``, ``"csf_parquet"``,
+    ``"descriptor"``, ``"header"`` or ``"descriptor_metadata"`` — so the model
+    charges each volume the size that artifact actually takes. Each kind names
+    one artifact and may appear once.
 
     The checks are *reported*, never enforced: an estimate exists to answer
     whether a run would fit, so an insufficient or unmeasurable volume appears
     as ``sufficient`` ``False`` or ``None``. Deciding what that means belongs to
-    the caller — :func:`generate_disk_outputs_from_transcript` refuses to start
-    in both cases unless ``allow_unchecked_space`` is set.
+    the caller. :func:`generate_disk_outputs_from_transcript` refuses a volume it
+    measured and found too small, and refuses an unmeasurable one too unless
+    ``allow_unchecked_space`` is set.
     """
     from ._rcsfs import estimate_disk_generation as native_estimate
 

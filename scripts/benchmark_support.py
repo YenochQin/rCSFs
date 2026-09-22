@@ -126,43 +126,91 @@ def verify_registered_transcript(
     return record
 
 
-def _git_metadata() -> dict[str, Any]:
-    def run(*arguments: str) -> str | None:
-        try:
-            completed = subprocess.run(
-                ["git", *arguments],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except (OSError, subprocess.CalledProcessError):
-            return None
-        return completed.stdout.strip()
+#: Paths excluded from the source-identity computation. The registered reports
+#: are this harness's own output, so writing one must not make the next report
+#: claim a dirty source.
+_SOURCE_EXCLUSIONS = (":!docs/benchmarks",)
 
-    # The registered reports are this harness's own output, so writing one must
-    # not make the next report claim a dirty source. Everything else counts.
-    status = run("status", "--porcelain", "--", ":!docs/benchmarks")
+
+def _run_git(*arguments: str, keep_indent: bool = False) -> str | None:
+    """Run a git command in the repository, or `None` when git cannot answer.
+
+    `keep_indent` matters for porcelain output, whose two-character status
+    column starts with a space that `strip()` would remove from the first line.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", *arguments],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return completed.stdout.rstrip("\n") if keep_indent else completed.stdout.strip()
+
+
+def _source_status() -> str | None:
+    """Tracked modifications and untracked files, ignoring the report outputs."""
+    return _run_git("status", "--porcelain", "--", *_SOURCE_EXCLUSIONS, keep_indent=True)
+
+
+def _dirty_fingerprint(status: str) -> str | None:
+    """Identify everything that makes the source dirty, tracked or not.
+
+    `git diff HEAD` alone would miss an untracked source file and would include
+    the report outputs this harness writes, so the fingerprint is built from the
+    status entries with the same exclusions: the diff of the tracked ones plus
+    the name and content hash of each new file.
+    """
+    digest = hashlib.sha256()
+    digest.update(status.encode())
+    tracked_diff = _run_git("diff", "HEAD", "--", *_SOURCE_EXCLUSIONS)
+    if tracked_diff is None:
+        return None
+    digest.update(tracked_diff.encode())
+    untracked = _run_git(
+        "ls-files", "--others", "--exclude-standard", "--", *_SOURCE_EXCLUSIONS
+    )
+    if untracked is None:
+        return None
+    for name in sorted(line for line in untracked.splitlines() if line):
+        digest.update(name.encode())
+        path = REPO_ROOT / name
+        try:
+            digest.update(sha256_file(path).encode())
+        except OSError:
+            # A file that vanished between listing and reading still has to be
+            # accounted for, so its absence is recorded rather than skipped.
+            digest.update(b"<unreadable>")
+    return digest.hexdigest()
+
+
+def _git_metadata() -> dict[str, Any]:
+    status = _source_status()
     dirty = None if status is None else bool(status)
     metadata: dict[str, Any] = {
-        "commit": run("rev-parse", "HEAD"),
+        "commit": _run_git("rev-parse", "HEAD"),
         # The tree hash identifies the source state even if the commit is later
         # rewritten or the branch moves, so a reader can check what was built.
-        "tree": run("rev-parse", "HEAD^{tree}"),
-        "describe": run("describe", "--tags", "--always", "--dirty"),
-        "branch": run("rev-parse", "--abbrev-ref", "HEAD"),
-        # A dirty tree is reported rather than rejected: a local measurement of
-        # uncommitted work is still useful, but it must not be mistaken for a
-        # reproducible baseline.
+        "tree": _run_git("rev-parse", "HEAD^{tree}"),
+        # Without `--dirty`: the `dirty` field below carries that, and its
+        # definition excludes the report outputs this harness writes, so the two
+        # would otherwise disagree whenever only a report changed.
+        "describe": _run_git("describe", "--tags", "--always"),
+        "branch": _run_git("rev-parse", "--abbrev-ref", "HEAD"),
+        # A dirty tree is reported rather than rejected here; the scripts refuse
+        # to register a report from one unless the caller insists.
         "dirty": dirty,
-        "dirty_ignores": ["docs/benchmarks"],
+        "dirty_ignores": [exclusion.lstrip(":!") for exclusion in _SOURCE_EXCLUSIONS],
     }
     if dirty:
-        # A dirty measurement is only auditable if the uncommitted part is
-        # identified, so its diff is hashed too.
-        diff = run("diff", "HEAD")
-        metadata["dirty_diff_sha256"] = (
-            None if diff is None else hashlib.sha256(diff.encode()).hexdigest()
+        metadata["dirty_diff_sha256"] = _dirty_fingerprint(status)
+        # Porcelain rows are "<XY> <path>"; the status column is two characters
+        # wide and may itself start with a space.
+        metadata["dirty_paths"] = sorted(
+            line[3:] for line in status.splitlines() if len(line) > 3
         )
     return metadata
 
@@ -328,6 +376,29 @@ def normalize_report_paths(value: Any) -> Any:
     if isinstance(value, list):
         return [normalize_report_paths(item) for item in value]
     return value
+
+
+def require_clean_source(git: dict[str, Any], allow_dirty: bool) -> None:
+    """Refuse to register a measurement whose source is not identified.
+
+    A report is a claim about a specific source state. When the tree is dirty
+    the claim becomes "this revision plus these changes", which is auditable but
+    weaker, and a measurement taken while the source is being edited is not a
+    baseline anyone should compare against - one of these runs was disturbed
+    exactly that way. Registering such a report therefore takes an explicit
+    decision.
+    """
+    if not git.get("dirty"):
+        return
+    if allow_dirty:
+        return
+    paths = ", ".join(git.get("dirty_paths") or ["<unknown>"])
+    raise SystemExit(
+        f"the source tree is dirty ({paths}); a registered report must name a "
+        f"source state someone else can rebuild. Commit the changes, or pass "
+        f"--allow-dirty-source to record this measurement as an identified but "
+        f"uncommitted one."
+    )
 
 
 def write_report(report: dict[str, Any], output: Path | None) -> None:

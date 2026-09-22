@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+### 第三轮评审修正：产物唯一性、脏源码与死代码（2026-09-22）
+
+- 每种产物只允许一个目标：`check_space` 拒绝同一 artifact kind 出现两次（否则会把一个
+  产物的字节数计两遍），`estimate_v2_generation.py` 的 `--destination` 遇到重复 kind
+  直接报错；此前文档声称可以重复，实际是后一个路径静默覆盖前一个。
+- 脏源码的指纹补全：此前 `git diff HEAD` 不含未跟踪文件、也未套用 `docs/benchmarks`
+  排除规则，可能出现"未跟踪源码 + 空 diff 哈希"或被报告内容污染。现在指纹由
+  `git status --porcelain`（同一排除规则）构造，含已跟踪改动与每个未跟踪文件的内容
+  哈希，并记录 `dirty_paths`；`describe` 不再带 `-dirty` 后缀，改由 `dirty` 字段表达。
+  两个基准脚本默认**拒绝在脏工作树上写报告**，`--allow-dirty-source` 才记录为"已标识
+  但未提交"的测量。
+- 删除尚未接线的压缩抽象（`SegmentCompression`、`RCSFS_SEGMENT_COMPRESSION` 与
+  `GenerationOptions::segment_compression`）：仓库内外无任何引用，P2a 会在真正测量时
+  连同结论一起引入；`Cargo.toml` 的 arrow-ipc lz4/zstd feature 保留，它是依赖配置而
+  非死代码。
+- `space.rs` 的三个策略测试合并为一个策略矩阵（三种容量结论 × 三种策略），覆盖
+  已知不足必然拒绝、opt-out 仅覆盖无法测量、报告始终给出结论，并断言两种拒绝的
+  错误信息可区分。
+- 修正 `estimate_disk_generation` 文档中残留的 `metadata` kind 与"opt-out 同时放宽
+  不足与未知"的旧描述。
+
 ### 第二轮评审修正：空间开关语义与报告可审计性（2026-09-22）
 
 - `allow_unchecked_space` 此前同时放宽"空间不足"与"无法测量"两种情况，导致直接用

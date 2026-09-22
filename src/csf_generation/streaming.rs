@@ -560,6 +560,7 @@ pub(crate) fn estimate_disk_generation_with_layout(
         entries.push((
             destination.clone(),
             SpaceRole::Published {
+                artifact: *kind,
                 bytes: estimate.capacity.artifact_bytes(*kind),
             },
         ));

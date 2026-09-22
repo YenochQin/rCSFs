@@ -120,12 +120,18 @@ match is rejected rather than silently recorded.
 
 Reports written before this isolated-process harness do not contain artifact
 digests, and their `rss_peak_bytes` is the monotonically increasing peak of the
-whole benchmark process. The codec and dedup campaigns dated 2026-09-22 were
-re-measured at `47e04ea` with the current harness — their committed JSONs carry
-per-run RSS and the four published-artifact digests — while the older campaigns
-(threads, budget, 2026-09-21 baselines) remain valid for timings, logical I/O,
-scratch and managed memory but not for per-combination RSS or content
-differential claims.
+whole benchmark process. The codec, dedup and final-encoding campaigns dated
+2026-09-22 were measured with the current harness (or re-measured at `47e04ea`)
+— their committed JSONs carry per-run RSS and the four published-artifact
+digests — while the older campaigns (threads, budget, 2026-09-21 baselines)
+remain valid for timings, logical I/O, scratch and managed memory but not for
+per-combination RSS or content differential claims.
+
+The final-encoding campaign also demonstrates what the harness's digests are
+for: the one-pass tail reproduces the two-pass tail's CSF text, descriptor and
+header digests exactly while the CSF Parquet digest changes, because that file's
+row-group boundaries follow whichever path batched it and are not part of its
+contract. A difference in the first three would have refused the report.
 
 ## Registered campaigns
 
@@ -135,11 +141,13 @@ differential claims.
 | `v2_disk_generation_budget_b1/b2_20260922.json` | Low (rejected), mid and high `memory_budget_mib` at 8 threads |
 | `v2_disk_generation_codec_b1/b2_20260922.json` | Uncompressed / LZ4 / ZSTD temporary segments at 8 threads; first round `3588df1`, re-measured with per-run RSS and digests at `47e04ea` |
 | `v2_disk_generation_dedup_b1/b2_20260922.json` | Verified-unique vs exact de-duplication, each with and without zstd segments; first round `bbcd714`, re-measured with content digests at `47e04ea` |
+| `v2_disk_generation_final_encoding_b1/b2_20260922.json` | One-pass final encoding vs the two-pass merge+restore tail at 8 threads, `de97127` |
 | `v2_disk_generation_p0b_*_20260921.json` | (legacy) measured before source identity was captured |
 | `v2_disk_generation_b3_capacity_20260921.json` | Full-scale capacity, workload and time-range estimate (no generation) |
 | `v2_disk_generation_matrix_20260922.md` | What the three 2026-09-22 campaigns show |
 | `v2_disk_generation_codec_20260922.md` | What the P2a codec experiment shows |
 | `v2_disk_generation_dedup_20260922.md` | What the P6b fast path saves, and what the P2a+P6b combination costs |
+| `v2_disk_generation_final_encoding_20260922.md` | What the P4 one-pass tail saves, and the cumulative gain against the `7ad18b1` baseline |
 
 A rejected configuration is part of the matrix, not a hole in it: the plan asks
 for a low budget to be reported as a resource rejection rather than being

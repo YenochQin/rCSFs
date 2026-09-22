@@ -3,19 +3,19 @@
     "cpu_count": 10,
     "extension": {
       "module": "_rcsfs.cpython-314-darwin.so",
-      "module_sha256": "cbcf2eb8730960369f9f5086ddea0df58806f15a353c9428094c1c00070899e7",
+      "module_sha256": "2e79342919a63ee66794128b71929e038519e2caabfc2010e0c4424b411b387b",
       "path": "<repo-root>/rcsfs/_rcsfs.cpython-314-darwin.so",
       "version": "1.3.1"
     },
     "git": {
       "branch": "1.3.1-beta2",
-      "commit": "3588df1559824db7d6225df894c1634a96efa122",
-      "describe": "3588df1",
+      "commit": "47e04ea879d83dc1045f466745f11e8acd96cba2",
+      "describe": "47e04ea",
       "dirty": false,
       "dirty_ignores": [
         "docs/benchmarks"
       ],
-      "tree": "fdae74cc1a9e4b1a0d2765ecee18f6b85be42e29"
+      "tree": "53d2def40b7971d8602824c2073e00519c80c7da"
     },
     "machine": "arm64",
     "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
@@ -26,24 +26,29 @@
     "total_memory_bytes": 17179869184
   },
   "filesystem": {
-    "free_bytes": 75225554944,
+    "free_bytes": 73591218176,
     "path": "<system-temp>",
     "total_bytes": 245107195904,
     "type": "apfs"
   },
-  "generated_at_unix_seconds": 1790067410.08267,
+  "generated_at_unix_seconds": 1790081398.19021,
   "measurements": [
     {
       "block_count": 1,
-      "cleanup_seconds": 0.028993833984714,
+      "cleanup_seconds": 0.049247249990003183,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "measured",
       "memory_budget_mib": null,
       "order": 1,
@@ -74,12 +79,13 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 387022848,
+      "rss_peak_bytes": 414547968,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 1019088380,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 22,
+      "scratch_peak_bytes": 530659224,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 15,
       "segment_codec": "none",
       "stage_stats": [
         {
@@ -92,8 +98,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 166,
-          "elapsed_millis": 21,
+          "cpu_millis": 176,
+          "elapsed_millis": 22,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -101,8 +107,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1657,
-          "elapsed_millis": 282,
+          "cpu_millis": 1649,
+          "elapsed_millis": 265,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -110,26 +116,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1583,
-          "elapsed_millis": 1668,
+          "cpu_millis": 1,
+          "elapsed_millis": 1,
           "input_bytes": 530589180,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1340,
-          "elapsed_millis": 1336,
-          "input_bytes": 520075772,
+          "cpu_millis": 1373,
+          "elapsed_millis": 1369,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1220,
-          "elapsed_millis": 1220,
+          "cpu_millis": 1243,
+          "elapsed_millis": 1242,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -140,19 +146,24 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 4.5736843749764375
+      "wall_seconds": 2.946801582991611
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.0067154169955756515,
+      "cleanup_seconds": 0.007583250000607222,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "measured",
       "memory_budget_mib": null,
       "order": 2,
@@ -183,17 +194,18 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 480739328,
+      "rss_peak_bytes": 390447104,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 1030781180,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 23,
+      "scratch_peak_bytes": 530659224,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 15,
       "segment_codec": "none",
       "stage_stats": [
         {
-          "cpu_millis": 43,
-          "elapsed_millis": 43,
+          "cpu_millis": 45,
+          "elapsed_millis": 44,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -201,8 +213,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 167,
-          "elapsed_millis": 21,
+          "cpu_millis": 166,
+          "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -210,8 +222,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1561,
-          "elapsed_millis": 242,
+          "cpu_millis": 1605,
+          "elapsed_millis": 263,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -219,26 +231,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1604,
-          "elapsed_millis": 1784,
+          "cpu_millis": 1,
+          "elapsed_millis": 1,
           "input_bytes": 530589180,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1343,
-          "elapsed_millis": 1340,
-          "input_bytes": 520075772,
+          "cpu_millis": 1391,
+          "elapsed_millis": 1388,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1226,
-          "elapsed_millis": 1223,
+          "cpu_millis": 1272,
+          "elapsed_millis": 1273,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -249,19 +261,24 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 4.657972499990137
+      "wall_seconds": 2.9932426669984125
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.040351082978304476,
+      "cleanup_seconds": 0.009052875015186146,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "measured",
       "memory_budget_mib": null,
       "order": 3,
@@ -292,16 +309,17 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 518619136,
+      "rss_peak_bytes": 559267840,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 1050594908,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 24,
+      "scratch_peak_bytes": 530659224,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 16,
       "segment_codec": "none",
       "stage_stats": [
         {
-          "cpu_millis": 43,
+          "cpu_millis": 44,
           "elapsed_millis": 43,
           "input_bytes": 0,
           "input_records": 0,
@@ -310,8 +328,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 164,
-          "elapsed_millis": 20,
+          "cpu_millis": 169,
+          "elapsed_millis": 22,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -319,8 +337,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1584,
-          "elapsed_millis": 300,
+          "cpu_millis": 1870,
+          "elapsed_millis": 338,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -328,26 +346,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1624,
-          "elapsed_millis": 1965,
+          "cpu_millis": 1,
+          "elapsed_millis": 1,
           "input_bytes": 530589180,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1343,
-          "elapsed_millis": 1339,
-          "input_bytes": 520075772,
+          "cpu_millis": 1397,
+          "elapsed_millis": 1394,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1220,
-          "elapsed_millis": 1218,
+          "cpu_millis": 1271,
+          "elapsed_millis": 1309,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -358,19 +376,24 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 4.889719666010933
+      "wall_seconds": 3.112276750005549
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.003306875005364418,
+      "cleanup_seconds": 0.016394291014876217,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "measured",
       "memory_budget_mib": null,
       "order": 5,
@@ -401,12 +424,13 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 530841600,
+      "rss_peak_bytes": 360955904,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 8663896,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 498473916,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 27,
+      "scratch_peak_bytes": 8663896,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 18,
       "segment_codec": "lz4",
       "stage_stats": [
         {
@@ -419,7 +443,7 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 160,
+          "cpu_millis": 165,
           "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
@@ -428,8 +452,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1524,
-          "elapsed_millis": 239,
+          "cpu_millis": 1564,
+          "elapsed_millis": 237,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -437,26 +461,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2097,
-          "elapsed_millis": 2152,
+          "cpu_millis": 1,
+          "elapsed_millis": 1,
           "input_bytes": 8593852,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1959,
-          "elapsed_millis": 1954,
-          "input_bytes": 520075772,
+          "cpu_millis": 2107,
+          "elapsed_millis": 2104,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1229,
-          "elapsed_millis": 1228,
+          "cpu_millis": 1256,
+          "elapsed_millis": 1255,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -467,19 +491,24 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 5.639912083017407
+      "wall_seconds": 3.665298458014149
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.0035006660036742687,
+      "cleanup_seconds": 0.0035053750034421682,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "measured",
       "memory_budget_mib": null,
       "order": 6,
@@ -510,12 +539,13 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 530841600,
+      "rss_peak_bytes": 363479040,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 8663896,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 528599580,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 29,
+      "scratch_peak_bytes": 8663896,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 18,
       "segment_codec": "lz4",
       "stage_stats": [
         {
@@ -528,8 +558,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 157,
-          "elapsed_millis": 19,
+          "cpu_millis": 169,
+          "elapsed_millis": 21,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -537,8 +567,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1537,
-          "elapsed_millis": 243,
+          "cpu_millis": 1578,
+          "elapsed_millis": 247,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -546,26 +576,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2131,
-          "elapsed_millis": 2364,
+          "cpu_millis": 1,
+          "elapsed_millis": 1,
           "input_bytes": 8593852,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 2013,
-          "elapsed_millis": 2009,
-          "input_bytes": 520075772,
+          "cpu_millis": 2098,
+          "elapsed_millis": 2094,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1227,
-          "elapsed_millis": 1224,
+          "cpu_millis": 1275,
+          "elapsed_millis": 1281,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -576,19 +606,24 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 5.907422124990262
+      "wall_seconds": 3.690951166994637
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.003388999990420416,
+      "cleanup_seconds": 0.0036378329969011247,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "measured",
       "memory_budget_mib": null,
       "order": 7,
@@ -619,17 +654,18 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 530841600,
+      "rss_peak_bytes": 372113408,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 8663896,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 528599580,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 28,
+      "scratch_peak_bytes": 8663896,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 18,
       "segment_codec": "lz4",
       "stage_stats": [
         {
-          "cpu_millis": 44,
-          "elapsed_millis": 43,
+          "cpu_millis": 42,
+          "elapsed_millis": 42,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -637,8 +673,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 169,
-          "elapsed_millis": 21,
+          "cpu_millis": 162,
+          "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -646,8 +682,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1594,
-          "elapsed_millis": 248,
+          "cpu_millis": 1608,
+          "elapsed_millis": 252,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -655,26 +691,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2108,
-          "elapsed_millis": 2176,
+          "cpu_millis": 1,
+          "elapsed_millis": 1,
           "input_bytes": 8593852,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 2012,
-          "elapsed_millis": 2010,
-          "input_bytes": 520075772,
+          "cpu_millis": 2098,
+          "elapsed_millis": 2093,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1233,
-          "elapsed_millis": 1230,
+          "cpu_millis": 1255,
+          "elapsed_millis": 1263,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -685,19 +721,24 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 5.733573458011961
+      "wall_seconds": 3.675219124997966
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.0035057500062976032,
+      "cleanup_seconds": 0.0053172080079093575,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "measured",
       "memory_budget_mib": null,
       "order": 9,
@@ -728,12 +769,13 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 530841600,
+      "rss_peak_bytes": 375013376,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 524698204,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 25,
+      "scratch_peak_bytes": 4762520,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 16,
       "segment_codec": "zstd",
       "stage_stats": [
         {
@@ -746,8 +788,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 172,
-          "elapsed_millis": 21,
+          "cpu_millis": 163,
+          "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -755,8 +797,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1611,
-          "elapsed_millis": 249,
+          "cpu_millis": 1595,
+          "elapsed_millis": 243,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -764,26 +806,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1731,
-          "elapsed_millis": 1784,
+          "cpu_millis": 2,
+          "elapsed_millis": 1,
           "input_bytes": 4692476,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1657,
-          "elapsed_millis": 1654,
-          "input_bytes": 520075772,
+          "cpu_millis": 1769,
+          "elapsed_millis": 1769,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1234,
-          "elapsed_millis": 1232,
+          "cpu_millis": 1235,
+          "elapsed_millis": 1235,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -794,19 +836,24 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 4.986959041998489
+      "wall_seconds": 3.315187208005227
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.00360883297980763,
+      "cleanup_seconds": 0.03742100001545623,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "measured",
       "memory_budget_mib": null,
       "order": 10,
@@ -837,17 +884,18 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 530841600,
+      "rss_peak_bytes": 354762752,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 479108348,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 25,
+      "scratch_peak_bytes": 4762520,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 30,
       "segment_codec": "zstd",
       "stage_stats": [
         {
-          "cpu_millis": 43,
-          "elapsed_millis": 42,
+          "cpu_millis": 90,
+          "elapsed_millis": 95,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -855,8 +903,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 161,
-          "elapsed_millis": 20,
+          "cpu_millis": 178,
+          "elapsed_millis": 44,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -864,8 +912,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1608,
-          "elapsed_millis": 246,
+          "cpu_millis": 1856,
+          "elapsed_millis": 424,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -873,26 +921,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1755,
-          "elapsed_millis": 1889,
+          "cpu_millis": 2,
+          "elapsed_millis": 1,
           "input_bytes": 4692476,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1725,
-          "elapsed_millis": 1727,
-          "input_bytes": 520075772,
+          "cpu_millis": 1973,
+          "elapsed_millis": 1984,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1234,
-          "elapsed_millis": 1231,
+          "cpu_millis": 2241,
+          "elapsed_millis": 3635,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -903,19 +951,24 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 5.159441083989805
+      "wall_seconds": 6.189786834002007
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.003327082988107577,
+      "cleanup_seconds": 0.004332499986048788,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "measured",
       "memory_budget_mib": null,
       "order": 11,
@@ -946,17 +999,18 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 530841600,
+      "rss_peak_bytes": 261390336,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 524698204,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 25,
+      "scratch_peak_bytes": 4762520,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 20,
       "segment_codec": "zstd",
       "stage_stats": [
         {
-          "cpu_millis": 43,
-          "elapsed_millis": 43,
+          "cpu_millis": 97,
+          "elapsed_millis": 108,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -964,8 +1018,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 160,
-          "elapsed_millis": 20,
+          "cpu_millis": 191,
+          "elapsed_millis": 40,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -973,8 +1027,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1588,
-          "elapsed_millis": 246,
+          "cpu_millis": 1768,
+          "elapsed_millis": 392,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -982,26 +1036,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1737,
-          "elapsed_millis": 1805,
+          "cpu_millis": 2,
+          "elapsed_millis": 1,
           "input_bytes": 4692476,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1641,
-          "elapsed_millis": 1636,
-          "input_bytes": 520075772,
+          "cpu_millis": 2116,
+          "elapsed_millis": 2209,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1227,
-          "elapsed_millis": 1224,
+          "cpu_millis": 1286,
+          "elapsed_millis": 1289,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -1012,12 +1066,16 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 4.977673666988267
+      "wall_seconds": 4.046010125020985
     }
   ],
   "rejected": [],
   "schema": "rcsfs-v2-generation-benchmark/1",
   "settings": {
+    "deduplication": [
+      "verified_unique"
+    ],
+    "measurement_process_model": "spawned_process_per_run",
     "memory_budget_mib": [
       null
     ],
@@ -1037,157 +1095,163 @@
   },
   "summary": [
     {
-      "cleanup_seconds_median": 0.028993833984714,
+      "cleanup_seconds_median": 0.009052875015186146,
+      "dedup_temp_bytes_median": 70044,
+      "deduplication": "verified_unique",
       "memory_budget_mib": null,
       "runs": 3,
-      "scratch_peak_bytes_max": 1050594908,
+      "scratch_peak_bytes_max": 530659224,
       "segment_bytes_median": 530589180,
       "segment_codec": "none",
       "stages": {
         "csf_generation": {
-          "cpu_seconds_median": 1.584,
-          "wall_seconds_max": 0.3,
-          "wall_seconds_median": 0.282,
-          "wall_seconds_min": 0.242
+          "cpu_seconds_median": 1.649,
+          "wall_seconds_max": 0.338,
+          "wall_seconds_median": 0.265,
+          "wall_seconds_min": 0.263
         },
         "csf_restore": {
-          "cpu_seconds_median": 1.22,
-          "wall_seconds_max": 1.223,
-          "wall_seconds_median": 1.22,
-          "wall_seconds_min": 1.218
+          "cpu_seconds_median": 1.271,
+          "wall_seconds_max": 1.309,
+          "wall_seconds_median": 1.273,
+          "wall_seconds_min": 1.242
         },
         "deduplication": {
-          "cpu_seconds_median": 1.604,
-          "wall_seconds_max": 1.965,
-          "wall_seconds_median": 1.784,
-          "wall_seconds_min": 1.668
+          "cpu_seconds_median": 0.001,
+          "wall_seconds_max": 0.001,
+          "wall_seconds_median": 0.001,
+          "wall_seconds_min": 0.001
         },
         "descriptor_merge": {
-          "cpu_seconds_median": 1.343,
-          "wall_seconds_max": 1.34,
-          "wall_seconds_median": 1.339,
-          "wall_seconds_min": 1.336
+          "cpu_seconds_median": 1.391,
+          "wall_seconds_max": 1.394,
+          "wall_seconds_median": 1.388,
+          "wall_seconds_min": 1.369
         },
         "enumeration": {
-          "cpu_seconds_median": 0.043,
-          "wall_seconds_max": 0.043,
+          "cpu_seconds_median": 0.044,
+          "wall_seconds_max": 0.044,
           "wall_seconds_median": 0.043,
           "wall_seconds_min": 0.043
         },
         "workload_planning": {
-          "cpu_seconds_median": 0.166,
-          "wall_seconds_max": 0.021,
-          "wall_seconds_median": 0.021,
+          "cpu_seconds_median": 0.169,
+          "wall_seconds_max": 0.022,
+          "wall_seconds_median": 0.022,
           "wall_seconds_min": 0.02
         }
       },
       "threads": 8,
-      "wall_seconds_max": 4.889719666010933,
-      "wall_seconds_median": 4.657972499990137,
-      "wall_seconds_min": 4.5736843749764375,
-      "wall_seconds_range": 0.31603529103449546
+      "wall_seconds_max": 3.112276750005549,
+      "wall_seconds_median": 2.9932426669984125,
+      "wall_seconds_min": 2.946801582991611,
+      "wall_seconds_range": 0.1654751670139376
     },
     {
-      "cleanup_seconds_median": 0.003388999990420416,
+      "cleanup_seconds_median": 0.0036378329969011247,
+      "dedup_temp_bytes_median": 70044,
+      "deduplication": "verified_unique",
       "memory_budget_mib": null,
       "runs": 3,
-      "scratch_peak_bytes_max": 528599580,
+      "scratch_peak_bytes_max": 8663896,
       "segment_bytes_median": 8593852,
       "segment_codec": "lz4",
       "stages": {
         "csf_generation": {
-          "cpu_seconds_median": 1.537,
-          "wall_seconds_max": 0.248,
-          "wall_seconds_median": 0.243,
-          "wall_seconds_min": 0.239
+          "cpu_seconds_median": 1.578,
+          "wall_seconds_max": 0.252,
+          "wall_seconds_median": 0.247,
+          "wall_seconds_min": 0.237
         },
         "csf_restore": {
-          "cpu_seconds_median": 1.229,
-          "wall_seconds_max": 1.23,
-          "wall_seconds_median": 1.228,
-          "wall_seconds_min": 1.224
+          "cpu_seconds_median": 1.256,
+          "wall_seconds_max": 1.281,
+          "wall_seconds_median": 1.263,
+          "wall_seconds_min": 1.255
         },
         "deduplication": {
-          "cpu_seconds_median": 2.108,
-          "wall_seconds_max": 2.364,
-          "wall_seconds_median": 2.176,
-          "wall_seconds_min": 2.152
+          "cpu_seconds_median": 0.001,
+          "wall_seconds_max": 0.001,
+          "wall_seconds_median": 0.001,
+          "wall_seconds_min": 0.001
         },
         "descriptor_merge": {
-          "cpu_seconds_median": 2.012,
-          "wall_seconds_max": 2.01,
-          "wall_seconds_median": 2.009,
-          "wall_seconds_min": 1.954
-        },
-        "enumeration": {
-          "cpu_seconds_median": 0.044,
-          "wall_seconds_max": 0.043,
-          "wall_seconds_median": 0.043,
-          "wall_seconds_min": 0.043
-        },
-        "workload_planning": {
-          "cpu_seconds_median": 0.16,
-          "wall_seconds_max": 0.021,
-          "wall_seconds_median": 0.02,
-          "wall_seconds_min": 0.019
-        }
-      },
-      "threads": 8,
-      "wall_seconds_max": 5.907422124990262,
-      "wall_seconds_median": 5.733573458011961,
-      "wall_seconds_min": 5.639912083017407,
-      "wall_seconds_range": 0.2675100419728551
-    },
-    {
-      "cleanup_seconds_median": 0.0035057500062976032,
-      "memory_budget_mib": null,
-      "runs": 3,
-      "scratch_peak_bytes_max": 524698204,
-      "segment_bytes_median": 4692476,
-      "segment_codec": "zstd",
-      "stages": {
-        "csf_generation": {
-          "cpu_seconds_median": 1.608,
-          "wall_seconds_max": 0.249,
-          "wall_seconds_median": 0.246,
-          "wall_seconds_min": 0.246
-        },
-        "csf_restore": {
-          "cpu_seconds_median": 1.234,
-          "wall_seconds_max": 1.232,
-          "wall_seconds_median": 1.231,
-          "wall_seconds_min": 1.224
-        },
-        "deduplication": {
-          "cpu_seconds_median": 1.737,
-          "wall_seconds_max": 1.889,
-          "wall_seconds_median": 1.805,
-          "wall_seconds_min": 1.784
-        },
-        "descriptor_merge": {
-          "cpu_seconds_median": 1.657,
-          "wall_seconds_max": 1.727,
-          "wall_seconds_median": 1.654,
-          "wall_seconds_min": 1.636
+          "cpu_seconds_median": 2.098,
+          "wall_seconds_max": 2.104,
+          "wall_seconds_median": 2.094,
+          "wall_seconds_min": 2.093
         },
         "enumeration": {
           "cpu_seconds_median": 0.043,
           "wall_seconds_max": 0.043,
-          "wall_seconds_median": 0.042,
+          "wall_seconds_median": 0.043,
           "wall_seconds_min": 0.042
         },
         "workload_planning": {
-          "cpu_seconds_median": 0.161,
+          "cpu_seconds_median": 0.165,
           "wall_seconds_max": 0.021,
           "wall_seconds_median": 0.02,
           "wall_seconds_min": 0.02
         }
       },
       "threads": 8,
-      "wall_seconds_max": 5.159441083989805,
-      "wall_seconds_median": 4.986959041998489,
-      "wall_seconds_min": 4.977673666988267,
-      "wall_seconds_range": 0.18176741700153798
+      "wall_seconds_max": 3.690951166994637,
+      "wall_seconds_median": 3.675219124997966,
+      "wall_seconds_min": 3.665298458014149,
+      "wall_seconds_range": 0.02565270898048766
+    },
+    {
+      "cleanup_seconds_median": 0.0053172080079093575,
+      "dedup_temp_bytes_median": 70044,
+      "deduplication": "verified_unique",
+      "memory_budget_mib": null,
+      "runs": 3,
+      "scratch_peak_bytes_max": 4762520,
+      "segment_bytes_median": 4692476,
+      "segment_codec": "zstd",
+      "stages": {
+        "csf_generation": {
+          "cpu_seconds_median": 1.768,
+          "wall_seconds_max": 0.424,
+          "wall_seconds_median": 0.392,
+          "wall_seconds_min": 0.243
+        },
+        "csf_restore": {
+          "cpu_seconds_median": 1.286,
+          "wall_seconds_max": 3.635,
+          "wall_seconds_median": 1.289,
+          "wall_seconds_min": 1.235
+        },
+        "deduplication": {
+          "cpu_seconds_median": 0.002,
+          "wall_seconds_max": 0.001,
+          "wall_seconds_median": 0.001,
+          "wall_seconds_min": 0.001
+        },
+        "descriptor_merge": {
+          "cpu_seconds_median": 1.973,
+          "wall_seconds_max": 2.209,
+          "wall_seconds_median": 1.984,
+          "wall_seconds_min": 1.769
+        },
+        "enumeration": {
+          "cpu_seconds_median": 0.09,
+          "wall_seconds_max": 0.108,
+          "wall_seconds_median": 0.095,
+          "wall_seconds_min": 0.042
+        },
+        "workload_planning": {
+          "cpu_seconds_median": 0.178,
+          "wall_seconds_max": 0.044,
+          "wall_seconds_median": 0.04,
+          "wall_seconds_min": 0.02
+        }
+      },
+      "threads": 8,
+      "wall_seconds_max": 6.189786834002007,
+      "wall_seconds_median": 4.046010125020985,
+      "wall_seconds_min": 3.315187208005227,
+      "wall_seconds_range": 2.8745996259967797
     }
   ],
   "transcript": {
@@ -1203,15 +1267,20 @@
   "warmups": [
     {
       "block_count": 1,
-      "cleanup_seconds": 0.02764416701393202,
+      "cleanup_seconds": 0.05548166701919399,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "warmup",
       "memory_budget_mib": null,
       "order": 0,
@@ -1242,16 +1311,17 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 314933248,
+      "rss_peak_bytes": 449921024,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 1033995772,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 22,
+      "scratch_peak_bytes": 530659224,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 15,
       "segment_codec": "none",
       "stage_stats": [
         {
-          "cpu_millis": 42,
+          "cpu_millis": 43,
           "elapsed_millis": 42,
           "input_bytes": 0,
           "input_records": 0,
@@ -1260,7 +1330,7 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 181,
+          "cpu_millis": 176,
           "elapsed_millis": 22,
           "input_bytes": 0,
           "input_records": 19243,
@@ -1269,8 +1339,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1589,
-          "elapsed_millis": 246,
+          "cpu_millis": 1759,
+          "elapsed_millis": 284,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -1278,26 +1348,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1572,
-          "elapsed_millis": 1657,
+          "cpu_millis": 1,
+          "elapsed_millis": 1,
           "input_bytes": 530589180,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1326,
-          "elapsed_millis": 1323,
-          "input_bytes": 520075772,
+          "cpu_millis": 1378,
+          "elapsed_millis": 1375,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1233,
-          "elapsed_millis": 1252,
+          "cpu_millis": 1248,
+          "elapsed_millis": 1248,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -1308,19 +1378,24 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 4.548525416990742
+      "wall_seconds": 2.976542292017257
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.003410709003219381,
+      "cleanup_seconds": 0.0037389170029200613,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "warmup",
       "memory_budget_mib": null,
       "order": 4,
@@ -1351,12 +1426,13 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 530530304,
+      "rss_peak_bytes": 355254272,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 8663896,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 528599580,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 28,
+      "scratch_peak_bytes": 8663896,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 18,
       "segment_codec": "lz4",
       "stage_stats": [
         {
@@ -1369,8 +1445,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 157,
-          "elapsed_millis": 19,
+          "cpu_millis": 165,
+          "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -1378,8 +1454,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1500,
-          "elapsed_millis": 237,
+          "cpu_millis": 1546,
+          "elapsed_millis": 238,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -1387,26 +1463,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2099,
-          "elapsed_millis": 2242,
+          "cpu_millis": 1,
+          "elapsed_millis": 1,
           "input_bytes": 8593852,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 2066,
-          "elapsed_millis": 2066,
-          "input_bytes": 520075772,
+          "cpu_millis": 2095,
+          "elapsed_millis": 2091,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1235,
-          "elapsed_millis": 1252,
+          "cpu_millis": 1260,
+          "elapsed_millis": 1258,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -1417,19 +1493,24 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 5.8638495419872925
+      "wall_seconds": 3.6556438750121742
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.02342324997880496,
+      "cleanup_seconds": 0.003458667022641748,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40680076,
+      "csf_parquet_sha256": "469f3de457db8120bda354ced9dd54e36b323ae922e4e6b4cbc74cc9b495c614",
       "csf_text_bytes": 168534272,
+      "csf_text_sha256": "31eff7a1c59c8a5777a26c13b473caf19b210cdf0952f8b69afb73b9f68deb9d",
+      "deduplication": "verified_unique",
       "descriptor_bytes": 781398,
       "descriptor_count": 560351,
+      "descriptor_sha256": "28de0896cbbc54e379ecf89c8aa5420f3d2b57d1652ed898f6496de8ec9e7c80",
       "duplicate_count": 0,
       "generated_count": 560351,
       "header_bytes": 529,
+      "header_sha256": "c24a9e6a807a57649fa28bebf456743dcb03fce140b8a9bb17912f77a2459c73",
       "kind": "warmup",
       "memory_budget_mib": null,
       "order": 8,
@@ -1460,16 +1541,17 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 530841600,
+      "rss_peak_bytes": 367706112,
+      "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 524698204,
-      "scratch_peak_file_count": 274,
-      "scratch_samples": 24,
+      "scratch_peak_bytes": 4762520,
+      "scratch_peak_file_count": 19,
+      "scratch_samples": 16,
       "segment_codec": "zstd",
       "stage_stats": [
         {
-          "cpu_millis": 44,
+          "cpu_millis": 43,
           "elapsed_millis": 43,
           "input_bytes": 0,
           "input_records": 0,
@@ -1478,8 +1560,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 166,
-          "elapsed_millis": 20,
+          "cpu_millis": 172,
+          "elapsed_millis": 21,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -1487,8 +1569,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1612,
-          "elapsed_millis": 254,
+          "cpu_millis": 1546,
+          "elapsed_millis": 242,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -1496,26 +1578,26 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1733,
-          "elapsed_millis": 1794,
+          "cpu_millis": 1,
+          "elapsed_millis": 1,
           "input_bytes": 4692476,
           "input_records": 560351,
           "name": "deduplication",
-          "output_bytes": 520075772,
+          "output_bytes": 70044,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1675,
-          "elapsed_millis": 1671,
-          "input_bytes": 520075772,
+          "cpu_millis": 1667,
+          "elapsed_millis": 1663,
+          "input_bytes": 70044,
           "input_records": 560351,
           "name": "descriptor_merge",
           "output_bytes": 781398,
           "output_records": 560351
         },
         {
-          "cpu_millis": 1227,
-          "elapsed_millis": 1229,
+          "cpu_millis": 1256,
+          "elapsed_millis": 1256,
           "input_bytes": 781398,
           "input_records": 560351,
           "name": "csf_restore",
@@ -1526,7 +1608,7 @@
       "success": true,
       "threads": 8,
       "unique_occupations": 19243,
-      "wall_seconds": 5.0158624579780735
+      "wall_seconds": 3.229847249982413
     }
   ]
 }

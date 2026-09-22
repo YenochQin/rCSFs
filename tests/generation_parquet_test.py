@@ -98,10 +98,13 @@ def test_config_generation_json_contains_stage_stats(
     assert payload["success"] is True
     assert payload["resource_stats"]["memory_budget_mib"] is None
     assert [stage["name"] for stage in payload["stage_stats"]] == [
+        "setup",
         "enumeration",
         "workload_planning",
         "csf_generation",
         "deduplication",
+        "header_write",
+        "final_encoding_select",
         "final_encoding_prepare",
         "final_encoding_descriptor_encode",
         "final_encoding_descriptor_write",

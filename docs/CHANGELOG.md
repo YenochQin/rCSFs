@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+### 第五轮评审修正：未跟踪目录与身份类型（2026-09-22）
+
+- 修正未跟踪目录内改动不被指纹察觉的缺陷：`git status` 默认把一个未跟踪目录折叠成
+  一行 `?? dir/`，其内容变化既不改变条目也不改变指纹，`--allow-dirty-source` 下的
+  运行中漂移因此会被错误接受。现在使用 `--untracked-files=all` 逐文件列出；即使
+  仍收到目录条目也**递归哈希**而不是写入固定占位符，无法读取的路径直接拒绝登记
+  （固定占位符会让两棵不同的树得到相同指纹）。回归测试使用真实临时 git 仓库，并
+  验证过它在旧实现下失败（条目为 `newdir/` 而非 `newdir/a.rs`）。
+- `source identity` 改为 `GitIdentity`/`ExtensionIdentity`/`SourceIdentity` 三个
+  TypedDict，完整性关键字段（commit/tree/dirty/fingerprint/扩展哈希）有类型可查，
+  不再以嵌套 `dict[str, Any]` 传递。
+- `_run_git` 与 `_run_git_raw` 合并为一个带 `raw` 开关的函数。
+- 修正 `_parse_status_z` 中 rename 的注释顺序（实现在先、注释写反）。
+
 ### 第四轮评审修正：源码身份的前后快照（2026-09-22）
 
 - 源码身份改为**运行前采集并立即门禁**：脏树在开始任何 warmup 或测量之前就被拒绝，

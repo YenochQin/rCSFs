@@ -20,7 +20,7 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "fixtures" / "transcripts.toml"
@@ -127,14 +127,53 @@ def verify_registered_transcript(
     return record
 
 
+class GitIdentity(TypedDict):
+    """The repository state a measurement belongs to.
+
+    `dirty_diff_sha256` and `dirty_paths` exist only when the tree is dirty, so
+    a caller comparing two identities has to compare them as a set rather than
+    field by field.
+    """
+
+    commit: str | None
+    tree: str | None
+    describe: str | None
+    branch: str | None
+    dirty: bool | None
+    dirty_ignores: list[str]
+    dirty_diff_sha256: NotRequired[str | None]
+    dirty_paths: NotRequired[list[str]]
+
+
+class ExtensionIdentity(TypedDict):
+    """The compiled extension the measuring process actually loaded."""
+
+    version: str
+    module: str
+    module_sha256: str
+    path: str
+
+
+class SourceIdentity(TypedDict):
+    """What the process is running: the source tree and the binary it loaded."""
+
+    git: GitIdentity
+    extension: ExtensionIdentity
+
+
 #: Paths excluded from the source-identity computation. The registered reports
 #: are this harness's own output, so writing one must not make the next report
 #: claim a dirty source.
 _SOURCE_EXCLUSIONS = (":!docs/benchmarks",)
 
 
-def _run_git(*arguments: str) -> str | None:
-    """Run a git command in the repository, or `None` when git cannot answer."""
+def _run_git(*arguments: str, raw: bool = False) -> str | None:
+    """Run a git command in the repository, or `None` when git cannot answer.
+
+    `raw` keeps stdout as git wrote it, which NUL-separated output needs: the
+    porcelain status column is two characters wide and may begin with a space
+    that stripping would remove.
+    """
     try:
         completed = subprocess.run(
             ["git", *arguments],
@@ -145,31 +184,16 @@ def _run_git(*arguments: str) -> str | None:
         )
     except (OSError, subprocess.CalledProcessError):
         return None
-    return completed.stdout.strip()
-
-
-def _run_git_raw(*arguments: str) -> str | None:
-    """Run a git command and return stdout untouched, for NUL-separated output."""
-    try:
-        completed = subprocess.run(
-            ["git", *arguments],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    return completed.stdout
+    return completed.stdout if raw else completed.stdout.strip()
 
 
 def _parse_status_z(raw: str) -> list[tuple[str, str, str | None]]:
     """Parse `git status --porcelain=v1 -z` into `(status, path, origin)` rows.
 
     `-z` is what makes this unambiguous: paths are NUL-terminated and never
-    quoted, so a name containing a space, a quote or a newline survives intact,
-    and a rename or copy carries its origin as the next field. Slicing the
-    human-readable form would misread all of those.
+    quoted, so a name containing a space, a quote or a newline survives intact.
+    A rename or copy writes its destination as this entry's path and its source
+    as the next field, which is why the origin is read after, not before.
     """
     fields = raw.split("\0")
     entries: list[tuple[str, str, str | None]] = []
@@ -182,7 +206,8 @@ def _parse_status_z(raw: str) -> list[tuple[str, str, str | None]]:
         status, path = field[:2], field[3:]
         origin: str | None = None
         if "R" in status or "C" in status:
-            # A rename or copy names its source first, then its destination.
+            # This entry names the destination; the next field names where the
+            # content came from.
             if index < len(fields) and fields[index]:
                 origin = fields[index]
                 index += 1
@@ -191,9 +216,47 @@ def _parse_status_z(raw: str) -> list[tuple[str, str, str | None]]:
 
 
 def _source_entries() -> list[tuple[str, str, str | None]] | None:
-    """Every change outside the exclusions, tracked or not."""
-    raw = _run_git_raw("status", "--porcelain=v1", "-z", "--", *_SOURCE_EXCLUSIONS)
+    """Every change outside the exclusions, tracked or not.
+
+    `--untracked-files=all` matters: by default git collapses a whole untracked
+    directory into one `?? dir/` row, so editing a file inside it would change
+    neither the entries nor, therefore, the fingerprint.
+    """
+    raw = _run_git(
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "-z",
+        "--",
+        *_SOURCE_EXCLUSIONS,
+        raw=True,
+    )
     return None if raw is None else _parse_status_z(raw)
+
+
+def _fingerprint_path(digest: Any, path: Path, name: str) -> None:
+    """Fold an untracked path into the fingerprint, recursing into directories.
+
+    `--untracked-files=all` lists files rather than directories, so a directory
+    should not arrive here; handling it keeps the fingerprint honest anyway. A
+    path that cannot be read raises rather than contributing a constant, because
+    a constant would make two different trees fingerprint identically.
+    """
+    try:
+        if path.is_dir():
+            for item in sorted(path.rglob("*")):
+                relative = item.relative_to(path)
+                digest.update(f"{name}/{relative}\0".encode())
+                if item.is_file():
+                    digest.update(sha256_file(item).encode())
+            return
+        digest.update(sha256_file(path).encode())
+    except OSError as error:
+        raise SystemExit(
+            f"cannot fingerprint {name}: {error}; a report must identify the source "
+            f"it was measured from, so the run is refused rather than recorded with an "
+            f"incomplete fingerprint"
+        ) from error
 
 
 def _dirty_fingerprint(entries: list[tuple[str, str, str | None]]) -> str | None:
@@ -211,21 +274,15 @@ def _dirty_fingerprint(entries: list[tuple[str, str, str | None]]) -> str | None
         return None
     digest.update(tracked_diff.encode())
     for status, path, _ in entries:
-        if status != "??":
-            continue
-        try:
-            digest.update(sha256_file(REPO_ROOT / path).encode())
-        except OSError:
-            # A file that vanished between listing and reading still has to be
-            # accounted for, so its absence is recorded rather than skipped.
-            digest.update(b"<unreadable>")
+        if status == "??":
+            _fingerprint_path(digest, REPO_ROOT / path, path)
     return digest.hexdigest()
 
 
-def _git_metadata() -> dict[str, Any]:
+def _git_metadata() -> GitIdentity:
     entries = _source_entries()
     dirty = None if entries is None else bool(entries)
-    metadata: dict[str, Any] = {
+    metadata: GitIdentity = {
         "commit": _run_git("rev-parse", "HEAD"),
         # The tree hash identifies the source state even if the commit is later
         # rewritten or the branch moves, so a reader can check what was built.
@@ -248,7 +305,7 @@ def _git_metadata() -> dict[str, Any]:
     return metadata
 
 
-def extension_metadata() -> dict[str, Any]:
+def extension_metadata() -> ExtensionIdentity:
     """Identify the extension this process actually loaded.
 
     A commit hash says which source was checked out, not which binary was
@@ -411,7 +468,7 @@ def normalize_report_paths(value: Any) -> Any:
     return value
 
 
-def source_identity() -> dict[str, Any]:
+def source_identity() -> SourceIdentity:
     """The source state and the loaded binary, as of right now.
 
     Taking a snapshot before and after a run is what keeps a report honest: the
@@ -436,7 +493,7 @@ def add_source_identity_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def require_clean_source(identity: dict[str, Any], allow_dirty: bool) -> None:
+def require_clean_source(identity: SourceIdentity, allow_dirty: bool) -> None:
     """Refuse to measure or register against a source that is not identified.
 
     A report is a claim about a specific source state. When the tree is dirty
@@ -459,7 +516,7 @@ def require_clean_source(identity: dict[str, Any], allow_dirty: bool) -> None:
     )
 
 
-def verify_source_unchanged(start: dict[str, Any], end: dict[str, Any]) -> None:
+def verify_source_unchanged(start: SourceIdentity, end: SourceIdentity) -> None:
     """Refuse a measurement whose source changed while it was running.
 
     A commit, checkout or reset during a long run ends with the tree clean again,
@@ -496,7 +553,7 @@ def verify_source_unchanged(start: dict[str, Any], end: dict[str, Any]) -> None:
 def finalize_report(
     report: dict[str, Any],
     output: Path | None,
-    start_identity: dict[str, Any],
+    start_identity: SourceIdentity,
     allow_dirty: bool,
 ) -> None:
     """Gate a report on its source, verify it did not move, and write it.

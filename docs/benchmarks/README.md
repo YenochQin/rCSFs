@@ -20,8 +20,11 @@ They are not part of the test suite: no file in this directory is run by
   `environment.extension.module_sha256` for the binary the process actually
   loaded, and, when the tree was dirty, `git.dirty_paths` plus
   `git.dirty_diff_sha256`, a fingerprint over the tracked diff and the name and
-  content of every untracked file. A reader can rebuild the recorded tree and
-  compare binaries.
+  content of every untracked file. Untracked directories are listed file by file
+  (`--untracked-files=all`), since a collapsed `?? dir/` row would hide an edit
+  inside it; a directory row that arrives anyway is hashed recursively, and an
+  unreadable path refuses the report rather than contributing a constant. A
+  reader can rebuild the recorded tree and compare binaries.
 - The scripts **refuse to run against a dirty tree** unless
   `--allow-dirty-source` is given, and check it before doing any work: a
   measurement taken while the source is being edited is not a baseline, and one

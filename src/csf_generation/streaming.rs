@@ -301,10 +301,10 @@ pub(crate) struct DiskGenerationStats {
     pub(crate) plan_stats: PlanStats,
 }
 
-/// Generate, exactly de-duplicate and restore a V2 descriptor through private
-/// staging paths.  The caller owns final publication, which keeps this deep
-/// module independent of CLI output naming and gives it all-or-nothing
-/// semantics when multiple products are requested.
+/// Generate, make unique according to the construction-selected strategy, and
+/// restore a V2 descriptor through private staging paths. The caller owns final
+/// publication, which keeps this deep module independent of CLI output naming
+/// and gives it all-or-nothing semantics when multiple products are requested.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn generate_disk_outputs_from_transcript(
     transcript: &str,

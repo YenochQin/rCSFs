@@ -9,18 +9,19 @@ machine-specific absolute paths out of a committed report.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import os
 import platform
 import re
-import argparse
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NotRequired, Protocol, TypedDict
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "fixtures" / "transcripts.toml"
@@ -135,13 +136,13 @@ class GitIdentity(TypedDict):
     field by field.
     """
 
-    commit: str | None
-    tree: str | None
+    commit: str
+    tree: str
     describe: str | None
     branch: str | None
-    dirty: bool | None
+    dirty: bool
     dirty_ignores: list[str]
-    dirty_diff_sha256: NotRequired[str | None]
+    dirty_diff_sha256: NotRequired[str]
     dirty_paths: NotRequired[list[str]]
 
 
@@ -167,7 +168,17 @@ class SourceIdentity(TypedDict):
 _SOURCE_EXCLUSIONS = (":!docs/benchmarks",)
 
 
-def _run_git(*arguments: str, raw: bool = False) -> str | None:
+class _Digest(Protocol):
+    """The part of a hashlib digest used by the source fingerprint."""
+
+    def update(self, data: bytes, /) -> None: ...
+
+
+def _run_git(
+    *arguments: str,
+    raw: bool = False,
+    reject_stderr: bool = False,
+) -> str | None:
     """Run a git command in the repository, or `None` when git cannot answer.
 
     `raw` keeps stdout as git wrote it, which NUL-separated output needs: the
@@ -184,6 +195,11 @@ def _run_git(*arguments: str, raw: bool = False) -> str | None:
         )
     except (OSError, subprocess.CalledProcessError):
         return None
+    if reject_stderr and completed.stderr.strip():
+        raise SystemExit(
+            "cannot inspect the source tree: git reported a warning or error: "
+            f"{completed.stderr.strip()}"
+        )
     return completed.stdout if raw else completed.stdout.strip()
 
 
@@ -215,7 +231,7 @@ def _parse_status_z(raw: str) -> list[tuple[str, str, str | None]]:
     return entries
 
 
-def _source_entries() -> list[tuple[str, str, str | None]] | None:
+def _source_entries() -> list[tuple[str, str, str | None]]:
     """Every change outside the exclusions, tracked or not.
 
     `--untracked-files=all` matters: by default git collapses a whole untracked
@@ -230,11 +246,17 @@ def _source_entries() -> list[tuple[str, str, str | None]] | None:
         "--",
         *_SOURCE_EXCLUSIONS,
         raw=True,
+        reject_stderr=True,
     )
-    return None if raw is None else _parse_status_z(raw)
+    if raw is None:
+        raise SystemExit(
+            "cannot inspect the source tree: git status failed, so a benchmark "
+            "report could not identify the source it measured"
+        )
+    return _parse_status_z(raw)
 
 
-def _fingerprint_path(digest: Any, path: Path, name: str) -> None:
+def _fingerprint_path(digest: _Digest, path: Path, name: str) -> None:
     """Fold an untracked path into the fingerprint, recursing into directories.
 
     `--untracked-files=all` lists files rather than directories, so a directory
@@ -243,14 +265,30 @@ def _fingerprint_path(digest: Any, path: Path, name: str) -> None:
     a constant would make two different trees fingerprint identically.
     """
     try:
-        if path.is_dir():
-            for item in sorted(path.rglob("*")):
-                relative = item.relative_to(path)
-                digest.update(f"{name}/{relative}\0".encode())
-                if item.is_file():
-                    digest.update(sha256_file(item).encode())
+        mode = path.lstat().st_mode
+        digest.update(f"{name}\0".encode())
+        if stat.S_ISLNK(mode):
+            # Git records the link target text, not the contents of the target.
+            # Never follow a source link: it may point outside the repository,
+            # form a cycle, or change because of unrelated machine-local data.
+            digest.update(b"symlink\0")
+            digest.update(os.fsencode(os.readlink(path)))
             return
-        digest.update(sha256_file(path).encode())
+        if stat.S_ISREG(mode):
+            digest.update(b"file\0")
+            digest.update(sha256_file(path).encode())
+            return
+        if stat.S_ISDIR(mode):
+            digest.update(b"directory\0")
+            # Path.rglob deliberately suppresses directory-scanning errors on
+            # modern Python. Explicit scandir recursion makes an unreadable
+            # descendant reject the report instead of silently disappearing.
+            with os.scandir(path) as entries:
+                children = sorted(entries, key=lambda entry: entry.name)
+            for child in children:
+                _fingerprint_path(digest, Path(child.path), f"{name}/{child.name}")
+            return
+        raise OSError(f"unsupported filesystem object with mode {mode:o}")
     except OSError as error:
         raise SystemExit(
             f"cannot fingerprint {name}: {error}; a report must identify the source "
@@ -259,7 +297,7 @@ def _fingerprint_path(digest: Any, path: Path, name: str) -> None:
         ) from error
 
 
-def _dirty_fingerprint(entries: list[tuple[str, str, str | None]]) -> str | None:
+def _dirty_fingerprint(entries: list[tuple[str, str, str | None]]) -> str:
     """Identify everything that makes the source dirty, tracked or not.
 
     `git diff HEAD` alone would miss an untracked source file and would include
@@ -271,7 +309,10 @@ def _dirty_fingerprint(entries: list[tuple[str, str, str | None]]) -> str | None
         digest.update(f"{status}\0{path}\0{origin or ''}\0".encode())
     tracked_diff = _run_git("diff", "HEAD", "--", *_SOURCE_EXCLUSIONS)
     if tracked_diff is None:
-        return None
+        raise SystemExit(
+            "cannot inspect the source tree: git diff failed, so the dirty source "
+            "could not be fingerprinted"
+        )
     digest.update(tracked_diff.encode())
     for status, path, _ in entries:
         if status == "??":
@@ -281,12 +322,18 @@ def _dirty_fingerprint(entries: list[tuple[str, str, str | None]]) -> str | None
 
 def _git_metadata() -> GitIdentity:
     entries = _source_entries()
-    dirty = None if entries is None else bool(entries)
+    dirty = bool(entries)
+    commit = _run_git("rev-parse", "HEAD")
+    tree = _run_git("rev-parse", "HEAD^{tree}")
+    if commit is None or tree is None:
+        raise SystemExit(
+            "cannot inspect the source tree: git could not resolve HEAD and its tree"
+        )
     metadata: GitIdentity = {
-        "commit": _run_git("rev-parse", "HEAD"),
+        "commit": commit,
         # The tree hash identifies the source state even if the commit is later
         # rewritten or the branch moves, so a reader can check what was built.
-        "tree": _run_git("rev-parse", "HEAD^{tree}"),
+        "tree": tree,
         # Without `--dirty`: the `dirty` field below carries that, and its
         # definition excludes the report outputs this harness writes, so the two
         # would otherwise disagree whenever only a report changed.

@@ -2,7 +2,7 @@
 
 本文登记 [CSF_V2_GENERATION_PERFORMANCE_PLAN.md](../CSF_V2_GENERATION_PERFORMANCE_PLAN.md)
 P2a 的限时实验：临时 Arrow IPC segment 不压缩、LZ4_FRAME、ZSTD 三者的耗时、写入量、
-CPU 与内存。这是决策实验，不是长期架构投入。
+CPU 与受管内存。这是决策实验，不是长期架构投入。
 
 测量来自**干净工作树**的提交 `3588df1`（tree `fdae74cc1a9e…`），release 扩展，其
 SHA-256 为 `cbcf2eb87309…`（两个哈希都记录在 JSON 的 `environment.git.tree` 与
@@ -10,6 +10,11 @@ SHA-256 为 `cbcf2eb87309…`（两个哈希都记录在 JSON 的 `environment.g
 APFS；8 线程；每个 codec 各预热 1 次后测量 3 次，codec 之间顺序执行（`none → lz4 → zstd`），
 表中为中位数。可以说明这不是页缓存偏差：zstd（最后执行）的端到端中位数仍低于 lz4
 （先执行），而两者的 segment 写入量相差不到 2 倍。
+
+本报告生成时所有组合仍在同一 Python 进程中顺序运行，原始 JSON 的 `rss_peak_bytes` 是
+`ru_maxrss` 的进程生命周期高水位，不能比较 codec 的独立 RSS；因此本文没有据此给出峰值
+RSS 结论。harness 后续已改为每次测量使用独立进程，本阶段需在干净提交上重测 RSS 后才能
+完成“峰值内存”验收。
 
 原始报告：
 [codec b1](v2_disk_generation_codec_b1_20260922.json)、
@@ -54,6 +59,7 @@ Arrow 写入器内部，不占用受管预算。scratch 文件数也相同（B1 
 
 ## 未测量
 
+- 每个 codec 独立的进程 RSS 峰值；旧 JSON 中的 RSS 是共享进程的单调高水位。
 - 目标机器与目标文件系统；本机为 NVMe/APFS、页缓存未清空，`process_io` 在 macOS 上
   不可得，因此表中没有物理 I/O 与写放大。
 - 根去重桶与递归桶的压缩（两者都是自描述行格式，不经过 Arrow IPC）。

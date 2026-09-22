@@ -879,6 +879,10 @@ def _print_estimate_summary(
     print(f"peel_subshells: {stats.get('peel_subshells')}", file=stream)
     print(f"v2_columns: {stats.get('v2_columns')}", file=stream)
     print(f"segment_codec: {stats.get('segment_codec', 'none')}", file=stream)
+    print(
+        f"deduplication: {stats.get('deduplication', 'verified_unique')}",
+        file=stream,
+    )
     for key in ("task_count", "target_records_per_task", "zero_record_configurations",
                 "unsplittable_tasks", "unsplittable_records"):
         value = plan.get(key)

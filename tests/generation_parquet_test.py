@@ -8,6 +8,7 @@ import polars as pl
 import pytest
 
 from rcsfs import (
+    CsfGenerationEstimate,
     cli,
     estimate_disk_generation,
     generate_disk_outputs_from_transcript,
@@ -16,6 +17,11 @@ from rcsfs import (
     restore_csfs_from_descriptors,
 )
 from rcsfs._rcsfs import generate_csfs_from_transcript
+
+
+def test_generation_estimate_type_names_the_deduplication_strategy() -> None:
+    """The public type must describe every field the extension always returns."""
+    assert "deduplication" in CsfGenerationEstimate.__required_keys__
 
 
 def config_file(tmp_path: Path, **outputs: object) -> Path:

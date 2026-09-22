@@ -17,6 +17,9 @@ Measurement contract:
   a baseline.
 * Physical device I/O is only reported when the platform exposes it. It is
   ``None`` elsewhere instead of being estimated.
+* Every warm-up and measured run executes in a fresh spawned process. This
+  makes ``ru_maxrss`` a per-run high-water mark instead of a value inherited
+  from earlier combinations in the same benchmark invocation.
 
 Rust progress and diagnostics remain on stderr; the JSON report is written to
 stdout or to ``--output``.
@@ -25,6 +28,7 @@ stdout or to ``--output``.
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import os
 import shutil
 import statistics
@@ -32,6 +36,7 @@ import sys
 import tempfile
 import threading
 import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +98,13 @@ _STAGE_KEYS = (
     "stage_stats",
     "resource_stats",
     "plan_stats",
+)
+
+_PUBLISHED_DIGEST_KEYS = (
+    "csf_text_sha256",
+    "csf_parquet_sha256",
+    "descriptor_sha256",
+    "header_sha256",
 )
 
 
@@ -174,12 +186,21 @@ class ScratchMonitor(threading.Thread):
 def _measure_outputs(root: Path, paths: dict[str, Path]) -> dict[str, Any]:
     sizes: dict[str, Any] = {}
     for name, path in paths.items():
-        sizes[f"{name}_bytes"] = path.stat().st_size if path.is_file() else None
+        if path.is_file():
+            sizes[f"{name}_bytes"] = path.stat().st_size
+            # Hash after the timed region so the P6b differential compares the
+            # bytes that were published without charging verification to the
+            # generation time. Both strategies use the same writers, so a raw
+            # hash is the strongest useful check for this campaign.
+            sizes[f"{name}_sha256"] = sha256_file(path)
+        else:
+            sizes[f"{name}_bytes"] = None
+            sizes[f"{name}_sha256"] = None
     sizes["output_file_count"] = sum(1 for path in paths.values() if path.is_file())
     return sizes
 
 
-def _run_once(
+def _run_once_in_process(
     transcript: str,
     threads: int | None,
     memory_budget_mib: int | None,
@@ -234,6 +255,8 @@ def _run_once(
             result["success"] = False
             result["outcome"] = "rejected"
             result["error"] = message
+            result["rss_peak_bytes"] = _peak_rss_bytes()
+            result["rss_scope"] = "single_measurement_process"
             return result
         wall_seconds = time.perf_counter() - started
         io_after = _process_io_bytes()
@@ -259,13 +282,17 @@ def _run_once(
         for key in _STAGE_KEYS:
             if key in stats:
                 result[key] = stats[key]
+        # This process performs exactly one run, so its lifetime high-water
+        # mark is an independent measurement. Capture it before output hashing,
+        # which is verification work outside the generation call.
+        result["rss_peak_bytes"] = _peak_rss_bytes()
+        result["rss_scope"] = "single_measurement_process"
         result.update(_measure_outputs(root, paths))
         result["scratch_peak_bytes"] = monitor.peak_bytes
         result["scratch_peak_file_count"] = monitor.peak_files
         result["scratch_final_bytes"] = monitor.final_bytes
         result["scratch_final_file_count"] = monitor.final_files
         result["scratch_samples"] = monitor.samples
-        result["rss_peak_bytes"] = _peak_rss_bytes()
         result["process_io"] = None
         if io_before is not None and io_after is not None:
             result["process_io"] = {
@@ -287,6 +314,29 @@ def _run_once(
         # work, but it is not part of generating the CSFs.
         result["cleanup_seconds"] = time.perf_counter() - cleanup_started
     return result
+
+
+def _run_once(
+    transcript: str,
+    threads: int | None,
+    memory_budget_mib: int | None,
+    segment_codec: str,
+    deduplication: str,
+    scratch_root: Path,
+) -> dict[str, Any]:
+    """Run one combination in a fresh process with an independent RSS peak."""
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=1, mp_context=context) as executor:
+        future = executor.submit(
+            _run_once_in_process,
+            transcript,
+            threads,
+            memory_budget_mib,
+            segment_codec,
+            deduplication,
+            scratch_root,
+        )
+        return future.result()
 
 
 def _summarize(
@@ -392,13 +442,21 @@ def _check_strategy_agreement(measurements: list[dict[str, Any]]) -> None:
 
     Both strategies are asked for in one invocation precisely so this can be
     checked on the registered inputs rather than only in a unit test. Counts and
-    published sizes have to match; a difference means the skipped comparison was
-    not skipping nothing.
+    every published artifact have to match; a difference means the skipped
+    comparison was not skipping nothing.
     """
     same = {}
     for measurement in measurements:
         if measurement.get("outcome") == "rejected":
             continue
+        missing = [
+            name for name in _PUBLISHED_DIGEST_KEYS if not measurement.get(name)
+        ]
+        if missing:
+            raise SystemExit(
+                "cannot verify de-duplication strategy agreement: successful run "
+                f"is missing published artifact digests {missing}"
+            )
         key = (
             measurement.get("segment_codec", "none"),
             measurement["threads"],
@@ -411,6 +469,7 @@ def _check_strategy_agreement(measurements: list[dict[str, Any]]) -> None:
             measurement.get("block_count"),
             measurement.get("csf_bytes"),
             measurement.get("descriptor_bytes"),
+            *(measurement.get(name) for name in _PUBLISHED_DIGEST_KEYS),
         )
         seen = same.setdefault(key, (measurement.get("deduplication"), figures))
         if seen[1] != figures:
@@ -573,6 +632,7 @@ def main() -> int:
             "deduplication": list(args.deduplication),
             "scratch_root": str(scratch_root),
             "scratch_sampling_interval_seconds": SCRATCH_SAMPLE_INTERVAL_SECONDS,
+            "measurement_process_model": "spawned_process_per_run",
             "timed_region": "generation call including artifact publication; excludes set-up and deletion",
         },
         "filesystem": filesystem_metadata(scratch_root),
@@ -586,4 +646,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     raise SystemExit(main())

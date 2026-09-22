@@ -221,6 +221,9 @@ class CsfGenerationEstimate(TypedDict):
     #: byte model is uncompressed, so a compressed run stays inside the
     #: estimate rather than exceeding it.
     segment_codec: CsfSegmentCodec
+    #: The de-duplication strategy whose temporary-space requirements were
+    #: priced by this estimate.
+    deduplication: CsfDeduplication
     enumeration_millis: int
     planning_millis: int
     plan_stats: CsfGenerationPlanStats

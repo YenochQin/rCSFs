@@ -517,6 +517,15 @@ def _check_stage_coverage(measurements: list[dict[str, Any]]) -> None:
                 f"timer for the phase that is missing, or the report's stage "
                 f"numbers cannot be checked against the end-to-end time."
             )
+        if unattributed < -allowed:
+            raise SystemExit(
+                f"the stages account for {wall - unattributed:.3f}s of a "
+                f"{wall:.3f}s call; their total exceeds the call by "
+                f"{-unattributed:.3f}s, which is more than the {allowed:.3f}s "
+                f"allowed. Stage timers overlap or double-count work, so the "
+                f"report's stage numbers cannot be checked against the "
+                f"end-to-end time."
+            )
 
 
 def main() -> int:

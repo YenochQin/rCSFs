@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+### P4 评审修正（2026-09-23，待干净树重测）
+
+- segment IPC 的读取/解压现在单列为 `final_encoding_read`；最终编码共七个相位。基准
+  harness 同时拒绝过大的正残差与负残差，后者表示相位重叠或重复计时。
+- 每个 source batch 在 `FileReader::next()` 前按 segment 声明的最大行数预留；筛选出
+  survivor 后先扩容同一 permit，再分配所选列和格式化记录。o1 单线程预算阶梯相应变为
+  8 MiB 在生成批次拒绝，12–24 MiB 在 writer/source/final batch 拒绝，28 MiB 通过。
+- descriptor 与 CSF Parquet 的 schema、properties、row-group 上限和 writer 内存模型集中到
+  一个输出契约模块。两个 writer 都强制每个 row group 最多 8,192 行，使其受管内存预留
+  有实际上界；维护测试验证 89,786 行输入产生多个且均不超限的 row group。
+- 上述修正改变 descriptor 的物理 Parquet 布局与阶段计时口径。`45618fc` 的 2.32×/2.14×
+  尾部和 3.22×/3.03×累计结果保留为历史记录，但不再作为当前实现的性能验收；需在代码
+  提交后按 clean-source 门禁重新登记。
+
 ### P4：单遍构建最终产物，取消描述符回读（2026-09-22）
 
 - 新增 `build_final_outputs_from_segments`：只读一遍 segment，每行的整数直接进入
@@ -15,10 +29,9 @@
 - 准备阶段（解码、校验、格式化）在 `threads` 指定的线程池中按批并行；descriptor
   Parquet 仍是单写者、CSF 文本仍是单笔，块分隔符与连续 `idx` 由按序的发布侧发出，
   因此批次与线程边界不可能把行放进错误的块。
-- 三个相位分别计时上报 `final_encoding_prepare` / `final_encoding_encode` /
-  `final_encoding_write`（旧的 `descriptor_merge`、`csf_restore` 两个阶段合并为它们）。
-  分开计时是刻意的：prepare 的 CPU 是墙钟的数倍（e1 上 8 线程 1345ms CPU / 171ms 墙钟），
-  encode 与 write 基本是单线程——不把"并行准备 + 串行编码"说成并行编码。
+- 该轮实现把筛选、准备和两个产物族的 encode/write 分开计时；后续评审又补上独立的
+  `final_encoding_read`，形成当前七相位口径。分开计时是刻意的：prepare 的 CPU 是墙钟的
+  数倍，encode 与 write 基本是单线程——不把“并行准备 + 串行编码”说成并行编码。
 - 旧的两遍尾部保留为参考实现，并由新测试 `the_combined_final_pass_publishes_what_merge_and_restore_published`
   逐字节差分：descriptor Parquet 与 CSF 文本完全一致，CSF Parquet 按逻辑行一致（其
   row group 边界随批次划分，不属于契约）。该差分在实现过程中立即抓到过一个自造缺陷。
@@ -28,23 +41,25 @@
   这条受支持的"多线程编码"路径（`temp/parquet_probe`），产物逻辑内容与 `ArrowWriter`
   一致、字节布局不同；先前"无受支持入口"的说法是错的，已在计划中更正。
 
-计量（干净树 `e6f3b3e`，8 线程，默认 `verified_unique`；**修正版**，见
+历史计量（干净树 `45618fc`，8 线程，默认 `verified_unique`；见
 [报告](benchmarks/v2_disk_generation_final_encoding_20260922.md)）：
 
 - **撤回**先前的"尾部 2.36–2.47×"：当时的相位计时不含两个 writer 的 close/footer、文本
   flush、发布，也不含逐行筛选/收集与释放格式化字符串这两段随数据增长的工作（B1 的相位
-  之和比调用墙钟少 1.6 秒）。现在按六个相位完整计时（select、prepare、每个产物族的
-  encode/write），并把 `setup`/`header_write` 也计入，**相位之和与调用墙钟相差 2–4%**。
-- 完整计时下：尾部 B1 8.536 → 3.704 秒（**2.30×**）、B2 2.575 → 1.213 秒（**2.12×**），
-  达到"并行转换阶段 ≥2×"；端到端 B1 9.263 → 4.503 秒、B2 2.914 → 1.581 秒；累计相对
-  基线 `7ad18b1` 的 8 线程为 **3.20× / 3.05×**（开 zstd 时 3.07× / 2.89×）。
+  之和比调用墙钟少 1.6 秒）。`45618fc` 按六个相位计时（select、prepare、每个产物族的
+  encode/write），并把 `setup`/`header_write` 也计入，相位之和与调用墙钟相差 1–6%；
+  后续又发现 segment read/decompression 未单列，故当前实现改为七相位并要求重测。
+- `45618fc` 的历史结果：尾部 B1 8.536 → 3.682 秒（**2.32×**）、B2 2.575 → 1.203 秒
+  （**2.14×**）；端到端 B1 9.263 → 4.472 秒、B2 2.914 → 1.594 秒；累计相对基线
+  `7ad18b1` 的 8 线程为 **3.22× / 3.03×**（开 zstd 时 2.97× / 2.85×）。这些数字已被
+  2026-09-23 的计时与 row-group 修正降级为历史证据，不能代表当前代码。
 - 发布内容未变：CSF 文本、descriptor 与 header 的 SHA-256 与修正前、与 `exact` 策略
   逐一相同；只有 CSF Parquet 的摘要随批次划分变化（row group 边界不属契约，其逻辑行由
   Rust 差分逐行比对）。该跨活动对照已由
   `tests/benchmark_reports_test.py::test_the_one_pass_tail_published_what_the_two_pass_tail_published`
   作为回归测试固定下来。
 - 相位分离证实"并行准备 + 串行编码"：prepare 为 7.8× 并行度，encode 与 write 为 1.0×；
-  descriptor encode 因此成为尾部最大单项（B1 1.373 秒 = 尾部的 37%），即未实施的并行
+  descriptor encode 因此成为尾部最大单项（B1 1.369 秒 = 尾部的 37%），即未实施的并行
   Parquet 列块编码所指向的收益点。
 
 

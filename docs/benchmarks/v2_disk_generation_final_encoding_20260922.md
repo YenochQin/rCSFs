@@ -3,6 +3,12 @@
 本文登记 [CSF_V2_GENERATION_PERFORMANCE_PLAN.md](../CSF_V2_GENERATION_PERFORMANCE_PLAN.md)
 P4 的计量：最终产物改为单遍构建（取消 descriptor 回读），并与上一轮的两遍尾部对照。
 
+> **状态（2026-09-23）：历史报告，已被实现修正取代。** 后续评审发现本报告没有把
+> segment IPC 的读取/解压纳入独立相位，且两个 `ArrowWriter` 未设置内存模型假定的
+> 8,192 行 row-group 上限。当前代码已经修正这两点，并在解码前预留 source batch；这会
+> 改变七相位计时和 descriptor 的物理 Parquet 布局。因此下列 `45618fc` 数字只说明当时
+> 实现，不再完成当前 P4 性能验收。新结果必须在修正提交后的干净树上重新登记。
+
 > **勘误（相对本文 2026-09-22 早先版本）**
 >
 > 1. 早先版本报告"尾部提速 2.47×/2.36×"，其相位计时**不完整**：两个 writer 的
@@ -87,16 +93,16 @@ descriptor write 0.000、CSF outputs encode 0.106、CSF outputs write 0.075。
 2. **累计相对基线 `7ad18b1` 的 8 线程：B1 14.403 → 4.472 秒（3.22×）、B2 4.825 →
    1.594 秒（3.03×）**，远超 ≥2× 目标（本机、本输入、默认去重策略）。开 zstd 时为
    2.97× / 2.85×。这些是本机数字，目标机器仍需自行测量。
-3. **受管内存记账已修正**：批次的预留发生在分配之前、按真实在途结构计费、两个 Parquet
-   writer 分别计费。可观察的证据是 o1 单线程下的预算阶梯：8 MiB 在生成批次被拒、
-   12 MiB 在 CSF Parquet writer 被拒、16–20 MiB 在 final-encoding batch 被拒、24 MiB
-   通过（峰值 21.2 MiB）；该阶梯是维护测试。B1/B2 的诚实 RSS 中位数为 285.3/460.9 MiB，
-   受管峰值 130.4 MiB（B2）。
+3. **当时的受管内存结论已被更严格的维护测试替代**：当前实现还在 IPC 解码前预留 source
+   batch，并把两个 writer 的 row group 限为 8,192 行。预算阶梯现为 8 MiB 在生成批次
+   拒绝、12–24 MiB 在 writer/source/final batch 拒绝、28 MiB 通过；本报告的 24 MiB
+   通过结论不再适用。B1/B2 的 RSS 数字仍是 `45618fc` 的历史观测。
 4. **编码阶段是尾部最大单项**：B1 的 descriptor encode 1.369 秒是 3.682 秒尾部的 37%，
    且 CPU≈墙钟（单线程）。这是并行 Parquet 列编码的量化理由；该实现仍未做，因为它的
    产出布局会变（`temp/parquet_probe`：逻辑行相同、字节不同），需要连同重测与重新登记
    一起做。
-5. zstd 的代价在完整计时下仍只是一次解压（B1 +8.4%、B2 +6.1% 端到端；解码落在 select 与 prepare 相位内）。
+5. zstd 的历史端到端代价为 B1 +8.4%、B2 +6.1%；当前实现把 IPC 解压明确归入
+   `final_encoding_read`，需重测后才能更新相位归因。
 
 ## 未测量与边界
 

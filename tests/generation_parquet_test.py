@@ -5,6 +5,7 @@ import tomllib
 from pathlib import Path
 
 import polars as pl
+import pyarrow.parquet as pq
 import pytest
 
 from rcsfs import (
@@ -104,6 +105,7 @@ def test_config_generation_json_contains_stage_stats(
         "csf_generation",
         "deduplication",
         "header_write",
+        "final_encoding_read",
         "final_encoding_select",
         "final_encoding_prepare",
         "final_encoding_descriptor_encode",
@@ -251,7 +253,7 @@ def test_the_estimate_prices_the_strategy_the_run_will_use(
     ), "the exact path writes buckets the verified path does not"
 
 
-def test_the_final_encoding_charges_its_structures_before_allocating(
+def test_the_final_encoding_bounds_the_memory_owned_by_its_writers(
     tmp_path: Path,
 ) -> None:
     """A budget must be spent on what the run is about to hold, not after.
@@ -267,45 +269,66 @@ def test_the_final_encoding_charges_its_structures_before_allocating(
     """
     transcript = (FIXTURES / "o1_cc1as1.rcsfgenerate").read_text(encoding="utf-8")
 
-    def run(budget_mib: int) -> tuple[str, float]:
+    def run(budget_mib: int) -> tuple[str, float, Path | None, Path | None]:
         directory = tmp_path / f"budget-{budget_mib}"
         directory.mkdir()
+        csf_parquet = directory / "out.parquet"
+        descriptor_parquet = directory / "descriptors.parquet"
         try:
             stats = generate_disk_outputs_from_transcript(
                 transcript,
                 directory / "out.c",
-                directory / "out.parquet",
-                directory / "descriptors.parquet",
+                csf_parquet,
+                descriptor_parquet,
                 directory / "header.toml",
                 directory / "scratch",
                 threads=1,
                 memory_budget_mib=budget_mib,
             )
         except (OSError, ValueError) as error:
-            return str(error), 0.0
+            return str(error), 0.0, None, None
         resource_stats = stats["resource_stats"]
-        return "ok", resource_stats["peak_managed_bytes"] / 2**20
+        return (
+            "ok",
+            resource_stats["peak_managed_bytes"] / 2**20,
+            descriptor_parquet,
+            csf_parquet,
+        )
 
     # Far too small: the generation stage's own batch reservation refuses first.
-    message, _ = run(8)
+    message, _, _, _ = run(8)
     assert "descriptor generation batch" in message, message
 
     # Enough for generation, not for the final encoding: the refusal must name a
     # reservation this stage makes, which is what proves the charge exists and
     # happens before the allocation.
-    for budget in (12, 16, 20):
-        message, _ = run(budget)
+    for budget in (12, 16, 20, 24):
+        message, _, _, _ = run(budget)
         assert message != "ok", f"{budget} MiB was accepted; the charges are too small"
         assert any(
             label in message
-            for label in ("CSF Parquet encoding", "final descriptor encoding", "final-encoding batch")
+            for label in (
+                "CSF Parquet encoding",
+                "final descriptor encoding",
+                "final-encoding source batch",
+                "final-encoding batch",
+            )
         ), f"{budget} MiB refused for an unrelated reason: {message}"
 
     # And the two writers are charged separately: a budget that covers one
     # writer's allowance plus the batch is not automatically enough for both.
-    outcome, peak = run(24)
+    outcome, peak, descriptor_parquet, csf_parquet = run(28)
     assert outcome == "ok", outcome
-    assert 16.0 <= peak <= 24.0, peak
+    assert 20.0 <= peak <= 28.0, peak
+    assert descriptor_parquet is not None
+    assert csf_parquet is not None
+    for path in (descriptor_parquet, csf_parquet):
+        metadata = pq.ParquetFile(path).metadata
+        assert metadata.num_row_groups > 1
+        assert all(
+            metadata.row_group(index).num_rows <= 8_192
+            for index in range(metadata.num_row_groups)
+        )
 
 
 def test_config_generation_reads_memory_budget(

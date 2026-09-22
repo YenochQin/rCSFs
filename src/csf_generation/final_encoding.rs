@@ -35,10 +35,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use super::streaming::{
-    DeduplicatedSegments, SurvivorBitset, csf_parquet_writer_permit, descriptor_output_properties,
-    grouped_segments, parquet_writer_permit, process_cpu_millis,
+    DeduplicatedSegments, SurvivorBitset, grouped_segments, process_cpu_millis,
 };
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
+use crate::csf_output::{csf_parquet, csf_parquet_writer_permit, descriptor};
 use crate::descriptor_schema::{output_schema, validate_record};
 use crate::descriptor_v2::decode_v2_into;
 
@@ -142,6 +142,8 @@ pub(crate) struct FinalEncodingStats {
     pub(crate) descriptor_bytes: u64,
     pub(crate) csf_bytes: u64,
     pub(crate) csf_parquet_bytes: u64,
+    /// IPC decoding/decompression and validation of each materialized batch.
+    pub(crate) read: PhaseAccumulator,
     /// Filtering each batch's rows by the survivor bitset and gathering the
     /// selected columns: serial, and the only phase that touches every row.
     pub(crate) select: PhaseAccumulator,
@@ -153,15 +155,20 @@ pub(crate) struct FinalEncodingStats {
 }
 
 impl FinalEncodingStats {
-    /// The five numbers the pipeline reports, in the order they happen.
+    /// The seven numbers the pipeline reports, in the order they happen.
     ///
     /// Each phase is split into the time its writer spent writing and the rest;
-    /// the two halves sum to the phase, so the five entries sum to the pass.
+    /// the two halves sum to the phase, so the seven entries sum to the pass.
     /// CPU is reported on the compute side only: `getrusage` cannot attribute a
     /// syscall's CPU to the caller that made it, and inventing a split would be
     /// worse than saying so.
-    pub(crate) fn phase_entries(&self) -> [(&'static str, u128, Option<u128>); 6] {
+    pub(crate) fn phase_entries(&self) -> [(&'static str, u128, Option<u128>); 7] {
         [
+            (
+                "final_encoding_read",
+                self.read.elapsed_millis(),
+                self.read.cpu_millis(),
+            ),
             (
                 "final_encoding_select",
                 self.select.elapsed_millis(),
@@ -242,13 +249,16 @@ fn build_final_outputs_from_segments_inner(
 
     // Both writers are alive for the whole pass, so both are charged for it,
     // before either one exists.
-    let _descriptor_writer_permit =
-        parquet_writer_permit(&deduplicated.budget, layout, "final descriptor encoding")?;
+    let _descriptor_writer_permit = crate::csf_output::descriptor_writer_permit(
+        &deduplicated.budget,
+        layout,
+        "final descriptor encoding",
+    )?;
     let _csf_parquet_writer_permit =
         csf_parquet_writer_permit(&deduplicated.budget, layout, "CSF Parquet encoding")?;
 
     let schema = output_schema(layout, false)?;
-    let properties = descriptor_output_properties(
+    let properties = descriptor::properties(
         layout,
         peel_subshells,
         deduplicated.generated_count,
@@ -275,7 +285,7 @@ fn build_final_outputs_from_segments_inner(
         writeln!(text_writer, "{line}")?;
     }
 
-    let csf_schema = crate::csfs_descriptor::csf_parquet::schema();
+    let csf_schema = csf_parquet::schema();
     let csf_parquet_file = File::options()
         .write(true)
         .create_new(true)
@@ -289,10 +299,11 @@ fn build_final_outputs_from_segments_inner(
     let mut csf_parquet_writer = ArrowWriter::try_new(
         CountedWriter::new(csf_parquet_file, Arc::clone(&csf_outputs_io_nanos)),
         csf_schema.clone(),
-        Some(crate::csfs_descriptor::csf_parquet::properties()),
+        Some(csf_parquet::properties()),
     )
     .context("failed to create CSF Parquet writer")?;
 
+    let mut read = PhaseAccumulator::default();
     let mut select = PhaseAccumulator::default();
     let mut prepare = PhaseAccumulator::default();
     let mut descriptor = PhaseAccumulator::default();
@@ -326,50 +337,73 @@ fn build_final_outputs_from_segments_inner(
         let mut ordinal = 0u64;
         let mut block_count = 0usize;
         for segment in segments {
-            let file = File::open(&segment.path)
-                .with_context(|| format!("failed to open segment {}", segment.path.display()))?;
-            let reader = FileReader::try_new(file, None).with_context(|| {
-                format!("failed to read Arrow segment {}", segment.path.display())
+            let mut reader = read.add(|| {
+                let file = File::open(&segment.path).with_context(|| {
+                    format!("failed to open segment {}", segment.path.display())
+                })?;
+                FileReader::try_new(file, None).with_context(|| {
+                    format!("failed to read Arrow segment {}", segment.path.display())
+                })
             })?;
             let expected_columns = row_len
                 .checked_add(2)
                 .context("segment column count overflow")?;
             let mut next_local = segment.local_start;
-            for batch in reader {
+            loop {
+                // Decoding can allocate every Arrow array in the next IPC
+                // batch. Charge its producer-declared maximum before asking
+                // FileReader to materialize it.
+                let mut batch_permit = deduplicated.budget.try_reserve(
+                    source_batch_managed_bytes(row_len, segment.rows_per_batch)?,
+                    "final-encoding source batch",
+                )?;
+                let Some(batch) = read.add(|| reader.next()) else {
+                    break;
+                };
                 let batch = batch.with_context(|| {
                     format!("failed to decode segment {}", segment.path.display())
                 })?;
-                ensure!(
-                    batch.num_columns() == expected_columns,
-                    "segment {} has {} columns, expected {expected_columns}",
-                    segment.path.display(),
-                    batch.num_columns()
-                );
-                let range_column = batch
-                    .column(row_len)
-                    .as_any()
-                    .downcast_ref::<UInt32Array>()
-                    .context("segment range_ordinal column is not UInt32")?;
-                let local_column = batch
-                    .column(row_len + 1)
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .context("segment local_ordinal column is not UInt64")?;
-                let data_columns = batch.columns()[..row_len]
-                    .iter()
-                    .map(|column| {
-                        column
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .context("segment descriptor column is not Int32")
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let (range_column, local_column, data_columns) = read.add(|| {
+                    ensure!(
+                        batch.num_columns() == expected_columns,
+                        "segment {} has {} columns, expected {expected_columns}",
+                        segment.path.display(),
+                        batch.num_columns()
+                    );
+                    ensure!(
+                        batch.num_rows() <= segment.rows_per_batch,
+                        "segment {} has a {}-row batch, exceeding its declared {}-row bound",
+                        segment.path.display(),
+                        batch.num_rows(),
+                        segment.rows_per_batch
+                    );
+                    let range_column = batch
+                        .column(row_len)
+                        .as_any()
+                        .downcast_ref::<UInt32Array>()
+                        .context("segment range_ordinal column is not UInt32")?;
+                    let local_column = batch
+                        .column(row_len + 1)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .context("segment local_ordinal column is not UInt64")?;
+                    let data_columns = batch.columns()[..row_len]
+                        .iter()
+                        .map(|column| {
+                            column
+                                .as_any()
+                                .downcast_ref::<Int32Array>()
+                                .context("segment descriptor column is not Int32")
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok::<_, anyhow::Error>((range_column, local_column, data_columns))
+                })?;
 
                 // The filter pass keeps the ordinal accounting the merge stage
                 // performed, so a bitset or segment disagreement fails here
                 // exactly as it would have failed the merge.
-                let (survivors, mut selected_columns) = select.add(|| {
-                    let mut survivors: Vec<usize> = Vec::new();
+                let survivors = select.add(|| {
+                    let mut survivors = Vec::with_capacity(batch.num_rows());
                     for row in 0..batch.num_rows() {
                         ensure!(
                             range_column.value(row) == segment.range_ordinal,
@@ -387,9 +421,25 @@ fn build_final_outputs_from_segments_inner(
                             .checked_add(1)
                             .context("survivor ordinal overflow")?;
                     }
-                    // Sized for exactly the rows that survive, so the columns
-                    // never hold a batch's worth of memory the reservation did
-                    // not cover.
+                    Ok::<_, anyhow::Error>(survivors)
+                })?;
+                if survivors.is_empty() {
+                    continue;
+                }
+
+                // Grow the reservation before allocating survivor-sized
+                // columns or formatted rows. The source batch remains alive
+                // until both output writers have consumed this iteration.
+                let threads = rayon::current_num_threads().max(1);
+                let batch_bytes = batch_managed_bytes(
+                    row_len,
+                    batch.num_rows(),
+                    survivors.len(),
+                    threads,
+                    max_line_bytes,
+                )?;
+                batch_permit.resize(batch_bytes, "final-encoding batch")?;
+                let mut selected_columns = select.add(|| {
                     let mut selected_columns = (0..row_len)
                         .map(|_| Vec::with_capacity(survivors.len()))
                         .collect::<Vec<_>>();
@@ -398,24 +448,8 @@ fn build_final_outputs_from_segments_inner(
                             selected.push(column.value(row));
                         }
                     }
-                    Ok::<_, anyhow::Error>((survivors, selected_columns))
-                })?;
-                if survivors.is_empty() {
-                    continue;
-                }
-
-                // Charge for what this batch is about to hold, before it holds
-                // it: the selected columns sized for exactly the surviving rows,
-                // the formatted three-line records, and the per-thread decode
-                // scratch. The Arrow arrays the descriptor batch is built from
-                // are the selected columns themselves — moved, never cloned —
-                // so they add nothing here; the two writers were charged above.
-                let threads = rayon::current_num_threads().max(1);
-                let batch_bytes =
-                    batch_managed_bytes(row_len, survivors.len(), threads, max_line_bytes)?;
-                let _batch_permit = deduplicated
-                    .budget
-                    .try_reserve(batch_bytes, "final-encoding batch")?;
+                    selected_columns
+                });
 
                 // Prepare every surviving row in parallel: decode, validate and
                 // format. The publication side stays in row order below, so the
@@ -462,20 +496,34 @@ fn build_final_outputs_from_segments_inner(
                 })?;
 
                 csf_outputs.add(|| {
-                    let mut builder = crate::csfs_descriptor::csf_parquet::BatchBuilder::new(
-                        csf_schema.clone(),
-                        formatted.len(),
-                    );
-                    for (position, record_lines) in formatted.iter().enumerate() {
-                        writeln!(text_writer, "{}", record_lines[0])?;
-                        writeln!(text_writer, "{}", record_lines[1])?;
-                        writeln!(text_writer, "{}", record_lines[2])?;
-                        builder.push(u64::try_from(record_count + position)?, record_lines)?;
+                    // Do not build an Arrow string batch larger than the bound
+                    // priced by the CSF Parquet writer permit. ArrowWriter uses
+                    // the same bound for its buffered row group.
+                    for (chunk_index, chunk) in formatted
+                        .chunks(crate::csf_output::ROW_GROUP_ROWS)
+                        .enumerate()
+                    {
+                        let mut builder =
+                            csf_parquet::BatchBuilder::new(csf_schema.clone(), chunk.len());
+                        let chunk_start = chunk_index
+                            .checked_mul(crate::csf_output::ROW_GROUP_ROWS)
+                            .context("CSF Parquet chunk offset overflow")?;
+                        for (position, record_lines) in chunk.iter().enumerate() {
+                            writeln!(text_writer, "{}", record_lines[0])?;
+                            writeln!(text_writer, "{}", record_lines[1])?;
+                            writeln!(text_writer, "{}", record_lines[2])?;
+                            let index = record_count
+                                .checked_add(chunk_start)
+                                .and_then(|value| value.checked_add(position))
+                                .context("CSF Parquet record index overflow")?;
+                            builder.push(u64::try_from(index)?, record_lines);
+                        }
+                        let batch = builder.finish()?;
+                        csf_parquet_writer
+                            .write(&batch)
+                            .context("failed to write the CSF Parquet batch")?;
                     }
-                    let batch = builder.finish()?;
-                    csf_parquet_writer
-                        .write(&batch)
-                        .context("failed to write the CSF Parquet batch")
+                    Ok::<_, anyhow::Error>(())
                 })?;
 
                 record_count = record_count
@@ -561,6 +609,7 @@ fn build_final_outputs_from_segments_inner(
     let csf_parquet_bytes = std::fs::metadata(csf_parquet_output)?.len();
     Ok(FinalEncodingStats {
         record_count,
+        read,
         select,
         descriptor_bytes,
         csf_bytes,
@@ -573,6 +622,36 @@ fn build_final_outputs_from_segments_inner(
     })
 }
 
+/// Conservative memory held by one decoded IPC batch plus its survivor index.
+///
+/// Arrow owns the primitive buffers after decoding; the factor of two covers
+/// buffer/array bookkeeping and decompression workspace without pretending the
+/// compressed file size predicts resident memory.
+fn source_batch_managed_bytes(row_len: usize, rows: usize) -> Result<u64> {
+    let row_bytes = row_len
+        .checked_mul(std::mem::size_of::<i32>())
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<u32>()))
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<u64>()))
+        .context("source batch row width overflow")?;
+    let buffers = rows
+        .checked_mul(row_bytes)
+        .and_then(|bytes| bytes.checked_mul(2))
+        .context("source batch buffer bytes overflow")?;
+    let survivor_capacity = rows
+        .checked_mul(std::mem::size_of::<usize>())
+        .context("source survivor index bytes overflow")?;
+    let array_overhead = row_len
+        .checked_add(2)
+        .and_then(|columns| columns.checked_mul(128))
+        .context("source batch array overhead overflow")?;
+    let total = buffers
+        .checked_add(survivor_capacity)
+        .and_then(|bytes| bytes.checked_add(array_overhead))
+        .and_then(|bytes| bytes.checked_add(4096))
+        .context("source batch managed byte count overflow")?;
+    u64::try_from(total).context("source batch bytes exceed u64")
+}
+
 /// The managed bytes one batch of this pass may hold at once.
 ///
 /// Sized for the structures that really coexist, and reserved before any of
@@ -581,6 +660,7 @@ fn build_final_outputs_from_segments_inner(
 /// decode scratch per worker thread.
 fn batch_managed_bytes(
     row_len: usize,
+    source_rows: usize,
     survivors: usize,
     threads: usize,
     max_line_bytes: usize,
@@ -598,9 +678,6 @@ fn batch_managed_bytes(
     let formatted = survivors
         .checked_mul(text_per_record)
         .context("formatted text bytes overflow")?;
-    let survivor_indices = survivors
-        .checked_mul(std::mem::size_of::<usize>())
-        .context("survivor index bytes overflow")?;
     let scratch_per_thread = row_len
         .checked_mul(std::mem::size_of::<i32>())
         .and_then(|bytes| bytes.checked_add(4096))
@@ -608,10 +685,12 @@ fn batch_managed_bytes(
     let scratch = threads
         .checked_mul(scratch_per_thread)
         .context("decode scratch total overflow")?;
+    let source = source_batch_managed_bytes(row_len, source_rows)?;
     let total = columns
         .checked_add(formatted)
-        .and_then(|bytes| bytes.checked_add(survivor_indices))
         .and_then(|bytes| bytes.checked_add(scratch))
         .context("final-encoding batch managed byte count overflow")?;
-    u64::try_from(total).context("final-encoding batch bytes exceed u64")
+    source
+        .checked_add(u64::try_from(total).context("final-encoding batch bytes exceed u64")?)
+        .context("final-encoding batch bytes exceed u64")
 }

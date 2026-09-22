@@ -14,7 +14,6 @@ use arrow::record_batch::RecordBatch;
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::{FileWriter, IpcWriteOptions};
 use parquet::arrow::arrow_writer::ArrowWriter;
-use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
@@ -208,6 +207,9 @@ pub(crate) struct DescriptorSegment {
     pub(crate) parity: Parity,
     pub(crate) record_count: usize,
     pub(crate) byte_count: u64,
+    /// Maximum rows in an IPC record batch. Final encoding uses this bound to
+    /// reserve decode memory before asking the reader to materialize a batch.
+    pub(crate) rows_per_batch: usize,
 }
 
 /// Completed generation stage before deduplication.
@@ -470,15 +472,16 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
     )?;
     let descriptor_bytes = final_stats.descriptor_bytes;
     let csf_bytes = final_stats.csf_bytes;
-    // Five entries, because five different things happen: preparation in the
-    // thread pool, and for each artifact family the conversion/compression
-    // separated from the writes and footers its writer performs. Their walls
-    // sum to the whole pass, which is what makes any claim about the pass
-    // checkable against the end-to-end time.
+    // Seven entries cover segment read/decompression, selection, preparation,
+    // and each artifact family split into encode and write. Their walls sum to
+    // the whole pass, which makes the pass checkable against end-to-end time.
     for (name, elapsed_millis, cpu_millis) in final_stats.phase_entries() {
-        let is_prepare = name == "final_encoding_prepare";
+        let is_input_phase = matches!(
+            name,
+            "final_encoding_read" | "final_encoding_select" | "final_encoding_prepare"
+        );
         let is_descriptor = name.starts_with("final_encoding_descriptor");
-        let output_bytes = if is_prepare {
+        let output_bytes = if is_input_phase {
             0
         } else if is_descriptor {
             descriptor_bytes
@@ -494,7 +497,11 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
             cpu_millis,
             input_records: deduplicated.unique_count,
             output_records: final_stats.record_count,
-            input_bytes: if is_prepare { dedup_bytes } else { 0 },
+            input_bytes: if name == "final_encoding_read" {
+                dedup_bytes
+            } else {
+                0
+            },
             output_bytes,
         });
     }
@@ -889,14 +896,18 @@ pub(crate) fn merge_v2_descriptor_segments(
         output_path.display()
     );
     let schema = output_schema(generated.layout, false)?;
-    let _memory_permit =
-        parquet_writer_permit(&generated.budget, generated.layout, "descriptor merge")?;
+    let _memory_permit = crate::csf_output::descriptor_writer_permit(
+        &generated.budget,
+        generated.layout,
+        "descriptor merge",
+    )?;
     let properties = WriterProperties::builder()
         .set_compression(
             crate::csfs_descriptor::parquet_batch::parse_compression(None)
                 .expect("default compression is valid"),
         )
         .set_dictionary_enabled(true)
+        .set_max_row_group_row_count(Some(crate::csf_output::ROW_GROUP_ROWS))
         .set_key_value_metadata(Some(output_kv_metadata(
             generated.layout,
             &generated.peel_subshells,
@@ -1195,12 +1206,12 @@ pub(crate) fn merge_v2_deduplicated_segments(
         output_path.display()
     );
     let schema = output_schema(deduplicated.layout, false)?;
-    let _memory_permit = parquet_writer_permit(
+    let _memory_permit = crate::csf_output::descriptor_writer_permit(
         &deduplicated.budget,
         deduplicated.layout,
         "deduplicated descriptor merge",
     )?;
-    let properties = descriptor_output_properties(
+    let properties = crate::csf_output::descriptor::properties(
         deduplicated.layout,
         &deduplicated.peel_subshells,
         deduplicated.generated_count,
@@ -1722,18 +1733,6 @@ pub(crate) fn grouped_segments(
 fn block_directory_name((total_two_j, odd): (u16, bool)) -> String {
     let parity = if odd { "odd" } else { "even" };
     format!("j{total_two_j:04}-{parity}")
-}
-
-fn format_usize_list(values: &[usize]) -> String {
-    let mut text = String::from("[");
-    for (index, value) in values.iter().enumerate() {
-        if index > 0 {
-            text.push(',');
-        }
-        text.push_str(&value.to_string());
-    }
-    text.push(']');
-    text
 }
 
 fn count_blocks(segments: &[DescriptorSegment]) -> usize {
@@ -2271,6 +2270,7 @@ impl BlockSegmentWriter {
             parity: self.parity,
             record_count: current.record_count,
             byte_count,
+            rows_per_batch: self.rows_per_batch,
         });
         Ok(())
     }
@@ -2339,84 +2339,6 @@ fn segment_schema(layout: DescriptorLayout) -> Result<SchemaRef> {
         false,
     )));
     Ok(Arc::new(Schema::new(fields)))
-}
-
-/// The managed bytes one in-flight CSF Parquet row group may hold.
-///
-/// The three-line file's rows are text rather than integers, so its writer
-/// allowance is derived from the formatted line width instead of the V2 layout.
-pub(crate) fn csf_parquet_writer_permit(
-    budget: &ResourceBudget,
-    layout: DescriptorLayout,
-    label: &str,
-) -> Result<ResourcePermit> {
-    budget.try_reserve(
-        crate::csfs_descriptor::csf_parquet::writer_managed_bytes(layout, 8_192)?,
-        label,
-    )
-}
-
-/// The writer configuration of every descriptor Parquet this crate publishes.
-///
-/// Both the two-pass merge and the one-pass final encoding write this file, and
-/// their outputs are compared for equality: a duplicated configuration could
-/// drift into a silent difference in a published artifact.
-pub(crate) fn descriptor_output_properties(
-    layout: DescriptorLayout,
-    peel_subshells: &[String],
-    generated_count: usize,
-    unique_count: usize,
-    duplicate_count: usize,
-    block_lengths: &[usize],
-) -> Result<WriterProperties> {
-    let mut metadata = output_kv_metadata(layout, peel_subshells, false, None, None);
-    metadata.extend([
-        KeyValue::new(
-            "generated_record_count".to_owned(),
-            Some(generated_count.to_string()),
-        ),
-        KeyValue::new(
-            "unique_record_count".to_owned(),
-            Some(unique_count.to_string()),
-        ),
-        KeyValue::new(
-            "duplicate_record_count".to_owned(),
-            Some(duplicate_count.to_string()),
-        ),
-        KeyValue::new(
-            "block_lengths".to_owned(),
-            Some(format_usize_list(block_lengths)),
-        ),
-    ]);
-    Ok(WriterProperties::builder()
-        .set_compression(
-            crate::csfs_descriptor::parquet_batch::parse_compression(None)
-                .expect("default compression is valid"),
-        )
-        .set_dictionary_enabled(true)
-        .set_key_value_metadata(Some(metadata))
-        .build())
-}
-
-pub(crate) fn parquet_writer_permit(
-    budget: &ResourceBudget,
-    layout: DescriptorLayout,
-    label: &str,
-) -> Result<ResourcePermit> {
-    // ArrowReader/ArrowWriter may hold more than one record batch while
-    // encoding a row group. Reserve a conservative fixed batch allowance so a
-    // low explicit budget fails before the writer allocates unbounded buffers.
-    let bytes = layout
-        .row_len()
-        .checked_mul(8_192)
-        .and_then(|value| value.checked_mul(std::mem::size_of::<i32>()))
-        .and_then(|value| value.checked_mul(2))
-        .and_then(|value| value.checked_add(1 << 20))
-        .context("Parquet writer managed byte count overflow")?;
-    budget.try_reserve(
-        u64::try_from(bytes).context("Parquet writer bytes exceed u64")?,
-        label,
-    )
 }
 
 fn block_key(total_two_j: u16, parity: Parity) -> (u16, bool) {
@@ -2796,6 +2718,7 @@ mod tests {
             parity: source.parity,
             record_count: source.record_count,
             byte_count: fs::metadata(destination).unwrap().len(),
+            rows_per_batch: source.rows_per_batch,
         }
     }
 
@@ -3347,13 +3270,14 @@ mod tests {
                 )
                 .unwrap();
                 assert_eq!(stats.record_count, deduplicated.unique_count);
-                // Every phase is reported, and the six of them together are the
-                // pass: selection, parallel preparation, and each artifact
-                // family split into its compute and its write half.
+                // Every phase is reported, and the seven of them together are
+                // the pass: segment reading, selection, parallel preparation,
+                // and each artifact family split into compute and write halves.
                 let entries = stats.phase_entries();
                 assert_eq!(
                     entries.map(|(name, _, _)| name),
                     [
+                        "final_encoding_read",
                         "final_encoding_select",
                         "final_encoding_prepare",
                         "final_encoding_descriptor_encode",

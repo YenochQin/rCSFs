@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 pub mod atomic_output;
 pub mod complete_csf;
 pub mod csf_generation;
+mod csf_output;
 pub mod csf_partition;
 pub mod csfs_conversion;
 pub mod csfs_descriptor;

@@ -286,7 +286,10 @@ generation and the staged set coexists with its published copies during
 publication. Each volume is required to hold the larger of those two phases. The
 generation call checks the scratch and staging volumes; the CLI passes its final
 destinations to the estimate so one model covers all of them, since publication
-copies the staged set into paths only the CLI knows. A run that cannot fit is
+copies the staged set into paths only the CLI knows. Each artifact is named by
+kind (`csf_text`, `csf_parquet`, `descriptor`, `header`, `descriptor_metadata`),
+so the header and the descriptor sidecar are charged to their own volumes even
+when those differ. A run that cannot fit is
 refused while the scratch directory is still empty.
 
 A volume the platform cannot measure fails the run rather than being skipped:

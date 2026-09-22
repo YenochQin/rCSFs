@@ -17,6 +17,8 @@ pub(crate) enum SegmentCompression {
 }
 
 impl SegmentCompression {
+    /// Name of the codec, for the segment metadata P2a will record.
+    #[allow(dead_code)] // Read by P2a; until then the default codec is written.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::None => "none",
@@ -33,9 +35,9 @@ impl SegmentCompression {
             "" | "none" | "uncompressed" => Ok(Self::None),
             "lz4" => Ok(Self::Lz4),
             "zstd" => Ok(Self::Zstd),
-            other => bail!(
-                "invalid RCSFS_SEGMENT_COMPRESSION {other:?}; expected none, lz4, or zstd"
-            ),
+            other => {
+                bail!("invalid RCSFS_SEGMENT_COMPRESSION {other:?}; expected none, lz4, or zstd")
+            }
         }
     }
 }
@@ -61,6 +63,10 @@ pub(crate) struct GenerationOptions {
     pub(crate) rows_per_batch: usize,
     pub(crate) rows_per_segment: usize,
     pub(crate) budget: ResourceBudget,
+    /// Codec for the private Arrow segments. `RCSFS_SEGMENT_COMPRESSION`
+    /// selects it now, but nothing reads the selection until the P2a benchmark
+    /// decides whether a compressed segment is worth its CPU.
+    #[allow(dead_code)]
     pub(crate) segment_compression: SegmentCompression,
 }
 

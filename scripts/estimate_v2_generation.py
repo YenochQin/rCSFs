@@ -65,8 +65,9 @@ def main() -> int:
         metavar="KIND=PATH",
         help=(
             "Where a published artifact will go, as kind=path. Kinds: csf_text, "
-            "csf_parquet, descriptor, metadata. Repeatable; each volume is checked "
-            "against the sizes that coexist on it."
+            "csf_parquet, descriptor, header, descriptor_metadata. Repeatable, and "
+            "the same kind may appear more than once; each volume is checked against "
+            "the sizes that coexist on it."
         ),
     )
     _ = parser.add_argument(

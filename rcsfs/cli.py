@@ -951,7 +951,10 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
                     "csf_text": args.output,
                     "csf_parquet": csf_parquet,
                     "descriptor": descriptor_parquet,
-                    "metadata": metadata,
+                    # The header and the descriptor sidecar can land on different
+                    # volumes, so each is charged to its own destination.
+                    "header": header,
+                    "descriptor_metadata": metadata,
                 },
             )
         )

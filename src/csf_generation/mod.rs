@@ -12,30 +12,27 @@ mod options;
 mod pipeline;
 #[allow(dead_code)] // The estimate-only CLI mode consumes part of this module.
 pub(crate) mod planning;
+mod space;
 mod states;
 #[allow(dead_code)] // Phase 4 owns the public transaction/CLI wiring.
 pub(crate) mod streaming;
 
+pub(crate) use capacity::{ArtifactKind, CapacityEstimate, estimate_capacity};
+pub(crate) use counting::{PreparedCounter, count_configuration_records};
 pub(crate) use occupations::enumerate_occupations_with_budget;
 pub use occupations::{
     EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, OccupationMode, Orbital,
     ReferenceConfiguration, ReferenceSubshell, enumerate_occupations,
 };
-pub(crate) use options::{
-    GenerationOptions, ResourceBudget, ResourcePermit, ResourceStats, SegmentCompression,
-};
-pub(crate) use counting::{PreparedCounter, count_configuration_records};
-pub(crate) use capacity::{
-    ArtifactKind, CapacityEstimate, SpaceCheck, SpacePolicy, SpaceRole, check_space,
-    estimate_capacity, preflight_run,
+pub(crate) use options::{GenerationOptions, ResourceBudget, ResourcePermit, ResourceStats};
+pub use pipeline::{
+    TranscriptGenerationStats, WriteStats, generate_csfs_from_transcript, write_generated_csfs,
 };
 pub(crate) use planning::{
     GenerationPlan, PlanStats, PlannedTask, TaskSpan, estimate_workload, plan_generation,
     report_plan, request_targets,
 };
-pub use pipeline::{
-    TranscriptGenerationStats, WriteStats, generate_csfs_from_transcript, write_generated_csfs,
-};
+pub(crate) use space::{SpaceCheck, SpacePolicy, SpaceRole, check_space, preflight_run};
 
 use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
@@ -357,7 +354,14 @@ pub(crate) fn generate_configuration_records(
     if prepared.occupied.is_empty() {
         return Ok(());
     }
-    generate_prepared_records(&prepared, min_two_j, max_two_j, selection, branch_count, sink)
+    generate_prepared_records(
+        &prepared,
+        min_two_j,
+        max_two_j,
+        selection,
+        branch_count,
+        sink,
+    )
 }
 
 fn prepare_generation(request: &GenerationRequest) -> Result<PreparedGeneration> {
@@ -499,7 +503,9 @@ fn generate_prepared_records(
             let mut generator = Generator::new(prepared, sink);
             for &target in targets {
                 ensure!(
-                    target >= min_two_j && target <= max_two_j && (target - min_two_j).is_multiple_of(2),
+                    target >= min_two_j
+                        && target <= max_two_j
+                        && (target - min_two_j).is_multiple_of(2),
                     "target 2J {target} is outside the request's 2J range"
                 );
                 generator.select_states(0, target)?;
@@ -512,7 +518,9 @@ fn generate_prepared_records(
             branches,
         } => {
             ensure!(
-                target >= min_two_j && target <= max_two_j && (target - min_two_j).is_multiple_of(2),
+                target >= min_two_j
+                    && target <= max_two_j
+                    && (target - min_two_j).is_multiple_of(2),
                 "target 2J {target} is outside the request's 2J range"
             );
             let prefixes = state_prefixes(prepared, branch_count);
@@ -815,13 +823,16 @@ mod tests {
         (&[("3d", 3), ("4d", 3)], 0, 12),
         (&[("5g", 4), ("5g-", 2)], 0, 12),
         (&[("4f", 4), ("5g", 4), ("5g-", 1)], 1, 11),
+        (&[("4f", 3), ("4f-", 2), ("5g", 3), ("5g-", 2)], 0, 16),
         (
-            &[("4f", 3), ("4f-", 2), ("5g", 3), ("5g-", 2)],
-            0,
-            16,
-        ),
-        (
-            &[("11n", 1), ("11n-", 1), ("11n", 1), ("11n-", 1), ("11n", 1), ("11n-", 1)],
+            &[
+                ("11n", 1),
+                ("11n-", 1),
+                ("11n", 1),
+                ("11n-", 1),
+                ("11n", 1),
+                ("11n-", 1),
+            ],
             126,
             126,
         ),

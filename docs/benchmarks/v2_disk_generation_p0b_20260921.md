@@ -54,9 +54,18 @@ python scripts/benchmark_v2_generation.py tests/fixtures/b2_cc1_fullas_2exc.rcsf
 
 原始测量见 `v2_disk_generation_p0b_b1_20260921.json` 与 `v2_disk_generation_p0b_b2_20260921.json`。
 
+## 来源可审计性
+
+这两份报告测量于 2026-09-21，早于基准脚本记录源码身份（`git.tree` 与已加载扩展的
+SHA-256）。原始 JSON 保留了 `commit` 与 `dirty`，但被测扩展当时未重建，今天无法重
+建该二进制来复核，因此这两份报告不能作为可复核基线使用；后续对照请以
+[2026-09-22 矩阵](v2_disk_generation_matrix_20260922.md) 为准，它记录了 tree 哈希与
+扩展哈希，并来自干净工作树。
+
 ## 尚未覆盖
 
 - 目标机器上的测量：本表只代表一台本地机器，scratch 位于系统临时目录所在卷（APFS），未施加并发 I/O 或空间压力。
 - 物理设备 I/O 与页缓存状态未记录。
-- 未测量低/中/高三档 `memory_budget_mib`；当前所有运行都使用未指定预算。
+- 本表未测 `memory_budget_mib`：这些运行都使用未指定预算。低/中/高三档预算见
+  [2026-09-22 矩阵](v2_disk_generation_matrix_20260922.md)。
 - B1/B2 的重复率为 0，不能据此推断一般输入无需去重。

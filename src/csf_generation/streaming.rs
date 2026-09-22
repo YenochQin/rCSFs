@@ -26,15 +26,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{
-    EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, GeneratedRecordRef,
-    GeneratedRecordSink, GenerationOptions, GenerationPlan, Parity,
-    PlanStats, PlannedTask, RecordSelection, ResourceBudget, ResourcePermit,
-    ResourceStats, Subshell, SubshellOccupation, TaskSpan,
-    enumerate_occupations_with_budget, estimate_capacity, estimate_workload,
-    generate_configuration_records, plan_generation, report_plan, request_targets,
+    ArtifactKind, CapacityEstimate, SpaceCheck, SpacePolicy, SpaceRole, check_space, preflight_run,
 };
 use super::{
-    ArtifactKind, CapacityEstimate, SpaceCheck, SpacePolicy, SpaceRole, check_space, preflight_run,
+    EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, GeneratedRecordRef,
+    GeneratedRecordSink, GenerationOptions, GenerationPlan, Parity, PlanStats, PlannedTask,
+    RecordSelection, ResourceBudget, ResourcePermit, ResourceStats, Subshell, SubshellOccupation,
+    TaskSpan, enumerate_occupations_with_budget, estimate_capacity, estimate_workload,
+    generate_configuration_records, plan_generation, report_plan, request_targets,
 };
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
 use crate::complete_csf::OccupiedSubshell;
@@ -360,11 +359,8 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
         descriptor_output,
         header_output,
     ];
-    let generated = generate_v2_descriptor_segments_checked(
-        &request,
-        scratch_dir,
-        options,
-        |estimate| {
+    let generated =
+        generate_v2_descriptor_segments_checked(&request, scratch_dir, options, |estimate| {
             for check in preflight_run(
                 estimate,
                 scratch_dir,
@@ -374,8 +370,7 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
                 report_space_check(&check);
             }
             Ok(())
-        },
-    )?;
+        })?;
     stage_stats.extend(generated.stage_stats.iter().cloned());
     eprintln!(
         "Generated {} CSFs across {} symmetry blocks",
@@ -519,7 +514,8 @@ pub(crate) fn estimate_disk_generation_with_layout(
     // same budget gates the occupation arena here. Charging an unlimited arena
     // would let a low-budget estimate succeed and the run then fail at
     // enumeration.
-    let (occupations, _charge) = enumerate_occupations_with_budget(&request, Some(&options.budget))?;
+    let (occupations, _charge) =
+        enumerate_occupations_with_budget(&request, Some(&options.budget))?;
     ensure!(
         !occupations.configurations.is_empty(),
         "occupation enumeration produced no configurations"
@@ -2680,12 +2676,13 @@ mod tests {
             let request = ExcitationRequest::from_transcript(transcript()).unwrap();
             let occupations = enumerate_occupations(&request).unwrap();
             let workload = estimate_workload(&request, &occupations, Some(1)).unwrap();
-            let plan =
-                plan_generation(&request, &occupations, workload, Some(1), target).unwrap();
+            let plan = plan_generation(&request, &occupations, workload, Some(1), target).unwrap();
             let scheduled = plan
                 .tasks
                 .iter()
-                .try_fold(0u64, |total, task| total.checked_add(task.estimated_records))
+                .try_fold(0u64, |total, task| {
+                    total.checked_add(task.estimated_records)
+                })
                 .unwrap();
             assert_eq!(scheduled, plan.workload.total_records);
             let mut previous = 0;
@@ -2928,4 +2925,3 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
-

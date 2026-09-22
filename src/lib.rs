@@ -494,7 +494,10 @@ fn plan_stats_dict(
     plan_stats.set_item("target_records_per_task", stats.target_records_per_task)?;
     plan_stats.set_item("estimated_total_records", stats.estimated_total_records)?;
     plan_stats.set_item("unique_occupations", stats.unique_occupations)?;
-    plan_stats.set_item("zero_record_configurations", stats.zero_record_configurations)?;
+    plan_stats.set_item(
+        "zero_record_configurations",
+        stats.zero_record_configurations,
+    )?;
     plan_stats.set_item("unsplittable_tasks", stats.unsplittable_tasks)?;
     plan_stats.set_item("unsplittable_records", stats.unsplittable_records)?;
     let per_task = PyDict::new(py);

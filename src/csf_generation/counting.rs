@@ -16,7 +16,7 @@ use crate::complete_csf::SubshellState;
 
 use super::{
     GeneratedRecordRef, GeneratedRecordSink, PreparedGeneration, RecordSelection, Subshell,
-    SubshellOccupation, generate_prepared_records, prepare_configuration, state_prefixes,
+    SubshellOccupation, generate_prepared_records, prepare_configuration,
 };
 
 /// Exact record counting for one prepared configuration.
@@ -169,7 +169,11 @@ fn extend_ways(ways: &[u64], multiplicity: &[u64], restricted: Option<u16>) -> R
                 &odd_prefix
             };
             let window = prefix_sums[upper]
-                - if lower == 0 { 0 } else { prefix_sums[lower - 1] };
+                - if lower == 0 {
+                    0
+                } else {
+                    prefix_sums[lower - 1]
+                };
             if window == 0 {
                 continue;
             }
@@ -238,4 +242,3 @@ impl GeneratedRecordSink for CountingSink {
         Ok(())
     }
 }
-

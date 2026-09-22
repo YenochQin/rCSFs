@@ -222,6 +222,89 @@ def test_the_source_identity_flag_is_registered() -> None:
     assert parser.parse_args(["--allow-dirty-source"]).allow_dirty_source is True
 
 
+def _temporary_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A throwaway git repository that the support module believes is its own."""
+    repository = tmp_path / "source"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "initial",
+        ],
+        cwd=repository,
+        check=True,
+    )
+    monkeypatch.setattr(support, "REPO_ROOT", repository)
+    return repository
+
+
+def test_a_file_inside_an_untracked_directory_changes_the_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Untracked directories must be listed file by file.
+
+    `git status` collapses an untracked directory into one `?? dir/` row by
+    default, so editing a file inside it would leave both the entries and the
+    fingerprint unchanged - and a run whose source changed under it would be
+    accepted. `--untracked-files=all` is what keeps them visible.
+    """
+    repository = _temporary_repository(tmp_path, monkeypatch)
+    new_directory = repository / "newdir"
+    new_directory.mkdir()
+    source = new_directory / "a.rs"
+    source.write_text("fn a() {}\n")
+
+    entries = support._source_entries()  # noqa: SLF001 - the fingerprint is the unit
+    assert [path for _status, path, _origin in entries] == ["newdir/a.rs"]
+    before = support._dirty_fingerprint(entries)
+
+    source.write_text("fn a() { /* edited */ }\n")
+    entries = support._source_entries()  # noqa: SLF001
+    after = support._dirty_fingerprint(entries)
+    assert before != after, "editing a file inside an untracked directory must show up"
+
+    # And the same content hashes the same way, so the fingerprint is stable.
+    assert support._dirty_fingerprint(support._source_entries()) == after  # noqa: SLF001
+
+
+def test_a_directory_entry_is_fingerprinted_recursively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`-uall` lists files, but a directory row must not become a constant."""
+    repository = _temporary_repository(tmp_path, monkeypatch)
+    nested = repository / "dir"
+    nested.mkdir()
+    (nested / "one.rs").write_text("fn one() {}\n")
+    entries = [("??", "dir", None)]
+
+    before = support._dirty_fingerprint(entries)  # noqa: SLF001
+    (nested / "two.rs").write_text("fn two() {}\n")
+    assert support._dirty_fingerprint(entries) != before  # noqa: SLF001
+
+    (nested / "one.rs").write_text("fn one() { /* edited */ }\n")
+    assert support._dirty_fingerprint(entries) not in (None, before)  # noqa: SLF001
+
+
+def test_an_unreadable_untracked_path_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A constant placeholder would make two different trees fingerprint alike."""
+    repository = _temporary_repository(tmp_path, monkeypatch)
+    (repository / "gone.rs").write_text("fn gone() {}\n")
+    entries = support._source_entries()  # noqa: SLF001
+    (repository / "gone.rs").unlink()
+    with pytest.raises(SystemExit, match="cannot fingerprint"):
+        support._dirty_fingerprint(entries)  # noqa: SLF001
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [

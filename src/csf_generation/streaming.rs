@@ -7,7 +7,7 @@
 //! Parquet publication.
 
 use anyhow::{Context, Result, ensure};
-use arrow::array::{Array, Int32Array, UInt32Array, UInt64Array};
+use arrow::array::{Array, Int32Array, StringBuilder, UInt32Array, UInt64Array, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ipc::reader::FileReader;
@@ -41,7 +41,7 @@ use crate::complete_csf::OccupiedSubshell;
 use crate::descriptor_schema::{
     DescriptorLayout, DescriptorVersion, output_kv_metadata, output_schema, validate_record,
 };
-use crate::descriptor_v2::write_feature_row;
+use crate::descriptor_v2::{decode_v2_into, write_feature_row};
 
 const DEFAULT_DEDUP_BUCKET_COUNT: usize = 256;
 const DEFAULT_DEDUP_MAX_ROWS_PER_BUCKET: usize = 65_536;
@@ -442,41 +442,51 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
     let header_lines = generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
     write_generation_header(header_output, header_lines.clone(), &deduplicated)?;
 
-    eprintln!("Merging deduplicated segments to final descriptor Parquet...");
-    let merge_timer = StageTimer::start();
-    merge_v2_deduplicated_segments(&deduplicated, descriptor_output)?;
-    let descriptor_bytes = fs::metadata(descriptor_output)?.len();
-    stage_stats.push(merge_timer.finish(
-        "descriptor_merge",
-        deduplicated.unique_count,
-        deduplicated.unique_count,
-        dedup_bytes,
-        descriptor_bytes,
-    ));
-
-    eprintln!("Restoring CSF text and Parquet outputs...");
-    let restore_timer = StageTimer::start();
-    let _restore_permit =
-        parquet_writer_permit(&generated.budget, generated.layout, "CSF restore")?;
-    crate::csfs_descriptor::restore_v2_descriptor_parquet_to_outputs(
+    eprintln!("Building final descriptor and CSF outputs from segments...");
+    let final_stats = build_final_outputs_from_segments(
+        &deduplicated,
+        &header_lines,
         descriptor_output,
-        header_output,
         csf_output,
-        Some(csf_parquet_output),
+        csf_parquet_output,
+        options.threads,
     )?;
-    let csf_bytes = fs::metadata(csf_output)?.len();
-    let csf_parquet_bytes = fs::metadata(csf_parquet_output)?.len();
-    stage_stats.push(
-        restore_timer.finish(
-            "csf_restore",
-            deduplicated.unique_count,
-            deduplicated.unique_count,
-            descriptor_bytes,
-            csf_bytes
-                .checked_add(csf_parquet_bytes)
-                .context("restored output byte count overflow")?,
-        ),
-    );
+    let descriptor_bytes = final_stats.descriptor_bytes;
+    let csf_bytes = final_stats.csf_bytes;
+    // The three phases are reported separately because they are separately
+    // real: the prepare phase runs in the thread pool, the descriptor encoder
+    // and the output writers are serial. Presenting them as one number would
+    // hide exactly what P4 did and did not parallelize.
+    stage_stats.push(StageStats {
+        name: "final_encoding_prepare",
+        elapsed_millis: final_stats.prepare.elapsed_millis(),
+        cpu_millis: final_stats.prepare.cpu_millis,
+        input_records: deduplicated.unique_count,
+        output_records: final_stats.record_count,
+        input_bytes: dedup_bytes,
+        output_bytes: 0,
+    });
+    stage_stats.push(StageStats {
+        name: "final_encoding_encode",
+        elapsed_millis: final_stats.encode.elapsed_millis(),
+        cpu_millis: final_stats.encode.cpu_millis,
+        input_records: final_stats.record_count,
+        output_records: final_stats.record_count,
+        input_bytes: 0,
+        output_bytes: descriptor_bytes,
+    });
+    stage_stats.push(StageStats {
+        name: "final_encoding_write",
+        elapsed_millis: final_stats.write.elapsed_millis(),
+        cpu_millis: final_stats.write.cpu_millis,
+        input_records: final_stats.record_count,
+        output_records: final_stats.record_count,
+        input_bytes: 0,
+        output_bytes: final_stats
+            .csf_bytes
+            .checked_add(final_stats.csf_parquet_bytes)
+            .context("final output byte count overflow")?,
+    });
     eprintln!("Generation complete!");
     Ok(DiskGenerationStats {
         unique_occupations: generated.unique_occupations,
@@ -1270,6 +1280,425 @@ pub(crate) fn merge_v2_deduplicated_segments(
     Ok(SegmentMergeStats {
         record_count: total,
         block_lengths,
+    })
+}
+
+/// Wall and CPU time accumulated over the interleaved sections of one phase.
+///
+/// The final-encoding stage interleaves its phases batch by batch — prepare a
+/// batch, encode it into the descriptor Parquet, write it out — so a phase
+/// cannot be timed with one start/finish pair the way whole stages are. Each
+/// section's wall and rusage delta is accumulated instead, which keeps the
+/// three phases separately comparable without pretending they are stages.
+#[derive(Default)]
+pub(crate) struct PhaseAccumulator {
+    nanos: u128,
+    cpu_millis: Option<u128>,
+}
+
+impl PhaseAccumulator {
+    /// Run one section of this phase, adding its wall and CPU time.
+    fn add<R>(&mut self, section: impl FnOnce() -> R) -> R {
+        let started = Instant::now();
+        let cpu_before = process_cpu_millis();
+        let result = section();
+        self.nanos = self.nanos.saturating_add(started.elapsed().as_nanos());
+        if let (Some(before), Some(after)) = (cpu_before, process_cpu_millis()) {
+            let total = self
+                .cpu_millis
+                .unwrap_or(0)
+                .saturating_add(after.saturating_sub(before));
+            self.cpu_millis = Some(total);
+        }
+        result
+    }
+
+    fn elapsed_millis(&self) -> u128 {
+        self.nanos / 1_000_000
+    }
+}
+
+/// What the combined final-encoding pass produced, with its phases timed
+/// separately: preparation (decode, validate, format — parallel), descriptor
+/// encoding (the single Parquet writer) and output writing (CSF text and CSF
+/// Parquet).
+pub(crate) struct FinalEncodingStats {
+    pub(crate) record_count: usize,
+    pub(crate) block_count: usize,
+    pub(crate) descriptor_bytes: u64,
+    pub(crate) csf_bytes: u64,
+    pub(crate) csf_parquet_bytes: u64,
+    pub(crate) prepare: PhaseAccumulator,
+    pub(crate) encode: PhaseAccumulator,
+    pub(crate) write: PhaseAccumulator,
+}
+
+/// Build every final artifact from the segments in one ordered pass.
+///
+/// The pre-P4 pipeline wrote the descriptor Parquet and then read it back to
+/// format the CSF text, so every row was encoded once, decoded once and
+/// formatted once across two full passes over disk. This pass reads each
+/// surviving row from its segment exactly once: the row's integers go straight
+/// into the descriptor Parquet, and its decoded record is validated and
+/// formatted in the thread pool for the CSF text and CSF Parquet. The
+/// publication side stays strictly in order, so the outputs are the merge and
+/// restore outputs published together.
+///
+/// Each batch's prepare work is parallel over its rows; the descriptor Parquet
+/// still has a single writer and the CSF text a single pen. The phases are
+/// timed separately and reported as such — parallel preparation over a serial
+/// encoder is what this is, and the statistics must not present it as fully
+/// parallel encoding.
+pub(crate) fn build_final_outputs_from_segments(
+    deduplicated: &DeduplicatedSegments,
+    header_lines: &[String; 5],
+    descriptor_output: &Path,
+    csf_output: &Path,
+    csf_parquet_output: &Path,
+    threads: Option<usize>,
+) -> Result<FinalEncodingStats> {
+    super::planning::run_parallel(threads, || {
+        build_final_outputs_from_segments_inner(
+            deduplicated,
+            header_lines,
+            descriptor_output,
+            csf_output,
+            csf_parquet_output,
+        )
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+fn build_final_outputs_from_segments_inner(
+    deduplicated: &DeduplicatedSegments,
+    header_lines: &[String; 5],
+    descriptor_output: &Path,
+    csf_output: &Path,
+    csf_parquet_output: &Path,
+) -> Result<FinalEncodingStats> {
+    use crate::complete_csf::CompleteCsfFile;
+
+    ensure!(
+        !descriptor_output.exists(),
+        "descriptor output already exists: {}",
+        descriptor_output.display()
+    );
+    ensure!(
+        !csf_output.exists(),
+        "CSF output already exists: {}",
+        csf_output.display()
+    );
+    ensure!(
+        !csf_parquet_output.exists(),
+        "CSF Parquet output already exists: {}",
+        csf_parquet_output.display()
+    );
+    let layout = deduplicated.layout;
+    let row_len = layout.row_len();
+    let peel_subshells: &[String] = &deduplicated.peel_subshells;
+
+    // The descriptor writer is configured exactly as the merge stage did, so
+    // the published bytes are the merge's bytes.
+    let schema = output_schema(layout, false)?;
+    let _writer_permit =
+        parquet_writer_permit(&deduplicated.budget, layout, "final descriptor encoding")?;
+    let mut metadata = output_kv_metadata(layout, peel_subshells, false, None, None);
+    metadata.extend([
+        KeyValue::new(
+            "generated_record_count".to_owned(),
+            Some(deduplicated.generated_count.to_string()),
+        ),
+        KeyValue::new(
+            "unique_record_count".to_owned(),
+            Some(deduplicated.unique_count.to_string()),
+        ),
+        KeyValue::new(
+            "duplicate_record_count".to_owned(),
+            Some(deduplicated.duplicate_count.to_string()),
+        ),
+        KeyValue::new(
+            "block_lengths".to_owned(),
+            Some(format_usize_list(&deduplicated.block_lengths)),
+        ),
+    ]);
+    let properties = WriterProperties::builder()
+        .set_compression(
+            crate::csfs_descriptor::parquet_batch::parse_compression(None)
+                .expect("default compression is valid"),
+        )
+        .set_dictionary_enabled(true)
+        .set_key_value_metadata(Some(metadata))
+        .build();
+    let (descriptor_temporary, descriptor_file) = create_temporary_output(descriptor_output)?;
+    let mut descriptor_writer =
+        ArrowWriter::try_new(descriptor_file, schema.clone(), Some(properties))
+            .context("failed to create the final descriptor Parquet writer")?;
+
+    // The CSF text carries the same five header lines and block separators the
+    // restore path wrote, and is staged beside its destination like it was.
+    let (text_temporary, text_file) = create_temporary_output(csf_output)?;
+    let mut text_writer = BufWriter::new(text_file);
+    for line in header_lines {
+        writeln!(text_writer, "{line}")?;
+    }
+
+    // The CSF Parquet is written at its destination directly, exactly as the
+    // restore path did: one writer, sequential indices, uncompressed rows.
+    let csf_schema = Arc::new(Schema::new(vec![
+        Field::new("idx", DataType::UInt64, false),
+        Field::new("line1", DataType::Utf8, false),
+        Field::new("line2", DataType::Utf8, false),
+        Field::new("line3", DataType::Utf8, false),
+    ]));
+    let csf_parquet_file = File::options()
+        .write(true)
+        .create_new(true)
+        .open(csf_parquet_output)
+        .with_context(|| {
+            format!(
+                "failed to create CSF Parquet {}",
+                csf_parquet_output.display()
+            )
+        })?;
+    let csf_properties = WriterProperties::builder()
+        .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+        .build();
+    let mut csf_parquet_writer =
+        ArrowWriter::try_new(csf_parquet_file, csf_schema.clone(), Some(csf_properties))
+            .context("failed to create CSF Parquet writer")?;
+
+    let mut prepare = PhaseAccumulator::default();
+    let mut encode = PhaseAccumulator::default();
+    let mut write = PhaseAccumulator::default();
+
+    let mut blocks = grouped_segments(&deduplicated.segments);
+    let mut record_count = 0usize;
+    let mut block_lengths = Vec::with_capacity(blocks.len());
+    for (block_index, (&key, segments)) in blocks.iter_mut().enumerate() {
+        segments.sort_by_key(|segment| (segment.range_ordinal, segment.local_start));
+        // The separator belongs between blocks, and this side is the ordered
+        // one: emitting it here cannot depend on how batches were scheduled.
+        if block_index > 0 {
+            write
+                .add(|| writeln!(text_writer, " *"))
+                .context("failed to write the CSF block separator")?;
+        }
+        let bitset_file = deduplicated
+            .survivor_bitsets
+            .get(&key)
+            .context("missing survivor bitset for descriptor block")?;
+        let bitset = SurvivorBitset::read(bitset_file)?;
+        let mut ordinal = 0u64;
+        let mut block_count = 0usize;
+        for segment in segments {
+            let file = File::open(&segment.path)
+                .with_context(|| format!("failed to open segment {}", segment.path.display()))?;
+            let reader = FileReader::try_new(file, None).with_context(|| {
+                format!("failed to read Arrow segment {}", segment.path.display())
+            })?;
+            let expected_columns = row_len
+                .checked_add(2)
+                .context("segment column count overflow")?;
+            let mut next_local = segment.local_start;
+            for batch in reader {
+                let batch = batch.with_context(|| {
+                    format!("failed to decode segment {}", segment.path.display())
+                })?;
+                ensure!(
+                    batch.num_columns() == expected_columns,
+                    "segment {} has {} columns, expected {expected_columns}",
+                    segment.path.display(),
+                    batch.num_columns()
+                );
+                let range_column = batch
+                    .column(row_len)
+                    .as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .context("segment range_ordinal column is not UInt32")?;
+                let local_column = batch
+                    .column(row_len + 1)
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .context("segment local_ordinal column is not UInt64")?;
+                let data_columns = batch.columns()[..row_len]
+                    .iter()
+                    .map(|column| {
+                        column
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .context("segment descriptor column is not Int32")
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                // The filter pass keeps the ordinal accounting the merge stage
+                // performed, so a bitset or segment disagreement fails here
+                // exactly as it would have failed the merge.
+                let mut survivors: Vec<usize> = Vec::new();
+                let mut selected_columns = (0..row_len)
+                    .map(|_| Vec::with_capacity(batch.num_rows()))
+                    .collect::<Vec<_>>();
+                for row in 0..batch.num_rows() {
+                    ensure!(
+                        range_column.value(row) == segment.range_ordinal,
+                        "segment range ordinal does not match file metadata"
+                    );
+                    ensure!(
+                        local_column.value(row) == next_local,
+                        "segment local ordinal is not contiguous"
+                    );
+                    next_local += 1;
+                    if bitset.contains(ordinal)? {
+                        survivors.push(row);
+                        for (selected, column) in selected_columns.iter_mut().zip(&data_columns) {
+                            selected.push(column.value(row));
+                        }
+                    }
+                    ordinal = ordinal
+                        .checked_add(1)
+                        .context("survivor ordinal overflow")?;
+                }
+                if survivors.is_empty() {
+                    continue;
+                }
+                let row_bytes = survivors
+                    .len()
+                    .checked_mul(row_len)
+                    .and_then(|ints| ints.checked_mul(std::mem::size_of::<i32>()))
+                    .and_then(|bytes| bytes.checked_add(survivors.len().saturating_mul(1024)))
+                    .context("final-encoding batch byte count overflow")?;
+                let _batch_permit = deduplicated.budget.try_reserve(
+                    u64::try_from(row_bytes).context("final-encoding batch bytes exceed u64")?,
+                    "final-encoding batch",
+                )?;
+
+                // Prepare every surviving row in parallel: decode, validate and
+                // format. The publication side stays in row order below, so the
+                // parallel section changes who formats a row, not where it lands.
+                let formatted = prepare.add(|| {
+                    (0..survivors.len())
+                        .into_par_iter()
+                        .map(|position| {
+                            let row = survivors[position];
+                            let mut values = vec![0i32; row_len];
+                            for (value, column) in values.iter_mut().zip(&data_columns) {
+                                *value = column.value(row);
+                            }
+                            let mut occupied = Vec::new();
+                            let mut couplings = Vec::new();
+                            let (total_two_j, parity) =
+                                decode_v2_into(&values, layout, &mut occupied, &mut couplings)?;
+                            validate_record(peel_subshells, &occupied, &couplings)?;
+                            let (line1, line2, line3) = CompleteCsfFile::format_record_parts(
+                                peel_subshells,
+                                &occupied,
+                                &couplings,
+                                total_two_j,
+                                parity,
+                            )?;
+                            Ok([line1, line2, line3])
+                        })
+                        .collect::<Result<Vec<[String; 3]>>>()
+                })?;
+
+                encode.add(|| {
+                    let arrays: Vec<Arc<dyn Array>> = selected_columns
+                        .iter()
+                        .map(|column| Arc::new(Int32Array::from(column.clone())) as Arc<dyn Array>)
+                        .collect();
+                    let batch = RecordBatch::try_new(schema.clone(), arrays)
+                        .context("failed to construct the final descriptor batch")?;
+                    descriptor_writer.write(&batch).with_context(|| {
+                        format!(
+                            "failed to write the final descriptor Parquet for segment {}",
+                            segment.path.display()
+                        )
+                    })
+                })?;
+
+                write.add(|| {
+                    let mut indices = UInt64Builder::with_capacity(formatted.len());
+                    let mut lines: [StringBuilder; 3] = [
+                        StringBuilder::new(),
+                        StringBuilder::new(),
+                        StringBuilder::new(),
+                    ];
+                    for (position, record_lines) in formatted.iter().enumerate() {
+                        writeln!(text_writer, "{}", record_lines[0])?;
+                        writeln!(text_writer, "{}", record_lines[1])?;
+                        writeln!(text_writer, "{}", record_lines[2])?;
+                        indices.append_value(u64::try_from(record_count + position)?);
+                        for (builder, line) in lines.iter_mut().zip(record_lines) {
+                            builder.append_value(line);
+                        }
+                    }
+                    let batch = RecordBatch::try_new(
+                        csf_schema.clone(),
+                        vec![
+                            Arc::new(indices.finish()),
+                            Arc::new(lines[0].finish()),
+                            Arc::new(lines[1].finish()),
+                            Arc::new(lines[2].finish()),
+                        ],
+                    )
+                    .context("failed to construct the CSF Parquet batch")?;
+                    csf_parquet_writer
+                        .write(&batch)
+                        .context("failed to write the CSF Parquet batch")
+                })?;
+
+                record_count = record_count
+                    .checked_add(formatted.len())
+                    .context("final-encoding record count overflow")?;
+                block_count = block_count
+                    .checked_add(formatted.len())
+                    .context("final-encoding block count overflow")?;
+            }
+        }
+        ensure!(
+            usize::try_from(ordinal).ok() == Some(bitset.bit_len),
+            "survivor bitset length does not match source block"
+        );
+        ensure!(
+            block_count == bitset_file.unique_count,
+            "final pass selected {block_count} rows for a block whose bitset kept {}",
+            bitset_file.unique_count
+        );
+        block_lengths.push(block_count);
+    }
+    ensure!(
+        record_count == deduplicated.unique_count,
+        "final encoding wrote {record_count} rows, expected {}",
+        deduplicated.unique_count
+    );
+    ensure!(
+        block_lengths == deduplicated.block_lengths,
+        "final encoding block lengths do not match de-duplication result"
+    );
+
+    text_writer
+        .flush()
+        .context("failed to flush the CSF text writer")?;
+    drop(text_writer);
+    csf_parquet_writer
+        .close()
+        .context("failed to close the CSF Parquet writer")?;
+    descriptor_writer
+        .close()
+        .context("failed to close the final descriptor Parquet writer")?;
+    publish_temporary_output(text_temporary.path(), csf_output, false)?;
+    publish_temporary_output(descriptor_temporary.path(), descriptor_output, false)?;
+    let descriptor_bytes = fs::metadata(descriptor_output)?.len();
+    let csf_bytes = fs::metadata(csf_output)?.len();
+    let csf_parquet_bytes = fs::metadata(csf_parquet_output)?.len();
+    Ok(FinalEncodingStats {
+        record_count,
+        block_count: block_lengths.len(),
+        descriptor_bytes,
+        csf_bytes,
+        csf_parquet_bytes,
+        prepare,
+        encode,
+        write,
     })
 }
 
@@ -3001,6 +3430,10 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// One run's published result: CSF text, descriptor rows, record count,
+    /// block count.
+    type Published = (Vec<u8>, Vec<Vec<i32>>, usize, usize);
+
     /// The verified path must publish exactly what the exact path publishes.
     ///
     /// This is the differential the proof needs: the same transcript, generated
@@ -3011,8 +3444,7 @@ mod tests {
     fn the_verified_path_publishes_what_the_exact_path_publishes() {
         let root = temporary_directory("verified-differential");
         fs::create_dir(&root).unwrap();
-        let mut published: Vec<(DeduplicationStrategy, Vec<u8>, Vec<Vec<i32>>, usize, usize)> =
-            Vec::new();
+        let mut previous: Option<Published> = None;
         for strategy in [
             DeduplicationStrategy::VerifiedUnique,
             DeduplicationStrategy::Exact,
@@ -3046,23 +3478,31 @@ mod tests {
             // exact path must find zero here for that to be the same statement.
             assert_eq!(stats.duplicate_count, 0);
             assert_eq!(stats.generated_count, stats.unique_count);
-            published.push((
-                strategy,
+            let publication: Published = (
                 fs::read(&csf).unwrap(),
                 read_rows(&descriptors).unwrap(),
                 stats.generated_count,
                 stats.block_count,
-            ));
-        }
-        let (_, csf, rows, records, blocks) = &published[0];
-        for (strategy, other_csf, other_rows, other_records, other_blocks) in &published[1..] {
-            assert_eq!(other_csf, csf, "{strategy:?} changed the CSF text");
-            assert_eq!(other_rows, rows, "{strategy:?} changed the descriptor rows");
-            assert_eq!(
-                other_records, records,
-                "{strategy:?} changed the record count"
             );
-            assert_eq!(other_blocks, blocks, "{strategy:?} changed the block count");
+            if let Some((other_csf, other_rows, other_records, other_blocks)) = &previous {
+                assert_eq!(
+                    &publication.0, other_csf,
+                    "{strategy:?} changed the CSF text"
+                );
+                assert_eq!(
+                    &publication.1, other_rows,
+                    "{strategy:?} changed the descriptor rows"
+                );
+                assert_eq!(
+                    publication.2, *other_records,
+                    "{strategy:?} changed the record count"
+                );
+                assert_eq!(
+                    publication.3, *other_blocks,
+                    "{strategy:?} changed the block count"
+                );
+            }
+            previous = Some(publication);
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -3221,6 +3661,129 @@ mod tests {
         assert!(stats.duplicate_count <= stats.generated_count);
         assert!(csf_parquet.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The combined final-encoding pass must publish exactly what the
+    /// two-pass path (descriptor merge, then descriptor read-back) published.
+    ///
+    /// This is P4's differential: the old tail is kept as the reference
+    /// implementation precisely so the new one-pass tail can be compared
+    /// against it. The descriptor Parquet and the CSF text are compared byte
+    /// for byte — same writers, same order — while the CSF Parquet is compared
+    /// by logical rows, because its row-group boundaries follow the batch
+    /// layout of whichever path produced it and byte equality is not part of
+    /// its contract.
+    #[test]
+    fn the_combined_final_pass_publishes_what_merge_and_restore_published() {
+        let root = temporary_directory("final-encoding-differential");
+        fs::create_dir(&root).unwrap();
+        let mut publications = Vec::new();
+        for (label, combined) in [("two-pass", false), ("combined", true)] {
+            let directory = root.join(label);
+            fs::create_dir(&directory).unwrap();
+            let request = ExcitationRequest::from_transcript(prefix_split_transcript()).unwrap();
+            let generated = generate_v2_descriptor_segments(
+                &request,
+                &directory.join("ranges"),
+                &StreamingGenerationOptions {
+                    threads: Some(1),
+                    records_per_task: Some(3),
+                    rows_per_batch: 2,
+                    rows_per_segment: 5,
+                    ..StreamingGenerationOptions::default()
+                },
+            )
+            .unwrap();
+            let deduplicated =
+                verified_unique_deduplication(&generated, &directory.join("dedup")).unwrap();
+            let header_lines =
+                generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
+            write_generation_header(
+                &directory.join("header.toml"),
+                header_lines.clone(),
+                &deduplicated,
+            )
+            .unwrap();
+            let csf = directory.join("out.c");
+            let csf_parquet = directory.join("out.parquet");
+            let descriptors = directory.join("descriptors.parquet");
+            if combined {
+                let stats = build_final_outputs_from_segments(
+                    &deduplicated,
+                    &header_lines,
+                    &descriptors,
+                    &csf,
+                    &csf_parquet,
+                    Some(2),
+                )
+                .unwrap();
+                assert_eq!(stats.record_count, deduplicated.unique_count);
+                assert_eq!(stats.block_count, deduplicated.block_lengths.len());
+                assert!(stats.prepare.elapsed_millis() <= stats.record_count as u128 * 1000);
+            } else {
+                merge_v2_deduplicated_segments(&deduplicated, &descriptors).unwrap();
+                crate::csfs_descriptor::restore_v2_descriptor_parquet_to_outputs(
+                    &descriptors,
+                    &directory.join("header.toml"),
+                    &csf,
+                    Some(&csf_parquet),
+                )
+                .unwrap();
+            }
+            publications.push((
+                fs::read(&csf).unwrap(),
+                fs::read(&descriptors).unwrap(),
+                read_csf_parquet_rows(&csf_parquet).unwrap(),
+            ));
+        }
+        let (old_csf, old_descriptors, old_parquet_rows) = &publications[0];
+        let (new_csf, new_descriptors, new_parquet_rows) = &publications[1];
+        assert_eq!(new_csf, old_csf, "the combined pass changed the CSF text");
+        assert_eq!(
+            new_descriptors, old_descriptors,
+            "the combined pass changed the descriptor Parquet"
+        );
+        assert_eq!(
+            new_parquet_rows, old_parquet_rows,
+            "the combined pass changed the CSF Parquet rows"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Read the logical rows of a three-line CSF Parquet file.
+    fn read_csf_parquet_rows(path: &Path) -> Result<Vec<(u64, String, String, String)>> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let file = File::open(path)?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
+        let mut rows = Vec::new();
+        for batch in reader {
+            let batch = batch?;
+            let index = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .context("CSF Parquet idx column is not UInt64")?;
+            let lines = (1..4)
+                .map(|column| {
+                    Ok(batch
+                        .column(column)
+                        .as_any()
+                        .downcast_ref::<arrow::array::StringArray>()
+                        .context("CSF Parquet line column is not Utf8")?
+                        .to_owned())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for row in 0..batch.num_rows() {
+                rows.push((
+                    index.value(row),
+                    lines[0].value(row).to_owned(),
+                    lines[1].value(row).to_owned(),
+                    lines[2].value(row).to_owned(),
+                ));
+            }
+        }
+        Ok(rows)
     }
 
     /// Every codec must reach the writer, be readable again, and be reported.

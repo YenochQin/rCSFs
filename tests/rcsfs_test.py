@@ -424,8 +424,9 @@ def test_disk_generation_scratch_layout_and_v2_roundtrip(
         "workload_planning",
         "csf_generation",
         "deduplication",
-        "descriptor_merge",
-        "csf_restore",
+        "final_encoding_prepare",
+        "final_encoding_encode",
+        "final_encoding_write",
     ]
     assert stats["plan_stats"]["estimated_total_records"] == stats["generated_count"]
     assert all(stage["elapsed_millis"] >= 0 for stage in stats["stage_stats"])

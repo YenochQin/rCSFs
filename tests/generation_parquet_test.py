@@ -166,6 +166,77 @@ def test_estimate_names_the_segment_codec_it_assumed(
     assert compressed["bytes"]["segments"] == estimate["bytes"]["segments"]
 
 
+def test_deduplication_strategy_is_reported_and_selectable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`duplicate_count` must be readable for what it is.
+
+    The default path skips the exact comparison because the internal generator
+    cannot repeat a row, so its zero is a fact about the proof; the exact path
+    measures it. A run has to say which one produced the number.
+    """
+    transcript = "* ! Orbital order\n0\n2s(2,*)2p(1,*)\n\n3s,3p,3d\n1,3\n1\nn\n"
+
+    def run(label: str) -> dict[str, object]:
+        directory = tmp_path / label
+        directory.mkdir()
+        return generate_disk_outputs_from_transcript(
+            transcript,
+            directory / "out.c",
+            directory / "out.parquet",
+            directory / "descriptors.parquet",
+            directory / "header.toml",
+            directory / "scratch",
+        )
+
+    monkeypatch.delenv("RCSFS_DEDUPLICATION", raising=False)
+    verified = run("verified")
+    assert verified["deduplication"] == "verified_unique"
+    assert verified["duplicate_count"] == 0
+
+    monkeypatch.setenv("RCSFS_DEDUPLICATION", "exact")
+    exact = run("exact")
+    assert exact["deduplication"] == "exact"
+    assert exact["duplicate_count"] == 0
+    # The strategy changes how the number was obtained, not the published rows.
+    assert exact["record_count"] == verified["record_count"]
+    assert exact["block_count"] == verified["block_count"]
+
+    monkeypatch.setenv("RCSFS_DEDUPLICATION", "trusted")
+    with pytest.raises(ValueError, match="invalid de-duplication strategy"):
+        run("invalid")
+
+
+def test_the_estimate_prices_the_strategy_the_run_will_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pre-flight that reserves buckets a run never writes is wrong, not safe.
+
+    The verified path writes no root or recursive bucket, so pricing them would
+    multiply the scratch requirement of the very mode the disk path defaults to.
+    """
+    transcript = "* ! Orbital order\n0\n2s(2,*)2p(1,*)\n\n3s,3p,3d\n1,3\n1\nn\n"
+    monkeypatch.delenv("RCSFS_DEDUPLICATION", raising=False)
+    verified = estimate_disk_generation(transcript)
+    assert verified["deduplication"] == "verified_unique"
+    assert verified["bytes"]["root_buckets"] == 0
+    assert verified["bytes"]["recursive_buckets"] == 0
+    assert verified["bytes"]["segments"] > 0
+    assert verified["bytes"]["survivor_bitsets"] > 0
+    assert any("verified path" in line for line in verified["assumptions"])
+
+    monkeypatch.setenv("RCSFS_DEDUPLICATION", "exact")
+    exact = estimate_disk_generation(transcript)
+    assert exact["deduplication"] == "exact"
+    assert exact["bytes"]["root_buckets"] > 0
+    assert exact["bytes"]["recursive_buckets"] > 0
+    assert exact["bytes"]["segments"] == verified["bytes"]["segments"]
+    assert any("exact path" in line for line in exact["assumptions"])
+    assert (
+        exact["bytes"]["scratch_peak"] > verified["bytes"]["scratch_peak"]
+    ), "the exact path writes buckets the verified path does not"
+
+
 def test_config_generation_reads_memory_budget(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:

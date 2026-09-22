@@ -29,10 +29,10 @@ use super::{
     ArtifactKind, CapacityEstimate, SpaceCheck, SpacePolicy, SpaceRole, check_space, preflight_run,
 };
 use super::{
-    EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, GeneratedRecordRef,
-    GeneratedRecordSink, GenerationOptions, GenerationPlan, Parity, PlanStats, PlannedTask,
-    RecordSelection, ResourceBudget, ResourcePermit, ResourceStats, SegmentCodec, Subshell,
-    SubshellOccupation, TaskSpan, enumerate_occupations_with_budget, estimate_capacity,
+    DeduplicationStrategy, EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest,
+    GeneratedRecordRef, GeneratedRecordSink, GenerationOptions, GenerationPlan, Parity, PlanStats,
+    PlannedTask, RecordSelection, ResourceBudget, ResourcePermit, ResourceStats, SegmentCodec,
+    Subshell, SubshellOccupation, TaskSpan, enumerate_occupations_with_budget, estimate_capacity,
     estimate_workload, generate_configuration_records, plan_generation, report_plan,
     request_targets,
 };
@@ -292,6 +292,10 @@ pub(crate) struct DiskGenerationStats {
     /// above describes uncompressed segments regardless, so a compressed run
     /// is smaller than this accounting suggests.
     pub(crate) segment_codec: &'static str,
+    /// How the published rows were made unique, so `duplicate_count` can be
+    /// read for what it is: measured under `exact`, zero by construction under
+    /// `verified_unique`.
+    pub(crate) deduplication: &'static str,
     pub(crate) stage_stats: Vec<StageStats>,
     pub(crate) resource_stats: ResourceStats,
     pub(crate) plan_stats: PlanStats,
@@ -387,18 +391,30 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
     );
     print_j_value_summary(&generated.segments);
 
-    eprintln!("Deduplicating descriptor segments...");
+    // The strategy is decided by the construction, never by a caller: every
+    // record here comes from the internal generator, which the uniqueness proof
+    // covers end to end. A caller can only ask for the slower strategy that
+    // re-checks the proof.
     let dedup_timer = StageTimer::start();
     let generated_bytes = generated
         .segments
         .iter()
         .try_fold(0u64, |total, segment| total.checked_add(segment.byte_count))
         .context("generated segment byte count overflow")?;
-    let deduplicated = deduplicate_v2_descriptor_segments(
-        &generated,
-        &scratch_dir.join("dedup"),
-        &DeduplicationOptions::default(),
-    )?;
+    let deduplicated = match options.deduplication {
+        DeduplicationStrategy::VerifiedUnique => {
+            eprintln!("Verifying generated CSFs are unique (proof-backed path)...");
+            verified_unique_deduplication(&generated, &scratch_dir.join("dedup"))?
+        }
+        DeduplicationStrategy::Exact => {
+            eprintln!("Deduplicating descriptor segments...");
+            deduplicate_v2_descriptor_segments(
+                &generated,
+                &scratch_dir.join("dedup"),
+                &DeduplicationOptions::default(),
+            )?
+        }
+    };
     let dedup_bytes = deduplicated.temporary_bytes_written;
     stage_stats.push(dedup_timer.finish(
         "deduplication",
@@ -407,10 +423,20 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
         generated_bytes,
         dedup_bytes,
     ));
-    eprintln!(
-        "Deduplicated: {} unique CSFs ({} duplicates removed)",
-        deduplicated.unique_count, deduplicated.duplicate_count
-    );
+    if options.deduplication == DeduplicationStrategy::Exact {
+        eprintln!(
+            "Deduplicated: {} unique CSFs ({} duplicates removed)",
+            deduplicated.unique_count, deduplicated.duplicate_count
+        );
+    } else {
+        // Say what was and was not checked: the count below is zero because the
+        // generator cannot repeat a record, not because a comparison found none.
+        eprintln!(
+            "Verified {} CSFs unique by construction (exact comparison not run; \
+             set RCSFS_DEDUPLICATION=exact to measure it)",
+            deduplicated.unique_count
+        );
+    }
 
     eprintln!("Writing generation header...");
     let header_lines = generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
@@ -461,6 +487,7 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
         csf_bytes,
         descriptor_bytes,
         segment_codec: generated.segment_codec.name(),
+        deduplication: options.deduplication.name(),
         stage_stats,
         resource_stats: generated
             .budget
@@ -483,6 +510,9 @@ pub(crate) struct DiskEstimate {
     /// The codec the predicted run would write its segments with. The byte
     /// model is uncompressed, so a compressed run stays inside the estimate.
     pub(crate) segment_codec: &'static str,
+    /// The de-duplication strategy the estimate priced. The scratch model
+    /// depends on it: the verified path writes no bucket at all.
+    pub(crate) deduplication: &'static str,
     pub(crate) enumeration_millis: u128,
     pub(crate) planning_millis: u128,
 }
@@ -553,12 +583,14 @@ pub(crate) fn estimate_disk_generation_with_layout(
         u64::try_from(request_targets(&request)?.len())
             .context("2J target count exceeds u64")?
             .saturating_mul(2),
+        options.deduplication,
     )?;
     let estimate = DiskEstimate {
         layout: DescriptorLayout::new(DescriptorVersion::V2, peel.len()),
         plan_stats: plan.stats(),
         capacity,
         segment_codec: options.segment_codec.name(),
+        deduplication: options.deduplication.name(),
         enumeration_millis,
         planning_millis: planning_timer.wall.elapsed().as_millis(),
     };
@@ -717,6 +749,7 @@ pub(crate) fn generate_v2_descriptor_segments_checked(
         u64::try_from(request_targets(request)?.len())
             .context("2J target count exceeds u64")?
             .saturating_mul(2),
+        options.deduplication,
     )?;
     preflight(&capacity)?;
     let generation_timer = StageTimer::start();
@@ -1038,6 +1071,95 @@ pub(crate) fn deduplicate_v2_descriptor_segments(
         temporary_bytes_written,
         budget: generated.budget.clone(),
     })
+}
+
+/// The verified path: every generated row survives, by the uniqueness proof.
+///
+/// The internal generator cannot emit the same V2 row twice
+/// (`docs/V2_GENERATION_UNIQUENESS.md`), so a run that reaches this function
+/// with the generator's own records has nothing to remove. What it still does
+/// is the part that is not a comparison: the merge reads the segments back in
+/// publication order, so the survivor bitsets have to exist and have to cover
+/// exactly the rows the merge will visit. They are written full instead of
+/// being filled in by a bucket comparison, which removes the root-bucket round
+/// trip — every row written twice and read twice — from the run.
+///
+/// What this path does *not* do is measure anything: `duplicate_count` is zero
+/// by construction here, not because zero were found. A caller that wants the
+/// count measured asks for [`DeduplicationStrategy::Exact`].
+pub(crate) fn verified_unique_deduplication(
+    generated: &SegmentGeneration,
+    scratch_dir: &Path,
+) -> Result<DeduplicatedSegments> {
+    ensure!(
+        !generated.segments.is_empty(),
+        "cannot verify an empty segment set"
+    );
+    fs::create_dir(scratch_dir).with_context(|| {
+        format!(
+            "failed to create de-duplication scratch directory {}",
+            scratch_dir.display()
+        )
+    })?;
+
+    let mut blocks = grouped_segments(&generated.segments);
+    let mut survivor_bitsets = BTreeMap::new();
+    let mut block_lengths = Vec::with_capacity(blocks.len());
+    let mut temporary_bytes_written = 0u64;
+    for (&key, segments) in &mut blocks {
+        segments.sort_by_key(|segment| (segment.range_ordinal, segment.local_start));
+        let rows = segments.iter().try_fold(0usize, |total, segment| {
+            total
+                .checked_add(segment.record_count)
+                .context("descriptor block record count overflow")
+        })?;
+        let block_dir = scratch_dir.join(block_directory_name(key));
+        fs::create_dir(&block_dir).with_context(|| {
+            format!("failed to create bucket directory {}", block_dir.display())
+        })?;
+        let path = block_dir.join("survivors.bitset");
+        let mut bitset = SurvivorBitset::new_with_budget(path, rows, Some(&generated.budget))?;
+        // Every ordinal the merge will visit must be marked: a missed bit would
+        // silently drop a record rather than being caught later, because this
+        // path has no comparison to disagree with it.
+        for ordinal in 0..rows {
+            bitset.mark(u64::try_from(ordinal).context("ordinal exceeds u64")?)?;
+        }
+        let file = bitset.finish()?;
+        temporary_bytes_written = temporary_bytes_written
+            .checked_add(fs::metadata(&file.path)?.len())
+            .context("survivor bitset byte count overflow")?;
+        ensure!(
+            file.unique_count == rows,
+            "the verified survivor bitset covers {} of {rows} rows",
+            file.unique_count
+        );
+        block_lengths.push(rows);
+        survivor_bitsets.insert(key, file);
+    }
+    ensure!(
+        generated_count(&block_lengths) == generated.record_count,
+        "the verified survivor bitsets cover {} rows but generation reported {}",
+        generated_count(&block_lengths),
+        generated.record_count
+    );
+    Ok(DeduplicatedSegments {
+        layout: generated.layout,
+        peel_subshells: generated.peel_subshells.clone(),
+        segments: generated.segments.clone(),
+        survivor_bitsets,
+        generated_count: generated.record_count,
+        unique_count: generated.record_count,
+        duplicate_count: 0,
+        hash_collision_count: 0,
+        block_lengths,
+        temporary_bytes_written,
+        budget: generated.budget.clone(),
+    })
+}
+
+fn generated_count(block_lengths: &[usize]) -> usize {
+    block_lengths.iter().copied().sum()
 }
 
 /// Write unique V2 descriptors selected by
@@ -2876,6 +2998,139 @@ mod tests {
         let merge = merge_v2_deduplicated_segments(&deduplicated, &output).unwrap();
         assert_eq!(merge.record_count, baseline_rows.len());
         assert_eq!(read_rows(&output).unwrap(), baseline_rows);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The verified path must publish exactly what the exact path publishes.
+    ///
+    /// This is the differential the proof needs: the same transcript, generated
+    /// and published twice, once with the root-bucket comparison and once
+    /// without it. If the two disagree on a byte, the proof or the fast path is
+    /// wrong, and the exact path is what decides.
+    #[test]
+    fn the_verified_path_publishes_what_the_exact_path_publishes() {
+        let root = temporary_directory("verified-differential");
+        fs::create_dir(&root).unwrap();
+        let mut published: Vec<(DeduplicationStrategy, Vec<u8>, Vec<Vec<i32>>, usize, usize)> =
+            Vec::new();
+        for strategy in [
+            DeduplicationStrategy::VerifiedUnique,
+            DeduplicationStrategy::Exact,
+        ] {
+            let directory = root.join(strategy.name());
+            fs::create_dir(&directory).unwrap();
+            let csf = directory.join("out.c");
+            let csf_parquet = directory.join("out.parquet");
+            let descriptors = directory.join("descriptors.parquet");
+            let header = directory.join("header.toml");
+            let stats = generate_disk_outputs_from_transcript_with_options(
+                prefix_split_transcript(),
+                &csf,
+                &csf_parquet,
+                &descriptors,
+                &header,
+                &GenerationOptions {
+                    threads: Some(1),
+                    records_per_task: Some(3),
+                    rows_per_batch: 2,
+                    rows_per_segment: 3,
+                    deduplication: strategy,
+                    scratch_dir: Some(directory.join("scratch")),
+                    ..GenerationOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(stats.deduplication, strategy.name());
+            // Both paths must agree on the statistics, not only on the bytes:
+            // the verified path reports zero duplicates by construction and the
+            // exact path must find zero here for that to be the same statement.
+            assert_eq!(stats.duplicate_count, 0);
+            assert_eq!(stats.generated_count, stats.unique_count);
+            published.push((
+                strategy,
+                fs::read(&csf).unwrap(),
+                read_rows(&descriptors).unwrap(),
+                stats.generated_count,
+                stats.block_count,
+            ));
+        }
+        let (_, csf, rows, records, blocks) = &published[0];
+        for (strategy, other_csf, other_rows, other_records, other_blocks) in &published[1..] {
+            assert_eq!(other_csf, csf, "{strategy:?} changed the CSF text");
+            assert_eq!(other_rows, rows, "{strategy:?} changed the descriptor rows");
+            assert_eq!(
+                other_records, records,
+                "{strategy:?} changed the record count"
+            );
+            assert_eq!(other_blocks, blocks, "{strategy:?} changed the block count");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// And the two paths must be genuinely different: on a segment set that
+    /// repeats a row — the shape the P6a control produces — the verified path
+    /// keeps both copies while the exact path removes one.
+    ///
+    /// Nothing reachable through a transcript looks like this, which is exactly
+    /// why the fast path is limited to the internal generator. The test states
+    /// the boundary instead of leaving it implicit: if the fast path were ever
+    /// selected for a repeated input, this is the difference it would make.
+    #[test]
+    fn a_repeated_segment_is_only_removed_by_the_exact_path() {
+        let request = ExcitationRequest::from_transcript(transcript()).unwrap();
+        let root = temporary_directory("verified-boundary");
+        fs::create_dir(&root).unwrap();
+        let generated = generate_v2_descriptor_segments(
+            &request,
+            &root.join("ranges"),
+            &StreamingGenerationOptions {
+                threads: Some(1),
+                ..StreamingGenerationOptions::default()
+            },
+        )
+        .unwrap();
+        let duplicate = copy_segment_into_later_range(
+            &generated.segments[0],
+            generated.layout,
+            &root.join("later-range.arrow"),
+            999_999,
+        );
+        let duplicated = SegmentGeneration {
+            layout: generated.layout,
+            peel_subshells: generated.peel_subshells.clone(),
+            core_subshells: generated.core_subshells.clone(),
+            plan: generated.plan.clone(),
+            segments: generated
+                .segments
+                .iter()
+                .cloned()
+                .chain(std::iter::once(duplicate.clone()))
+                .collect(),
+            unique_occupations: generated.unique_occupations,
+            record_count: generated.record_count + duplicate.record_count,
+            segment_codec: generated.segment_codec,
+            stage_stats: generated.stage_stats.clone(),
+            budget: generated.budget.clone(),
+            resource_stats: generated.resource_stats.clone(),
+        };
+
+        let verified =
+            verified_unique_deduplication(&duplicated, &root.join("verified-dedup")).unwrap();
+        assert_eq!(verified.duplicate_count, 0);
+        assert_eq!(verified.unique_count, duplicated.record_count);
+
+        let exact = deduplicate_v2_descriptor_segments(
+            &duplicated,
+            &root.join("exact-dedup"),
+            &DeduplicationOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(exact.duplicate_count, duplicate.record_count);
+        assert_eq!(
+            exact.unique_count + exact.duplicate_count,
+            verified.unique_count,
+            "the two paths must disagree by exactly the repeated rows"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

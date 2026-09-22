@@ -14,6 +14,8 @@
 
 use anyhow::{Context, Result, bail};
 
+use super::DeduplicationStrategy;
+
 /// Extra bytes per row for the Arrow IPC framing of a segment.
 ///
 /// Measured at 3.3% over the raw `4M + 2` integers plus the two storage
@@ -172,10 +174,18 @@ pub(crate) fn with_margin(value: u64) -> Result<u64> {
 ///
 /// `blocks` is the number of `(2J, parity)` symmetry blocks, used only to size
 /// the survivor bitsets.
+///
+/// `strategy` decides how much of the scratch the model may claim at all: the
+/// verified path writes no root or recursive bucket, so pricing those buckets
+/// for it would reserve several times the space the run uses. The model must
+/// describe the run it is asked about — an upper bound on a run that will not
+/// happen is not conservative, it is wrong in the other direction, because it
+/// can refuse a job that fits.
 pub(crate) fn estimate_capacity(
     peel_subshells: usize,
     pre_deduplication_records: u64,
     blocks: u64,
+    strategy: DeduplicationStrategy,
 ) -> Result<CapacityEstimate> {
     let peel = u64::try_from(peel_subshells).context("peel subshell count exceeds u64")?;
     let v2_columns = peel
@@ -198,12 +208,20 @@ pub(crate) fn estimate_capacity(
     let segment_bytes = pre_deduplication_records
         .checked_mul(segment_row_bytes)
         .context("segment size estimate overflow")?;
-    let root_bucket_bytes = pre_deduplication_records
-        .checked_mul(bucket_row_bytes)
-        .context("root bucket size estimate overflow")?;
-    let recursive_bucket_bytes = root_bucket_bytes
-        .checked_mul(RECURSIVE_REPARTITION_LEVELS)
-        .context("recursive bucket size estimate overflow")?;
+    let (root_bucket_bytes, recursive_bucket_bytes) = match strategy {
+        DeduplicationStrategy::Exact => {
+            let root = pre_deduplication_records
+                .checked_mul(bucket_row_bytes)
+                .context("root bucket size estimate overflow")?;
+            let recursive = root
+                .checked_mul(RECURSIVE_REPARTITION_LEVELS)
+                .context("recursive bucket size estimate overflow")?;
+            (root, recursive)
+        }
+        // The verified path writes no bucket at all, so there is nothing to
+        // allow for — not even a recursion level.
+        DeduplicationStrategy::VerifiedUnique => (0, 0),
+    };
     // One bit per surviving ordinal, plus a small header per symmetry block.
     let survivor_bitset_bytes = pre_deduplication_records
         .checked_div(8)
@@ -237,6 +255,19 @@ pub(crate) fn estimate_capacity(
             "record counts are pre-de-duplication: no record is assumed to be removed \
              (B1/B2 removed none, and a removing input only lowers the published sizes)"
         ),
+        match strategy {
+            DeduplicationStrategy::VerifiedUnique => {
+                "de-duplication is the verified path: the generator cannot repeat a row, so \
+                 no root or recursive bucket is written and the scratch model covers segments \
+                 and survivor bitsets only"
+                    .to_owned()
+            }
+            DeduplicationStrategy::Exact => {
+                "de-duplication is the exact path: the model covers one full root-bucket pass \
+                 and one recursive repartition of an oversized leaf"
+                    .to_owned()
+            }
+        },
         format!(
             "segments {segment_row_bytes} bytes/row = 1.1x the {row_bytes}-byte V2 row plus \
              two ordinals; measured overhead was 3.3%, and the model assumes *uncompressed* \
@@ -295,8 +326,8 @@ mod tests {
 
     #[test]
     fn a_wider_layout_never_estimates_smaller_sizes() {
-        let narrow = estimate_capacity(24, 1_000_000, 2).unwrap();
-        let wide = estimate_capacity(56, 1_000_000, 2).unwrap();
+        let narrow = estimate_capacity(24, 1_000_000, 2, DeduplicationStrategy::Exact).unwrap();
+        let wide = estimate_capacity(56, 1_000_000, 2, DeduplicationStrategy::Exact).unwrap();
         assert!(wide.segment_bytes > narrow.segment_bytes);
         assert!(wide.root_bucket_bytes > narrow.root_bucket_bytes);
         assert!(wide.descriptor_bytes > narrow.descriptor_bytes);
@@ -310,7 +341,7 @@ mod tests {
         // B1: 2,695,762 records over a 24-subshell Peel table. Measured
         // 1,124,709,846 segment bytes, 1,121,773,963 bucket bytes and a
         // 2,232,842,742-byte scratch peak.
-        let b1 = estimate_capacity(24, 2_695_762, 1).unwrap();
+        let b1 = estimate_capacity(24, 2_695_762, 1, DeduplicationStrategy::Exact).unwrap();
         assert!(b1.segment_bytes >= 1_124_709_846);
         assert!(b1.root_bucket_bytes >= 1_121_773_963);
         assert!(b1.scratch_peak_bytes >= 2_232_842_742);
@@ -321,7 +352,7 @@ mod tests {
         // bytes, 520,075,772 bucket bytes, 1,046,641,830-byte scratch peak,
         // 781,637 descriptor bytes, 168,534,272 text bytes and 40,680,076
         // Parquet bytes.
-        let b2 = estimate_capacity(56, 560_351, 1).unwrap();
+        let b2 = estimate_capacity(56, 560_351, 1, DeduplicationStrategy::Exact).unwrap();
         assert!(b2.segment_bytes >= 530_280_358);
         assert!(b2.root_bucket_bytes >= 520_075_772);
         assert!(b2.scratch_peak_bytes >= 1_046_641_830);
@@ -334,7 +365,7 @@ mod tests {
     /// estimate: the same numbers, two different questions.
     #[test]
     fn counting_overflow_is_an_error_not_an_estimate() {
-        assert!(estimate_capacity(56, u64::MAX, 1).is_err());
-        assert!(estimate_capacity(usize::MAX, 1, 1).is_err());
+        assert!(estimate_capacity(56, u64::MAX, 1, DeduplicationStrategy::Exact).is_err());
+        assert!(estimate_capacity(usize::MAX, 1, 1, DeduplicationStrategy::Exact).is_err());
     }
 }

@@ -61,6 +61,61 @@ impl SegmentCodec {
     }
 }
 
+/// How the disk path makes the published descriptor unique.
+///
+/// The internal generation path is proven to emit pairwise-distinct rows
+/// (`docs/V2_GENERATION_UNIQUENESS.md`), so for it the exact chain — partition
+/// every row into root buckets, compare whole rows, keep the first — removes
+/// nothing by construction. `VerifiedUnique` skips that round trip; `Exact` is
+/// kept, and is the only strategy that can *measure* a duplicate.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum DeduplicationStrategy {
+    /// Every record survives, because the generator cannot repeat one.
+    ///
+    /// No bucket is written and no row is compared: the survivor bitset is
+    /// full. Records are still validated by the writer, and the merge still
+    /// reads the segments back in publication order.
+    VerifiedUnique,
+    /// Compare every row against every other row of its symmetry block.
+    Exact,
+}
+
+/// Environment override for the de-duplication strategy, for verification and
+/// benchmark runs. Like the segment codec it is not a public option: the
+/// strategy is decided by the construction, not by the caller, and the only
+/// thing a caller can ask for is the slower strategy that re-checks the proof.
+const DEDUPLICATION_ENV: &str = "RCSFS_DEDUPLICATION";
+
+impl DeduplicationStrategy {
+    pub(crate) fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "verified_unique" => Ok(Self::VerifiedUnique),
+            "exact" => Ok(Self::Exact),
+            other => bail!(
+                "invalid de-duplication strategy {other:?}; expected one of: \
+                 verified_unique, exact"
+            ),
+        }
+    }
+
+    pub(crate) fn from_environment() -> Result<Self> {
+        match std::env::var(DEDUPLICATION_ENV) {
+            Ok(value) => Self::parse(&value),
+            Err(std::env::VarError::NotPresent) => Ok(Self::VerifiedUnique),
+            Err(error) => {
+                Err(anyhow::Error::new(error).context(format!("cannot read {DEDUPLICATION_ENV}")))
+            }
+        }
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::VerifiedUnique => "verified_unique",
+            Self::Exact => "exact",
+        }
+    }
+}
+
 /// Execution settings shared by the in-memory and disk generation paths.
 ///
 /// The storage-specific batch constants stay internal defaults.  Callers only
@@ -84,6 +139,9 @@ pub(crate) struct GenerationOptions {
     /// Codec for the temporary Arrow IPC segments. Set through the
     /// environment for the P2a experiment; the default is uncompressed.
     pub(crate) segment_codec: SegmentCodec,
+    /// How the published descriptor is made unique. The default is the
+    /// verified path the uniqueness proof licenses; `Exact` re-checks it.
+    pub(crate) deduplication: DeduplicationStrategy,
     pub(crate) budget: ResourceBudget,
 }
 
@@ -97,6 +155,7 @@ impl Default for GenerationOptions {
             rows_per_batch: 8_192,
             rows_per_segment: 131_072,
             segment_codec: SegmentCodec::None,
+            deduplication: DeduplicationStrategy::VerifiedUnique,
             budget: ResourceBudget::unlimited(),
         }
     }
@@ -126,6 +185,7 @@ impl GenerationOptions {
             budget,
             allow_unchecked_space,
             segment_codec: SegmentCodec::from_environment()?,
+            deduplication: DeduplicationStrategy::from_environment()?,
             ..Self::default()
         })
     }
@@ -332,6 +392,34 @@ mod tests {
             assert!(
                 error.contains("none, lz4, zstd"),
                 "the error must list what is valid: {error}"
+            );
+        }
+    }
+
+    /// The default is the strategy the proof licenses, and the only other
+    /// accepted value makes a run *re-check* the proof rather than skip a check.
+    #[test]
+    fn deduplication_names_round_trip_and_default_to_the_verified_path() {
+        for strategy in [
+            DeduplicationStrategy::VerifiedUnique,
+            DeduplicationStrategy::Exact,
+        ] {
+            assert_eq!(
+                DeduplicationStrategy::parse(strategy.name()).unwrap(),
+                strategy
+            );
+        }
+        assert_eq!(
+            GenerationOptions::default().deduplication,
+            DeduplicationStrategy::VerifiedUnique
+        );
+        for invalid in ["", "none", "skip", "trusted", "VERIFIED_UNIQUE"] {
+            let error = DeduplicationStrategy::parse(invalid)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("invalid de-duplication strategy") && error.contains("exact"),
+                "{invalid:?} was accepted, or its error does not name the valid values: {error}"
             );
         }
     }

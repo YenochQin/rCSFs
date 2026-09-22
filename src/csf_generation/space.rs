@@ -273,6 +273,7 @@ pub(crate) fn preflight_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::csf_generation::DeduplicationStrategy;
     use crate::csf_generation::capacity::with_margin;
     use crate::csf_generation::estimate_capacity;
 
@@ -281,7 +282,7 @@ mod tests {
     /// a volume that cannot hold both.
     #[test]
     fn requirements_on_one_volume_are_added_together() {
-        let estimate = estimate_capacity(56, 1_000_000, 2).unwrap();
+        let estimate = estimate_capacity(56, 1_000_000, 2, DeduplicationStrategy::Exact).unwrap();
         let temporary = std::env::temp_dir();
         let scratch = temporary.join("rcsfs-capacity-test-scratch");
         let staged = temporary.join("rcsfs-capacity-test-staged");
@@ -348,8 +349,8 @@ mod tests {
     /// caller always gets the verdict, including the two failing ones.
     #[test]
     fn the_space_policy_decides_each_verdict_independently() {
-        let roomy = estimate_capacity(56, 1_000_000, 2).unwrap();
-        let mut short = estimate_capacity(56, 1_000_000, 2).unwrap();
+        let roomy = estimate_capacity(56, 1_000_000, 2, DeduplicationStrategy::Exact).unwrap();
+        let mut short = estimate_capacity(56, 1_000_000, 2, DeduplicationStrategy::Exact).unwrap();
         short.required_scratch_bytes = u64::MAX / 2;
         let existing = [(std::env::temp_dir(), SpaceRole::Scratch)];
         // Neither this path nor its parent exists, so the volume cannot be
@@ -424,7 +425,7 @@ mod tests {
     /// twice and report a requirement the run never reaches.
     #[test]
     fn one_artifact_cannot_be_published_twice() {
-        let estimate = estimate_capacity(56, 1_000_000, 2).unwrap();
+        let estimate = estimate_capacity(56, 1_000_000, 2, DeduplicationStrategy::Exact).unwrap();
         let published = |name: &str, artifact: ArtifactKind| {
             (
                 std::env::temp_dir().join(name),

@@ -74,6 +74,13 @@ SEGMENT_CODEC_ENV = "RCSFS_SEGMENT_CODEC"
 #: What `RCSFS_SEGMENT_CODEC` accepts.
 SEGMENT_CODECS = ("none", "lz4", "zstd")
 
+#: The extension reads the de-duplication strategy from the environment too, so
+#: one invocation can compare the proof-backed path against the exact one.
+DEDUPLICATION_ENV = "RCSFS_DEDUPLICATION"
+
+#: What `RCSFS_DEDUPLICATION` accepts.
+DEDUPLICATION_STRATEGIES = ("verified_unique", "exact")
+
 _STAGE_KEYS = (
     "unique_occupations",
     "generated_count",
@@ -177,6 +184,7 @@ def _run_once(
     threads: int | None,
     memory_budget_mib: int | None,
     segment_codec: str,
+    deduplication: str,
     scratch_root: Path,
 ) -> dict[str, Any]:
     root = Path(tempfile.mkdtemp(prefix="rcsfs-v2-benchmark-", dir=scratch_root))
@@ -193,9 +201,12 @@ def _run_once(
         "threads": threads,
         "memory_budget_mib": memory_budget_mib,
         "segment_codec": segment_codec,
+        "deduplication": deduplication,
     }
     previous_codec = os.environ.get(SEGMENT_CODEC_ENV)
+    previous_deduplication = os.environ.get(DEDUPLICATION_ENV)
     os.environ[SEGMENT_CODEC_ENV] = segment_codec
+    os.environ[DEDUPLICATION_ENV] = deduplication
     try:
         monitor.start()
         # The timed region excludes temporary-set creation and deletion, so it
@@ -235,6 +246,14 @@ def _run_once(
                 f"asked for segment codec {segment_codec!r} but the run reported "
                 f"{reported_codec!r}"
             )
+        reported_deduplication = stats.get("deduplication")
+        if reported_deduplication != deduplication:
+            # The same for the strategy: it decides whether duplicate_count is a
+            # measurement or a consequence of the uniqueness proof.
+            raise RuntimeError(
+                f"asked for de-duplication {deduplication!r} but the run reported "
+                f"{reported_deduplication!r}"
+            )
         result["wall_seconds"] = wall_seconds
         result["success"] = stats.get("success", False)
         for key in _STAGE_KEYS:
@@ -257,6 +276,10 @@ def _run_once(
             os.environ.pop(SEGMENT_CODEC_ENV, None)
         else:
             os.environ[SEGMENT_CODEC_ENV] = previous_codec
+        if previous_deduplication is None:
+            os.environ.pop(DEDUPLICATION_ENV, None)
+        else:
+            os.environ[DEDUPLICATION_ENV] = previous_deduplication
         monitor.stop()
         cleanup_started = time.perf_counter()
         shutil.rmtree(root, ignore_errors=True)
@@ -269,10 +292,11 @@ def _run_once(
 def _summarize(
     measurements: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    groups: dict[tuple[str, int | None, int | None], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, str, int | None, int | None], list[dict[str, Any]]] = {}
     rejected: list[dict[str, Any]] = []
     for measurement in measurements:
         key = (
+            measurement.get("deduplication", "verified_unique"),
             measurement.get("segment_codec", "none"),
             measurement["threads"],
             measurement.get("memory_budget_mib"),
@@ -285,23 +309,26 @@ def _summarize(
                     "threads": measurement["threads"],
                     "memory_budget_mib": measurement.get("memory_budget_mib"),
                     "segment_codec": measurement.get("segment_codec", "none"),
+                    "deduplication": measurement.get("deduplication", "verified_unique"),
                     "error": measurement.get("error"),
                 }
             )
             continue
         groups.setdefault(key, []).append(measurement)
     summary: list[dict[str, Any]] = []
-    for (codec, threads, budget), group in sorted(
+    for (deduplication, codec, threads, budget), group in sorted(
         groups.items(),
         key=lambda item: (
-            SEGMENT_CODECS.index(item[0][0]),
-            item[0][1] is not None,
-            item[0][1] or 0,
+            DEDUPLICATION_STRATEGIES.index(item[0][0]),
+            SEGMENT_CODECS.index(item[0][1]),
+            item[0][2] is not None,
             item[0][2] or 0,
+            item[0][3] or 0,
         ),
     ):
         walls = [entry["wall_seconds"] for entry in group]
         entry: dict[str, Any] = {
+            "deduplication": deduplication,
             "segment_codec": codec,
             "threads": threads,
             "memory_budget_mib": budget,
@@ -314,6 +341,15 @@ def _summarize(
                 [item["cleanup_seconds"] for item in group]
             ),
             "scratch_peak_bytes_max": max(item["scratch_peak_bytes"] for item in group),
+            "dedup_temp_bytes_median": statistics.median(
+                [
+                    stage["output_bytes"]
+                    for item in group
+                    for stage in item.get("stage_stats", [])
+                    if stage["name"] == "deduplication"
+                ]
+                or [0]
+            ),
             "segment_bytes_median": statistics.median(
                 [
                     stage["output_bytes"]
@@ -351,6 +387,40 @@ def _summarize(
     return summary, rejected
 
 
+def _check_strategy_agreement(measurements: list[dict[str, Any]]) -> None:
+    """The proof-backed path must publish exactly what the exact path publishes.
+
+    Both strategies are asked for in one invocation precisely so this can be
+    checked on the registered inputs rather than only in a unit test. Counts and
+    published sizes have to match; a difference means the skipped comparison was
+    not skipping nothing.
+    """
+    same = {}
+    for measurement in measurements:
+        if measurement.get("outcome") == "rejected":
+            continue
+        key = (
+            measurement.get("segment_codec", "none"),
+            measurement["threads"],
+            measurement.get("memory_budget_mib"),
+        )
+        figures = (
+            measurement.get("generated_count"),
+            measurement.get("record_count"),
+            measurement.get("duplicate_count"),
+            measurement.get("block_count"),
+            measurement.get("csf_bytes"),
+            measurement.get("descriptor_bytes"),
+        )
+        seen = same.setdefault(key, (measurement.get("deduplication"), figures))
+        if seen[1] != figures:
+            raise SystemExit(
+                f"de-duplication strategies disagree for {key}: "
+                f"{seen[0]} reported {seen[1]}, {measurement.get('deduplication')} "
+                f"reported {figures}"
+            )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     _ = parser.add_argument("transcript", type=Path)
@@ -379,6 +449,17 @@ def main() -> int:
             "Temporary Arrow IPC segment codecs to measure; each codec runs every "
             "requested thread/budget combination. The run reports the codec it "
             "actually used, so a mismatch fails instead of being recorded."
+        ),
+    )
+    _ = parser.add_argument(
+        "--deduplication",
+        choices=DEDUPLICATION_STRATEGIES,
+        nargs="+",
+        default=["verified_unique"],
+        help=(
+            "De-duplication strategies to measure. `verified_unique` is the "
+            "default the uniqueness proof licenses and reports zero duplicates "
+            "by construction; `exact` compares every row and measures the count."
         ),
     )
     _ = parser.add_argument(
@@ -428,7 +509,8 @@ def main() -> int:
     digest = sha256_file(args.transcript)
     registered = load_manifest(args.manifest)
     combinations = [
-        (codec, threads, budget)
+        (deduplication, codec, threads, budget)
+        for deduplication in args.deduplication
         for codec in args.segment_codec
         for threads in args.threads
         for budget in args.memory_budget_mib
@@ -437,15 +519,19 @@ def main() -> int:
     warmups: list[dict[str, Any]] = []
     measurements: list[dict[str, Any]] = []
     order = 0
-    for codec, threads, budget in combinations:
+    for deduplication, codec, threads, budget in combinations:
         for _ in range(args.warmup):
-            warmup = _run_once(transcript, threads, budget, codec, scratch_root)
+            warmup = _run_once(
+                transcript, threads, budget, codec, deduplication, scratch_root
+            )
             warmup["order"] = order
             warmup["kind"] = "warmup"
             order += 1
             warmups.append(warmup)
         for _ in range(args.repeats):
-            measurement = _run_once(transcript, threads, budget, codec, scratch_root)
+            measurement = _run_once(
+                transcript, threads, budget, codec, deduplication, scratch_root
+            )
             measurement["order"] = order
             measurement["kind"] = "measured"
             order += 1
@@ -465,6 +551,7 @@ def main() -> int:
         ),
         records=next((item.get("generated_count") for item in successful), None),
     )
+    _check_strategy_agreement(measurements)
     summary, rejected = _summarize(measurements)
     report = {
         "schema": REPORT_SCHEMA,
@@ -483,6 +570,7 @@ def main() -> int:
                 None if value is None else value for value in args.memory_budget_mib
             ],
             "segment_codecs": list(args.segment_codec),
+            "deduplication": list(args.deduplication),
             "scratch_root": str(scratch_root),
             "scratch_sampling_interval_seconds": SCRATCH_SAMPLE_INTERVAL_SECONDS,
             "timed_region": "generation call including artifact publication; excludes set-up and deletion",

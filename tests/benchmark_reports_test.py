@@ -20,13 +20,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_DIRECTORY = REPO_ROOT / "docs" / "benchmarks"
 FIXTURE_DIRECTORY = REPO_ROOT / "tests" / "fixtures"
 
-#: Reports measured before source identity was captured. Their numbers are the
-#: pre-planning baseline and are kept as recorded; the revision, tree and
-#: extension of that run cannot be reconstructed now, and the 2026-09-22 matrix
-#: supersedes them for every comparison a reader would make today.
+#: Reports measured before source identity was captured. Their numbers are kept
+#: as recorded; the revision, tree and extension of those runs cannot be
+#: reconstructed now. The two `v2_disk_generation_p0b_*` reports are the
+#: pre-planning baseline that the 2026-09-22 matrix supersedes, and the two
+#: `rcsfgenerate_*` ones come from a different script that needs a GRASP
+#: checkout and is documented as not reproducible from this repository alone.
 LEGACY_REPORTS = {
     "v2_disk_generation_p0b_b1_20260921.json",
     "v2_disk_generation_p0b_b2_20260921.json",
+    "rcsfgenerate_parallel_20260912.json",
+    "rcsfgenerate_serial_20260910.json",
 }
 
 

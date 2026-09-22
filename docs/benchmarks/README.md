@@ -16,6 +16,12 @@ They are not part of the test suite: no file in this directory is run by
   referenced by their registered file name and SHA-256.
 - Percentiles are taken from real samples, never interpolated. Performance
   claims name the code revision they were measured at.
+- A report names the source it was built from, not only a commit: `git.tree`,
+  `git.dirty_diff_sha256` when the tree was dirty, and
+  `environment.extension.module_sha256` for the binary the process actually
+  loaded. The dirty check ignores `docs/benchmarks`, because writing one report
+  must not make the next one claim a dirty source. A reader can rebuild the
+  recorded tree and compare binaries.
 
 ## Registered inputs
 

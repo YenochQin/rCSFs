@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### 测试环境：pytest 必须加载工作树而不是已安装的 wheel（2026-09-22）
+
+- `[tool.maturin] python-source = "."` 让仓库根目录本身就是包根，但裸 `pytest`
+  脚本不会把当前目录放进 `sys.path`，于是 `import rcsfs` 解析到共享环境
+  site-packages 里的 wheel——本仓库的测试因此一直在测"上次 `uv sync` 时"的代码，
+  而不是工作树。实测：裸 `pytest` 加载 `graspkit-tools/.venv/.../rcsfs/_rcsfs*.so`，
+  `python -m pytest` 才加载 `rCSFs/rcsfs/_rcsfs*.so`。
+- 在 `[tool.pytest.ini_options]` 中固定 `pythonpath = ["."]`，使 CLAUDE.md 中
+  "pytest 加载 in-tree 扩展"的说法真正成立；未刷新 in-tree 扩展时测试会立刻暴露，
+  而不是悄悄通过。全套 Python 测试在修正后仍全部通过。
+
 ### P6a：内部生成路径的唯一性证明与穷举程序（2026-09-22）
 
 - 新增 [V2_GENERATION_UNIQUENESS.md](V2_GENERATION_UNIQUENESS.md)：证明内部生成路径

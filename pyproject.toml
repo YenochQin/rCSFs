@@ -93,3 +93,9 @@ url = "https://mirrors.aliyun.com/pypi/simple/"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--ignore=temp"
+# `[tool.maturin] python-source = "."` makes this repository the package root,
+# so the checkout's `rcsfs/` must win over the wheel `uv sync` installed in the
+# shared environment. Without this, the bare `pytest` script resolves `rcsfs`
+# from site-packages and the suite silently tests whatever revision was last
+# synced instead of the working tree.
+pythonpath = ["."]

@@ -611,3 +611,40 @@ def test_the_one_pass_tail_published_what_the_two_pass_tail_published(
     # either direction would turn a layout detail into a contract. Its logical
     # rows are compared where they can be: the live differentials in
     # `streaming.rs` (both tails, and across thread counts).
+
+def test_the_harness_refuses_a_run_whose_stages_do_not_cover_the_call() -> None:
+    """A stage claim needs complete timers, so the harness checks for them.
+
+    The first version of the P4 report claimed a 2.47x stage speed-up from
+    phases that left the writers' footers, the flush, publication and two
+    data-sized loops outside every timer. The numbers were not wrong, they were
+    incomplete, and nothing said so. This is that check: a run whose stages
+    account for less of the call than the threshold allows is refused rather
+    than registered.
+    """
+    benchmark = _load_generation_benchmark()
+    refused = [
+        {
+            "outcome": "measured",
+            "wall_seconds": 1.0,
+            "stage_seconds": 0.70,
+            "unattributed_seconds": 0.30,
+        }
+    ]
+    with pytest.raises(SystemExit, match="outside every stage timer"):
+        benchmark._check_stage_coverage(refused)
+
+    # A rejected run has no stage timings to check, and a small residual is
+    # normal: parsing the transcript and the pre-flight's statvfs calls are not
+    # stages of their own.
+    benchmark._check_stage_coverage(
+        [
+            {
+                "outcome": "measured",
+                "wall_seconds": 1.0,
+                "stage_seconds": 0.98,
+                "unattributed_seconds": 0.02,
+            },
+            {"outcome": "rejected", "wall_seconds": 0.1},
+        ]
+    )

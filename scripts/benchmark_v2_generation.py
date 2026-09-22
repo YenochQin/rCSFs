@@ -282,6 +282,15 @@ def _run_once_in_process(
         for key in _STAGE_KEYS:
             if key in stats:
                 result[key] = stats[key]
+        # The stages must account for the call they describe. A phase that is
+        # left out of the timers is how a "stage is 2x faster" claim becomes
+        # unverifiable, so the residual is recorded and checked rather than
+        # being discovered later by arithmetic on the end-to-end time.
+        stage_seconds = sum(
+            stage.get("elapsed_millis", 0) for stage in stats.get("stage_stats", [])
+        ) / 1000.0
+        result["stage_seconds"] = stage_seconds
+        result["unattributed_seconds"] = wall_seconds - stage_seconds
         # This process performs exactly one run, so its lifetime high-water
         # mark is an independent measurement. Capture it before output hashing,
         # which is verification work outside the generation call.
@@ -480,6 +489,36 @@ def _check_strategy_agreement(measurements: list[dict[str, Any]]) -> None:
             )
 
 
+#: Largest share of the call that may be outside every stage timer before the
+#: report is refused. A small residual is unavoidable (transcript parsing, the
+#: pre-flight's statvfs calls, the binding's own marshalling); anything larger
+#: means a phase was added without a timer, and no stage claim can be checked.
+MAX_UNATTRIBUTED_SHARE = 0.10
+
+#: An absolute floor, so a sub-second run is not refused over a millisecond.
+MIN_UNATTRIBUTED_SECONDS = 0.05
+
+
+def _check_stage_coverage(measurements: list[dict[str, Any]]) -> None:
+    """Refuse a run whose stages do not account for the call they time."""
+    for measurement in measurements:
+        if measurement.get("outcome") == "rejected":
+            continue
+        wall = measurement["wall_seconds"]
+        unattributed = measurement.get("unattributed_seconds")
+        if unattributed is None:
+            raise SystemExit("a successful run recorded no stage accounting")
+        allowed = max(MIN_UNATTRIBUTED_SECONDS, wall * MAX_UNATTRIBUTED_SHARE)
+        if unattributed > allowed:
+            raise SystemExit(
+                f"the stages account for {wall - unattributed:.3f}s of a "
+                f"{wall:.3f}s call; {unattributed:.3f}s is outside every stage "
+                f"timer, which is more than the {allowed:.3f}s allowed. Add a "
+                f"timer for the phase that is missing, or the report's stage "
+                f"numbers cannot be checked against the end-to-end time."
+            )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     _ = parser.add_argument("transcript", type=Path)
@@ -610,6 +649,7 @@ def main() -> int:
         ),
         records=next((item.get("generated_count") for item in successful), None),
     )
+    _check_stage_coverage(measurements)
     _check_strategy_agreement(measurements)
     summary, rejected = _summarize(measurements)
     report = {

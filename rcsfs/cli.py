@@ -778,6 +778,11 @@ def _print_csfsgenerate_summary(stats: Mapping[str, object]) -> None:
     segment_codec = stats.get("segment_codec")
     if isinstance(segment_codec, str) and segment_codec != "none":
         print(f"segment_codec: {segment_codec}")
+    # Say how duplicate_count was obtained: "verified_unique" reports zero by
+    # construction, "exact" by comparing every row.
+    deduplication = stats.get("deduplication")
+    if isinstance(deduplication, str):
+        print(f"deduplication: {deduplication}")
     stage_stats = stats.get("stage_stats")
     if isinstance(stage_stats, list):
         for value in cast(list[object], stage_stats):

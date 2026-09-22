@@ -293,17 +293,35 @@ compressed run.
 
 ### De-duplication
 
-The disk path still runs the exact de-duplication stage, and its
-`duplicate_count` is a real measurement, but for this generation path it can
-never remove a row: the enumeration emits pairwise distinct occupations, a
-row's occupation columns identify its configuration, and one traversal of the
-state table produces at most one record whose row identifies that traversal.
-[V2_GENERATION_UNIQUENESS.md](V2_GENERATION_UNIQUENESS.md) proves this and
-`tests/p6a_uniqueness_test.rs` searches for a counterexample by exhaustive
-differential over bounded systems. The stage exists as the safety net for
-inputs outside that argument — most importantly external CSF text, and any
-future path that can schedule the same configuration twice — so it is not
-removed; what the proof rules out is paying to *optimize* it for this path.
+The enumeration emits pairwise distinct occupations, a row's occupation columns
+identify its configuration, and one traversal of the state table produces at
+most one record whose row identifies that traversal, so this generation path
+cannot emit the same V2 row twice. [V2_GENERATION_UNIQUENESS.md](V2_GENERATION_UNIQUENESS.md)
+proves that; `tests/p6a_uniqueness_test.rs` searches for a counterexample by
+exhaustive differential over bounded systems.
+
+The disk path therefore defaults to the strategy that proof licenses
+(`deduplication: "verified_unique"`): every generated row survives, the survivor
+bitsets are written full instead of being filled in by a comparison, and the
+root-bucket round trip — every row written twice and read twice — is skipped
+entirely. What remains is the merge's ordered read of the segments, which
+publication needs regardless. `RCSFS_DEDUPLICATION=exact` selects the general
+path that partitions rows into buckets and compares whole rows; it is a
+verification knob, not a public option, and it is the only strategy that
+*measures* a duplicate count.
+
+The distinction is visible in the statistics, because the two zeros mean
+different things: under `verified_unique`, `duplicate_count` is zero by
+construction, and under `exact` it is zero because the comparison found none.
+`deduplication` is reported in the generation statistics, the estimate and the
+CLI's JSON for that reason. The capacity model follows the strategy — a
+pre-flight that reserves bucket space for a run that will not write buckets
+would refuse jobs that fit.
+
+The exact path is kept rather than deleted: it is the reference the verified
+path is differentially checked against (`the_verified_path_publishes_what_the_exact_path_publishes`
+in `streaming.rs`, plus the B1/B2 runs in `docs/benchmarks/`), and it is what a
+future path that *can* schedule the same configuration twice would have to use.
 
 ### Capacity pre-flight
 

@@ -160,6 +160,14 @@ class CsfGenerationPlanStats(TypedDict):
 #: rather than a public option; ``"none"`` is the default.
 type CsfSegmentCodec = Literal["none", "lz4", "zstd"]
 
+#: How the published descriptor was made unique. ``"verified_unique"`` is the
+#: default for the internal generation path, which is proven not to repeat a
+#: record: ``duplicate_count`` is then zero *by construction*. ``"exact"``
+#: compares every row against every other row of its symmetry block, so its
+#: ``duplicate_count`` is a measurement. Selected through
+#: ``RCSFS_DEDUPLICATION``, a verification knob rather than a public option.
+type CsfDeduplication = Literal["verified_unique", "exact"]
+
 
 class CsfGenerationEstimateBytes(TypedDict):
     """Estimated size of one path of a disk generation run, in bytes.
@@ -243,6 +251,9 @@ class CsfGenerationStats(TypedDict):
     #: The codec the temporary segments were written with, so a report can be
     #: checked against the run that produced it.
     segment_codec: NotRequired[CsfSegmentCodec]
+    #: How `duplicate_count` was obtained: measured (`exact`) or zero by
+    #: construction (`verified_unique`).
+    deduplication: NotRequired[CsfDeduplication]
     stage_stats: NotRequired[list[CsfGenerationStageStats]]
     resource_stats: NotRequired[CsfGenerationResourceStats]
     plan_stats: NotRequired[CsfGenerationPlanStats]

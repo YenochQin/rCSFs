@@ -454,6 +454,7 @@ fn generate_disk_outputs_from_transcript(
     output.set_item("csf_bytes", stats.csf_bytes)?;
     output.set_item("descriptor_bytes", stats.descriptor_bytes)?;
     output.set_item("segment_codec", stats.segment_codec)?;
+    output.set_item("deduplication", stats.deduplication)?;
     let resource_stats = PyDict::new(py);
     resource_stats.set_item("memory_budget_mib", stats.resource_stats.memory_budget_mib)?;
     resource_stats.set_item("budget_bytes", stats.resource_stats.budget_bytes)?;
@@ -584,6 +585,7 @@ fn estimate_disk_generation(
     output.set_item("peel_subshells", estimate.capacity.peel_subshells)?;
     output.set_item("v2_columns", estimate.capacity.v2_columns)?;
     output.set_item("segment_codec", estimate.segment_codec)?;
+    output.set_item("deduplication", estimate.deduplication)?;
     output.set_item("enumeration_millis", estimate.enumeration_millis)?;
     output.set_item("planning_millis", estimate.planning_millis)?;
     output.set_item("plan_stats", plan_stats_dict(py, &estimate.plan_stats)?)?;

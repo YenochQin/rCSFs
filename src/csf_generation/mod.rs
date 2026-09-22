@@ -25,7 +25,8 @@ pub use occupations::{
     ReferenceConfiguration, ReferenceSubshell, enumerate_occupations,
 };
 pub(crate) use options::{
-    GenerationOptions, ResourceBudget, ResourcePermit, ResourceStats, SegmentCodec,
+    DeduplicationStrategy, GenerationOptions, ResourceBudget, ResourcePermit, ResourceStats,
+    SegmentCodec,
 };
 pub use pipeline::{
     TranscriptGenerationStats, WriteStats, generate_csfs_from_transcript, write_generated_csfs,

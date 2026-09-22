@@ -120,9 +120,11 @@ match is rejected rather than silently recorded.
 
 Reports written before this isolated-process harness do not contain artifact
 digests, and their `rss_peak_bytes` is the monotonically increasing peak of the
-whole benchmark process. In particular, the codec and dedup campaigns dated
-2026-09-22 remain valid for timings, logical I/O, scratch and managed memory,
-but must be rerun before they are used for per-combination RSS or B1/B2 content
+whole benchmark process. The codec and dedup campaigns dated 2026-09-22 were
+re-measured at `47e04ea` with the current harness — their committed JSONs carry
+per-run RSS and the four published-artifact digests — while the older campaigns
+(threads, budget, 2026-09-21 baselines) remain valid for timings, logical I/O,
+scratch and managed memory but not for per-combination RSS or content
 differential claims.
 
 ## Registered campaigns
@@ -131,8 +133,8 @@ differential claims.
 | --- | --- |
 | `v2_disk_generation_threads_b1/b2_20260922.json` | 1/2/4/8 threads at the derived task size, revision `1d1f29a` |
 | `v2_disk_generation_budget_b1/b2_20260922.json` | Low (rejected), mid and high `memory_budget_mib` at 8 threads |
-| `v2_disk_generation_codec_b1/b2_20260922.json` | Uncompressed / LZ4 / ZSTD temporary segments at 8 threads, revision `3588df1` |
-| `v2_disk_generation_dedup_b1/b2_20260922.json` | Verified-unique vs exact de-duplication, each with and without zstd segments, revision `bbcd714` |
+| `v2_disk_generation_codec_b1/b2_20260922.json` | Uncompressed / LZ4 / ZSTD temporary segments at 8 threads; first round `3588df1`, re-measured with per-run RSS and digests at `47e04ea` |
+| `v2_disk_generation_dedup_b1/b2_20260922.json` | Verified-unique vs exact de-duplication, each with and without zstd segments; first round `bbcd714`, re-measured with content digests at `47e04ea` |
 | `v2_disk_generation_p0b_*_20260921.json` | (legacy) measured before source identity was captured |
 | `v2_disk_generation_b3_capacity_20260921.json` | Full-scale capacity, workload and time-range estimate (no generation) |
 | `v2_disk_generation_matrix_20260922.md` | What the three 2026-09-22 campaigns show |

@@ -90,7 +90,7 @@ pub(crate) struct CapacityEstimate {
 /// A caller says *where* each artifact goes and the model charges that volume
 /// the size the artifact actually takes, so the caller never repeats the
 /// estimate's own numbers.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ArtifactKind {
     CsfText,
     CsfParquet,
@@ -103,6 +103,17 @@ pub(crate) enum ArtifactKind {
 }
 
 impl ArtifactKind {
+    /// The name a caller uses for this artifact.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::CsfText => "csf_text",
+            Self::CsfParquet => "csf_parquet",
+            Self::Descriptor => "descriptor",
+            Self::Header => "header",
+            Self::DescriptorMetadata => "descriptor_metadata",
+        }
+    }
+
     pub(crate) fn from_name(name: &str) -> Result<Self> {
         match name {
             "csf_text" => Ok(Self::CsfText),

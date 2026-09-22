@@ -9,7 +9,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
-use super::capacity::{CapacityEstimate, with_margin};
+use super::capacity::{ArtifactKind, CapacityEstimate, with_margin};
 
 /// Free bytes available to the current user on `path`'s filesystem.
 ///
@@ -62,7 +62,7 @@ pub(crate) enum SpaceRole {
     /// The staged artifact set, present in both phases.
     Staging,
     /// A published copy of one artifact, present only during publication.
-    Published { bytes: u64 },
+    Published { artifact: ArtifactKind, bytes: u64 },
 }
 
 /// Identifies the filesystem a path lives on, so requirements that share a
@@ -127,11 +127,27 @@ impl SpacePolicy {
 }
 
 /// Check every volume a run touches, summing the requirements that coexist.
+///
+/// Each published artifact may be named once: two entries for one artifact
+/// would charge its size twice and report a requirement the run never reaches.
 pub(crate) fn check_space(
     estimate: &CapacityEstimate,
     entries: &[(PathBuf, SpaceRole)],
     policy: SpacePolicy,
 ) -> Result<Vec<SpaceCheck>> {
+    let mut seen_artifacts = std::collections::HashSet::new();
+    for (path, role) in entries {
+        if let SpaceRole::Published { artifact, .. } = role
+            && !seen_artifacts.insert(*artifact)
+        {
+            bail!(
+                "{} is the destination of two {} artifacts; each artifact has one \
+                 destination",
+                path.display(),
+                artifact.name()
+            );
+        }
+    }
     struct Group {
         directory: PathBuf,
         scratch: u64,
@@ -170,7 +186,7 @@ pub(crate) fn check_space(
                 group.scratch = group.scratch.max(estimate.required_scratch_bytes)
             }
             SpaceRole::Staging => group.staging = group.staging.max(estimate.required_output_bytes),
-            SpaceRole::Published { bytes } => {
+            SpaceRole::Published { bytes, .. } => {
                 group.published = group
                     .published
                     .checked_add(with_margin(*bytes)?)
@@ -303,6 +319,7 @@ mod tests {
                 (
                     temporary.join("rcsfs-capacity-test-published"),
                     SpaceRole::Published {
+                        artifact: ArtifactKind::Descriptor,
                         bytes: estimate.staged_output_bytes,
                     },
                 ),
@@ -322,96 +339,120 @@ mod tests {
         assert_eq!(phases, generation);
     }
 
-    /// A reporting caller gets the answer; a caller about to write is refused.
-    #[test]
-    fn an_unmeasurable_or_impossible_requirement_is_refused_by_a_run() {
-        let estimate = estimate_capacity(56, 1_000_000, 2).unwrap();
-        // The parent of this path does not exist either, so the volume cannot
-        // be measured.
-        let missing = std::env::temp_dir()
-            .join("rcsfs-capacity-test-absent")
-            .join("scratch");
-        let entries = [(missing.clone(), SpaceRole::Scratch)];
-        let error = check_space(
-            &estimate,
-            &entries,
-            SpacePolicy::Require {
-                allow_unchecked: false,
-            },
-        )
-        .expect_err("an unmeasurable volume must not pass silently");
-        assert!(error.to_string().contains("cannot check free space"));
-        let accepted = check_space(
-            &estimate,
-            &entries,
-            SpacePolicy::Require {
-                allow_unchecked: true,
-            },
-        )
-        .unwrap();
-        assert_eq!(accepted.len(), 1);
-        assert_eq!(accepted[0].free_bytes, None);
-        assert_eq!(accepted[0].sufficient, None);
-        // A report answers the same question without refusing to answer it.
-        let reported = check_space(&estimate, &entries, SpacePolicy::Report).unwrap();
-        assert_eq!(reported.len(), 1);
-        assert_eq!(reported[0].sufficient, None);
-    }
-
-    /// A volume that is known to be too small stops a run whoever asked for it.
+    /// The policy matrix: three verdicts against three policies.
     ///
-    /// The opt-out is about an *unknown* volume. Letting it also wave through a
-    /// volume whose free space was measured and found short would turn a
-    /// resource limit into a suggestion.
+    /// A volume measured and found short stops any caller about to write,
+    /// whatever `allow_unchecked` says: the opt-out is about an *unknown*
+    /// volume, not about overriding a measurement. An unmeasurable volume stops
+    /// a `Require` caller unless the opt-out accepts the unknown. A reporting
+    /// caller always gets the verdict, including the two failing ones.
     #[test]
-    fn an_insufficient_volume_is_refused_even_with_the_opt_out() {
-        let mut estimate = estimate_capacity(56, 1_000_000, 2).unwrap();
-        estimate.required_scratch_bytes = u64::MAX / 2;
-        let entries = [(std::env::temp_dir(), SpaceRole::Scratch)];
-        for policy in [
+    fn the_space_policy_decides_each_verdict_independently() {
+        let roomy = estimate_capacity(56, 1_000_000, 2).unwrap();
+        let mut short = estimate_capacity(56, 1_000_000, 2).unwrap();
+        short.required_scratch_bytes = u64::MAX / 2;
+        let existing = [(std::env::temp_dir(), SpaceRole::Scratch)];
+        // Neither this path nor its parent exists, so the volume cannot be
+        // measured at all.
+        let missing = [(
+            std::env::temp_dir()
+                .join("rcsfs-space-test-absent")
+                .join("scratch"),
+            SpaceRole::Scratch,
+        )];
+        let policies = [
             SpacePolicy::Require {
                 allow_unchecked: false,
             },
             SpacePolicy::Require {
                 allow_unchecked: true,
             },
+            SpacePolicy::Report,
+        ];
+
+        for (verdict, estimate, entries) in [
+            ("sufficient", &roomy, &existing[..]),
+            ("insufficient", &short, &existing[..]),
+            ("unmeasurable", &roomy, &missing[..]),
         ] {
-            let error = check_space(&estimate, &entries, policy)
-                .expect_err("a known-insufficient volume must stop a run");
-            assert!(error.to_string().contains("not enough free space at"));
+            for policy in policies {
+                let outcome = check_space(estimate, entries, policy);
+                let expected_refusal = match (verdict, policy) {
+                    ("insufficient", SpacePolicy::Require { .. }) => true,
+                    (
+                        "unmeasurable",
+                        SpacePolicy::Require {
+                            allow_unchecked: false,
+                        },
+                    ) => true,
+                    _ => false,
+                };
+                assert_eq!(
+                    outcome.is_err(),
+                    expected_refusal,
+                    "{verdict} volume under {policy:?}"
+                );
+                // The two refusals must stay distinguishable: one says the
+                // volume is too small, the other that it could not be measured.
+                match (&outcome, verdict) {
+                    (Err(error), "insufficient") => {
+                        assert!(error.to_string().contains("not enough free space at"));
+                    }
+                    (Err(error), "unmeasurable") => {
+                        assert!(error.to_string().contains("cannot check free space"));
+                    }
+                    _ => {}
+                }
+                let Ok(checks) = outcome else {
+                    continue;
+                };
+                assert_eq!(checks.len(), 1);
+                let expected_sufficient = match verdict {
+                    "sufficient" => Some(true),
+                    "insufficient" => Some(false),
+                    _ => None,
+                };
+                assert_eq!(
+                    checks[0].sufficient, expected_sufficient,
+                    "{verdict} volume under {policy:?} reported the wrong verdict"
+                );
+            }
         }
-        // A report still answers the question it was asked.
-        let reported = check_space(&estimate, &entries, SpacePolicy::Report).unwrap();
-        assert_eq!(reported[0].sufficient, Some(false));
     }
 
-    /// The opt-out relaxes exactly one case: a volume nobody can measure.
+    /// One artifact, one destination: naming it twice would charge its size
+    /// twice and report a requirement the run never reaches.
     #[test]
-    fn the_opt_out_covers_only_an_unmeasurable_volume() {
+    fn one_artifact_cannot_be_published_twice() {
         let estimate = estimate_capacity(56, 1_000_000, 2).unwrap();
-        let missing = std::env::temp_dir()
-            .join("rcsfs-space-test-absent")
-            .join("scratch");
-        let entries = [(missing, SpaceRole::Scratch)];
-        let error = check_space(
-            &estimate,
-            &entries,
-            SpacePolicy::Require {
-                allow_unchecked: false,
-            },
-        )
-        .expect_err("an unmeasurable volume must not pass silently");
-        assert!(error.to_string().contains("cannot check free space"));
-        let accepted = check_space(
-            &estimate,
-            &entries,
-            SpacePolicy::Require {
-                allow_unchecked: true,
-            },
-        )
-        .unwrap();
-        assert_eq!(accepted.len(), 1);
-        assert_eq!(accepted[0].free_bytes, None);
-        assert_eq!(accepted[0].sufficient, None);
+        let published = |name: &str, artifact: ArtifactKind| {
+            (
+                std::env::temp_dir().join(name),
+                SpaceRole::Published {
+                    artifact,
+                    bytes: 1024,
+                },
+            )
+        };
+        let twice = [
+            published("rcsfs-space-test-a.parquet", ArtifactKind::Descriptor),
+            published("rcsfs-space-test-b.parquet", ArtifactKind::Descriptor),
+        ];
+        let error = check_space(&estimate, &twice, SpacePolicy::Report)
+            .expect_err("the same artifact must not be charged twice");
+        assert!(error.to_string().contains("two descriptor artifacts"));
+
+        // Different artifacts of one run are fine, and share a volume.
+        let distinct = [
+            published("rcsfs-space-test.c", ArtifactKind::CsfText),
+            published("rcsfs-space-test.parquet", ArtifactKind::Descriptor),
+        ];
+        let checks = check_space(&estimate, &distinct, SpacePolicy::Report).unwrap();
+        assert_eq!(checks.len(), 1);
+        assert_eq!(
+            checks[0].required_bytes,
+            with_margin(1024 + 1024).unwrap(),
+            "two artifacts on one volume add up"
+        );
     }
 }

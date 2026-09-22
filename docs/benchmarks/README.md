@@ -17,11 +17,17 @@ They are not part of the test suite: no file in this directory is run by
 - Percentiles are taken from real samples, never interpolated. Performance
   claims name the code revision they were measured at.
 - A report names the source it was built from, not only a commit: `git.tree`,
-  `git.dirty_diff_sha256` when the tree was dirty, and
   `environment.extension.module_sha256` for the binary the process actually
-  loaded. The dirty check ignores `docs/benchmarks`, because writing one report
-  must not make the next one claim a dirty source. A reader can rebuild the
-  recorded tree and compare binaries.
+  loaded, and, when the tree was dirty, `git.dirty_paths` plus
+  `git.dirty_diff_sha256`, a fingerprint over the tracked diff and the name and
+  content of every untracked file. A reader can rebuild the recorded tree and
+  compare binaries.
+- The scripts **refuse to write a report from a dirty tree** unless
+  `--allow-dirty-source` is given: a measurement taken while the source is being
+  edited is not a baseline, and one of the 2026-09-22 rounds was discarded for
+  exactly that reason. The dirty check, and the fingerprint, both ignore
+  `docs/benchmarks`, because writing one report must not make the next one claim
+  a dirty source.
 
 ## Registered inputs
 

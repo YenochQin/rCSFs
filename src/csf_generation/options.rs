@@ -7,41 +7,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const MIB: u64 = 1024 * 1024;
 
-/// Compression used by private Arrow IPC segments. The default remains
-/// uncompressed until the P2 benchmark establishes a better default.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SegmentCompression {
-    None,
-    Lz4,
-    Zstd,
-}
-
-impl SegmentCompression {
-    /// Name of the codec, for the segment metadata P2a will record.
-    #[allow(dead_code)] // Read by P2a; until then the default codec is written.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Lz4 => "lz4",
-            Self::Zstd => "zstd",
-        }
-    }
-
-    pub(crate) fn from_environment() -> Result<Self> {
-        let Ok(value) = std::env::var("RCSFS_SEGMENT_COMPRESSION") else {
-            return Ok(Self::None);
-        };
-        match value.trim().to_ascii_lowercase().as_str() {
-            "" | "none" | "uncompressed" => Ok(Self::None),
-            "lz4" => Ok(Self::Lz4),
-            "zstd" => Ok(Self::Zstd),
-            other => {
-                bail!("invalid RCSFS_SEGMENT_COMPRESSION {other:?}; expected none, lz4, or zstd")
-            }
-        }
-    }
-}
-
 /// Execution settings shared by the in-memory and disk generation paths.
 ///
 /// The storage-specific batch constants stay internal defaults.  Callers only
@@ -63,11 +28,6 @@ pub(crate) struct GenerationOptions {
     pub(crate) rows_per_batch: usize,
     pub(crate) rows_per_segment: usize,
     pub(crate) budget: ResourceBudget,
-    /// Codec for the private Arrow segments. `RCSFS_SEGMENT_COMPRESSION`
-    /// selects it now, but nothing reads the selection until the P2a benchmark
-    /// decides whether a compressed segment is worth its CPU.
-    #[allow(dead_code)]
-    pub(crate) segment_compression: SegmentCompression,
 }
 
 impl Default for GenerationOptions {
@@ -80,7 +40,6 @@ impl Default for GenerationOptions {
             rows_per_batch: 8_192,
             rows_per_segment: 131_072,
             budget: ResourceBudget::unlimited(),
-            segment_compression: SegmentCompression::None,
         }
     }
 }
@@ -103,12 +62,10 @@ impl GenerationOptions {
     ) -> Result<Self> {
         ensure!(threads != Some(0), "threads must be greater than 0");
         let budget = ResourceBudget::new(memory_budget_mib)?;
-        let segment_compression = SegmentCompression::from_environment()?;
         Ok(Self {
             threads,
             scratch_dir,
             budget,
-            segment_compression,
             allow_unchecked_space,
             ..Self::default()
         })

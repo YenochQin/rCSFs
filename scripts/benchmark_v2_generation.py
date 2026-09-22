@@ -44,6 +44,7 @@ from benchmark_support import (
     environment,
     filesystem_metadata,
     load_manifest,
+    require_clean_source,
     sha256_file,
     verify_registered_transcript,
     write_report,
@@ -342,6 +343,15 @@ def main() -> int:
         help="Directory that holds the temporary output set (default: the system temp dir).",
     )
     _ = parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    _ = parser.add_argument(
+        "--allow-dirty-source",
+        action="store_true",
+        help=(
+            "Register this report even though the source tree has uncommitted "
+            "changes. The report records the tree hash, the changed paths and a "
+            "fingerprint of the changes, but it is not a clean-revision baseline."
+        ),
+    )
     _ = parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
     if args.repeats <= 0:
@@ -427,6 +437,7 @@ def main() -> int:
         "summary": summary,
         "rejected": rejected,
     }
+    require_clean_source(report["environment"]["git"], args.allow_dirty_source)
     write_report(report, args.output)
     return 0
 

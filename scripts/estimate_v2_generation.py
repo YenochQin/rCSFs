@@ -32,6 +32,7 @@ from benchmark_support import (
     environment,
     filesystem_metadata,
     load_manifest,
+    require_clean_source,
     sha256_file,
     verify_registered_transcript,
     write_report,
@@ -46,6 +47,15 @@ def main() -> int:
     _ = parser.add_argument("--threads", type=int, default=None)
     _ = parser.add_argument("--memory-budget-mib", type=int, default=None)
     _ = parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    _ = parser.add_argument(
+        "--allow-dirty-source",
+        action="store_true",
+        help=(
+            "Register this report even though the source tree has uncommitted "
+            "changes. The report records the tree hash, the changed paths and a "
+            "fingerprint of the changes, but it is not a clean-revision baseline."
+        ),
+    )
     _ = parser.add_argument(
         "--scratch-dir",
         type=Path,
@@ -65,9 +75,8 @@ def main() -> int:
         metavar="KIND=PATH",
         help=(
             "Where a published artifact will go, as kind=path. Kinds: csf_text, "
-            "csf_parquet, descriptor, header, descriptor_metadata. Repeatable, and "
-            "the same kind may appear more than once; each volume is checked against "
-            "the sizes that coexist on it."
+            "csf_parquet, descriptor, header, descriptor_metadata. Repeat once per "
+            "artifact; each volume is checked against the sizes that coexist on it."
         ),
     )
     _ = parser.add_argument(
@@ -91,6 +100,10 @@ def main() -> int:
         kind, separator, path = value.partition("=")
         if not separator or not kind or not path:
             parser.error(f"--destination expects KIND=PATH, not {value!r}")
+        if kind in destinations:
+            # Two entries for one artifact would charge its size twice and model
+            # a requirement the run never reaches.
+            parser.error(f"--destination {kind} was given more than once")
         destinations[kind] = path
 
     transcript = args.transcript.read_text(encoding="utf-8")
@@ -137,6 +150,7 @@ def main() -> int:
         "filesystem": filesystem_metadata(Path.cwd()),
         "estimate": estimate,
     }
+    require_clean_source(report["environment"]["git"], args.allow_dirty_source)
     write_report(report, args.output)
     return 0
 

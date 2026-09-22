@@ -87,7 +87,7 @@ def estimate_disk_generation(
     memory_budget_mib: int | None = None,
     scratch_dir: str | None = None,
     staging_dir: str | None = None,
-    destinations: list[tuple[str, str]] | None = None,
+    destinations: list[tuple[str, str]] | None = None,  # one entry per artifact kind
 ) -> CsfGenerationEstimate: ...
 def select_interacting_csfs(
     reference_csf: str,

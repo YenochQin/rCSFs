@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -96,10 +97,16 @@ def test_environment_identifies_the_source_and_the_binary() -> None:
     git = environment["git"]
     assert git["commit"] and git["tree"]
     assert git["dirty"] in (True, False, None)
+    # `describe` identifies the revision; whether the source was modified is the
+    # `dirty` field's job, and it uses a definition that excludes this harness's
+    # own reports, so `--dirty` must not be folded into the version string.
+    assert not git["describe"].endswith("-dirty")
     if git["dirty"]:
-        assert git["dirty_diff_sha256"], "a dirty report must identify its diff"
+        assert git["dirty_diff_sha256"], "a dirty report must identify its changes"
+        assert git["dirty_paths"], "a dirty report must name what changed"
     else:
         assert "dirty_diff_sha256" not in git
+        assert "dirty_paths" not in git
     extension = environment["extension"]
     assert extension["module_sha256"]
     assert extension["module"].startswith("_rcsfs")
@@ -118,6 +125,37 @@ def test_registered_report_names_its_source(report: Path) -> None:
     assert document["environment"]["extension"]["module_sha256"], (
         f"{report.name} does not record the measured extension"
     )
+
+
+def test_duplicate_destination_kind_is_rejected(tmp_path: Path) -> None:
+    """One artifact has one destination; two would charge its size twice."""
+    script = REPO_ROOT / "scripts" / "estimate_v2_generation.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(FIXTURE_DIRECTORY / "b2_cc1_fullas_2exc.rcsfgenerate"),
+            "--destination",
+            f"header={tmp_path / 'a.toml'}",
+            "--destination",
+            f"header={tmp_path / 'b.toml'}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "--destination header was given more than once" in result.stderr
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_dirty_source_must_be_accepted_explicitly() -> None:
+    """A registered report claims a source state someone else can rebuild."""
+    dirty = {"dirty": True, "dirty_paths": ["src/csf_generation/space.rs"]}
+    with pytest.raises(SystemExit, match="source tree is dirty"):
+        support.require_clean_source(dirty, allow_dirty=False)
+    support.require_clean_source(dirty, allow_dirty=True)
+    support.require_clean_source({"dirty": False}, allow_dirty=False)
 
 
 def test_every_registered_fixture_matches_the_manifest() -> None:

@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### P2a：压缩实验结论（2026-09-22，登记于 `docs/benchmarks/v2_disk_generation_codec_20260922.md`）
+
+- 干净树 `3588df1`、8 线程、每 codec 预热 1 次测量 3 次：segment 写入量 B1
+  1073.0 MiB → 25.0 MiB（lz4）/ 11.7 MiB（zstd），B2 506.0 MiB → 8.2 / 4.5 MiB；
+  scratch 峰值随之减半（B1 2142.5 → 1081.2 MiB，B2 1001.9 → 500.4 MiB），剩余部分
+  全部是根去重桶。
+- 端到端代价全部在读取侧：zstd 为 +4.2%（B1）/ +7.1%（B2），lz4 为 +16.7% / +23.1%
+  （去重与合并阶段的解压 CPU）。生成阶段（写入侧）的墙钟与 CPU 三个 codec 基本相同，
+  说明这些密集 Int32 载荷的压缩成本低于少写约 1 GiB 的收益。**zstd 优于 lz4**。
+- 受管内存峰值与 codec 无关（B1 62.0 MiB、B2 130.4 MiB 三组完全相同），scratch 文件数
+  也不变（B1 289、B2 274）。默认值保持不压缩；容量模型仍按未压缩计费。
+
 ### P2a：临时 segment 的 Arrow IPC codec 开关（2026-09-22）
 
 - 新增 `RCSFS_SEGMENT_CODEC`（`none`/`lz4`/`zstd`）：临时 Arrow IPC segment 可选用

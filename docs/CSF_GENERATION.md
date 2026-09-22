@@ -274,6 +274,23 @@ estimate distribution (`minimum`/`p50`/`p95`/`maximum`), `unique_occupations`,
 equal `generated_count`; the benchmark fails rather than records the run when
 they disagree.
 
+### Temporary segment codec
+
+The temporary Arrow IPC segments are written uncompressed by default. The
+benchmark knob `RCSFS_SEGMENT_CODEC` (`none`, `lz4`, `zstd`) selects an
+Arrow-level codec for a decision experiment, the same way
+`RCSFS_RECORDS_PER_TASK` holds the schedule fixed; it is deliberately not a
+public option, because compression is a measured question rather than a settled
+default. Both codecs are compiled in through the `arrow-ipc` `lz4` and `zstd`
+features, and a value Arrow cannot honour fails the run instead of quietly
+writing plain segments.
+
+The codec is recorded where it can be checked: `segment_codec` appears in the
+generation statistics, the estimate report and the CLI's JSON, so a report can
+never describe compressed segments that were not written. The capacity model
+prices uncompressed segments regardless, which keeps it an upper bound for a
+compressed run.
+
 ### De-duplication
 
 The disk path still runs the exact de-duplication stage, and its

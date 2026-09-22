@@ -109,6 +109,63 @@ def test_config_generation_json_contains_stage_stats(
     assert per_task["p95"] <= per_task["maximum"]
 
 
+def test_segment_codec_reaches_the_run_and_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The codec knob is a benchmark experiment, so the run must name what it used.
+
+    A recorded codec the writer ignored would make P2a's compression ratios
+    fiction; the extension reports the codec it actually wrote with, and an
+    unusable value fails the run rather than falling back silently.
+    """
+    transcript = "* ! Orbital order\n0\n2s(2,*)2p(1,*)\n\n3s,3p,3d\n1,3\n1\nn\n"
+
+    def run(label: str) -> tuple[dict[str, object], list[tuple[int, ...]]]:
+        # Each run gets its own set: the API refuses to write over staged output.
+        directory = tmp_path / label
+        directory.mkdir()
+        stats = generate_disk_outputs_from_transcript(
+            transcript,
+            directory / "out.c",
+            directory / "out.parquet",
+            directory / "descriptors.parquet",
+            directory / "header.toml",
+            directory / "scratch",
+        )
+        return stats, pl.read_parquet(directory / "descriptors.parquet").rows()
+
+    default, uncompressed_rows = run("default")
+    assert default["segment_codec"] == "none", "the default must stay uncompressed"
+
+    monkeypatch.setenv("RCSFS_SEGMENT_CODEC", "zstd")
+    compressed, compressed_rows = run("zstd")
+    assert compressed["segment_codec"] == "zstd"
+    # Compression is a storage decision: the published rows must not move.
+    assert compressed_rows == uncompressed_rows
+    assert compressed["record_count"] == default["record_count"]
+
+    monkeypatch.setenv("RCSFS_SEGMENT_CODEC", "gzip")
+    with pytest.raises(ValueError, match="invalid segment codec"):
+        run("invalid")
+
+
+def test_estimate_names_the_segment_codec_it_assumed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The estimate prices uncompressed segments, so it says which codec it assumed."""
+    transcript = "* ! Orbital order\n0\n2s(2,*)2p(1,*)\n\n3s,3p,3d\n1,3\n1\nn\n"
+    estimate = estimate_disk_generation(transcript)
+    assert estimate["segment_codec"] == "none"
+    assert any("uncompressed" in line for line in estimate["assumptions"])
+
+    monkeypatch.setenv("RCSFS_SEGMENT_CODEC", "zstd")
+    compressed = estimate_disk_generation(transcript)
+    assert compressed["segment_codec"] == "zstd"
+    # A compressed run writes fewer segment bytes, so the model stays an upper
+    # bound rather than being tuned to a ratio that has not been measured here.
+    assert compressed["bytes"]["segments"] == estimate["bytes"]["segments"]
+
+
 def test_config_generation_reads_memory_budget(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:

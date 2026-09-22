@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### P2a：临时 segment 的 Arrow IPC codec 开关（2026-09-22）
+
+- 新增 `RCSFS_SEGMENT_CODEC`（`none`/`lz4`/`zstd`）：临时 Arrow IPC segment 可选用
+  Arrow 级压缩。默认仍为不压缩——压缩是待测量的决策，不是既定默认；`arrow-ipc` 的
+  `lz4`/`zstd` feature 已启用，无法兑现的取值直接报错，而不是悄悄写未压缩文件却
+  记录为已压缩。
+- `segment_codec` 出现在生成统计、估算报告与 CLI JSON 中，基准脚本逐次运行核对
+  扩展实际报告的 codec，不一致即失败——报告里写一个没真正启用的 codec 会让 P2a 的
+  压缩比变成虚构。
+- 容量模型继续按未压缩 segment 计费（新增一条 assumption 说明），因此开启压缩的运行
+  仍落在估算上界之内，模型不会被单次测量的比例“调优”。
+- 测试：Rust 侧验证每个 codec 都能到达写入器、能被读回、且确实压缩（`none` 与
+  `lz4`/`zstd` 的字节数对比），以及 codec 不改变任何已发布字节（同一输入的 CSF 文本、
+  descriptor 行、计数一致）；Python 侧覆盖默认值、编解码往返与非法取值的明确拒绝。
+
 ### 测试环境：pytest 必须加载工作树而不是已安装的 wheel（2026-09-22）
 
 - `[tool.maturin] python-source = "."` 让仓库根目录本身就是包根，但裸 `pytest`

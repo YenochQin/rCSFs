@@ -774,6 +774,10 @@ def _print_csfsgenerate_summary(stats: Mapping[str, object]) -> None:
     descriptor_file = stats.get("descriptor_file")
     if descriptor_file is not None:
         print(f"descriptor_file: {descriptor_file}")
+    # The default is uncompressed, so only a non-default choice is worth a line.
+    segment_codec = stats.get("segment_codec")
+    if isinstance(segment_codec, str) and segment_codec != "none":
+        print(f"segment_codec: {segment_codec}")
     stage_stats = stats.get("stage_stats")
     if isinstance(stage_stats, list):
         for value in cast(list[object], stage_stats):
@@ -869,6 +873,7 @@ def _print_estimate_summary(
     )
     print(f"peel_subshells: {stats.get('peel_subshells')}", file=stream)
     print(f"v2_columns: {stats.get('v2_columns')}", file=stream)
+    print(f"segment_codec: {stats.get('segment_codec', 'none')}", file=stream)
     for key in ("task_count", "target_records_per_task", "zero_record_configurations",
                 "unsplittable_tasks", "unsplittable_records"):
         value = plan.get(key)

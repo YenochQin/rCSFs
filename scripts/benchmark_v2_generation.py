@@ -67,6 +67,13 @@ _EXPECTED_REJECTIONS = (
 #: multi-gigabyte run, large enough to observe a stage boundary.
 SCRATCH_SAMPLE_INTERVAL_SECONDS = 0.2
 
+#: The extension reads the temporary-segment codec from the environment; the
+#: benchmark sets it per run so one invocation can compare codecs.
+SEGMENT_CODEC_ENV = "RCSFS_SEGMENT_CODEC"
+
+#: What `RCSFS_SEGMENT_CODEC` accepts.
+SEGMENT_CODECS = ("none", "lz4", "zstd")
+
 _STAGE_KEYS = (
     "unique_occupations",
     "generated_count",
@@ -169,6 +176,7 @@ def _run_once(
     transcript: str,
     threads: int | None,
     memory_budget_mib: int | None,
+    segment_codec: str,
     scratch_root: Path,
 ) -> dict[str, Any]:
     root = Path(tempfile.mkdtemp(prefix="rcsfs-v2-benchmark-", dir=scratch_root))
@@ -184,7 +192,10 @@ def _run_once(
     result: dict[str, Any] = {
         "threads": threads,
         "memory_budget_mib": memory_budget_mib,
+        "segment_codec": segment_codec,
     }
+    previous_codec = os.environ.get(SEGMENT_CODEC_ENV)
+    os.environ[SEGMENT_CODEC_ENV] = segment_codec
     try:
         monitor.start()
         # The timed region excludes temporary-set creation and deletion, so it
@@ -216,6 +227,14 @@ def _run_once(
         wall_seconds = time.perf_counter() - started
         io_after = _process_io_bytes()
         monitor.stop()
+        reported_codec = stats.get("segment_codec")
+        if reported_codec != segment_codec:
+            # A report that names a codec the run did not use would turn P2a's
+            # measured ratios into fiction. Refuse instead of recording it.
+            raise RuntimeError(
+                f"asked for segment codec {segment_codec!r} but the run reported "
+                f"{reported_codec!r}"
+            )
         result["wall_seconds"] = wall_seconds
         result["success"] = stats.get("success", False)
         for key in _STAGE_KEYS:
@@ -234,6 +253,10 @@ def _run_once(
                 key: io_after[key] - io_before.get(key, 0) for key in io_after
             }
     finally:
+        if previous_codec is None:
+            os.environ.pop(SEGMENT_CODEC_ENV, None)
+        else:
+            os.environ[SEGMENT_CODEC_ENV] = previous_codec
         monitor.stop()
         cleanup_started = time.perf_counter()
         shutil.rmtree(root, ignore_errors=True)
@@ -246,10 +269,14 @@ def _run_once(
 def _summarize(
     measurements: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    groups: dict[tuple[int | None, int | None], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, int | None, int | None], list[dict[str, Any]]] = {}
     rejected: list[dict[str, Any]] = []
     for measurement in measurements:
-        key = (measurement["threads"], measurement.get("memory_budget_mib"))
+        key = (
+            measurement.get("segment_codec", "none"),
+            measurement["threads"],
+            measurement.get("memory_budget_mib"),
+        )
         if measurement.get("outcome") == "rejected":
             # A refused run has no stage timings to average; it is reported on
             # its own so a low budget cannot masquerade as a slow one.
@@ -257,17 +284,25 @@ def _summarize(
                 {
                     "threads": measurement["threads"],
                     "memory_budget_mib": measurement.get("memory_budget_mib"),
+                    "segment_codec": measurement.get("segment_codec", "none"),
                     "error": measurement.get("error"),
                 }
             )
             continue
         groups.setdefault(key, []).append(measurement)
     summary: list[dict[str, Any]] = []
-    for (threads, budget), group in sorted(
-        groups.items(), key=lambda item: (item[0][0] is not None, item[0][0] or 0, item[0][1] or 0)
+    for (codec, threads, budget), group in sorted(
+        groups.items(),
+        key=lambda item: (
+            SEGMENT_CODECS.index(item[0][0]),
+            item[0][1] is not None,
+            item[0][1] or 0,
+            item[0][2] or 0,
+        ),
     ):
         walls = [entry["wall_seconds"] for entry in group]
         entry: dict[str, Any] = {
+            "segment_codec": codec,
             "threads": threads,
             "memory_budget_mib": budget,
             "runs": len(group),
@@ -279,6 +314,15 @@ def _summarize(
                 [item["cleanup_seconds"] for item in group]
             ),
             "scratch_peak_bytes_max": max(item["scratch_peak_bytes"] for item in group),
+            "segment_bytes_median": statistics.median(
+                [
+                    stage["output_bytes"]
+                    for item in group
+                    for stage in item.get("stage_stats", [])
+                    if stage["name"] == "csf_generation"
+                ]
+                or [0]
+            ),
             "stages": {},
         }
         names = [stage["name"] for stage in group[0].get("stage_stats", [])]
@@ -327,6 +371,17 @@ def main() -> int:
         help="Managed-memory budgets in MiB to measure; omit for the default.",
     )
     _ = parser.add_argument(
+        "--segment-codec",
+        choices=SEGMENT_CODECS,
+        nargs="+",
+        default=["none"],
+        help=(
+            "Temporary Arrow IPC segment codecs to measure; each codec runs every "
+            "requested thread/budget combination. The run reports the codec it "
+            "actually used, so a mismatch fails instead of being recorded."
+        ),
+    )
+    _ = parser.add_argument(
         "--repeats",
         type=int,
         default=3,
@@ -373,7 +428,8 @@ def main() -> int:
     digest = sha256_file(args.transcript)
     registered = load_manifest(args.manifest)
     combinations = [
-        (threads, budget)
+        (codec, threads, budget)
+        for codec in args.segment_codec
         for threads in args.threads
         for budget in args.memory_budget_mib
     ]
@@ -381,15 +437,15 @@ def main() -> int:
     warmups: list[dict[str, Any]] = []
     measurements: list[dict[str, Any]] = []
     order = 0
-    for threads, budget in combinations:
+    for codec, threads, budget in combinations:
         for _ in range(args.warmup):
-            warmup = _run_once(transcript, threads, budget, scratch_root)
+            warmup = _run_once(transcript, threads, budget, codec, scratch_root)
             warmup["order"] = order
             warmup["kind"] = "warmup"
             order += 1
             warmups.append(warmup)
         for _ in range(args.repeats):
-            measurement = _run_once(transcript, threads, budget, scratch_root)
+            measurement = _run_once(transcript, threads, budget, codec, scratch_root)
             measurement["order"] = order
             measurement["kind"] = "measured"
             order += 1
@@ -426,6 +482,7 @@ def main() -> int:
             "memory_budget_mib": [
                 None if value is None else value for value in args.memory_budget_mib
             ],
+            "segment_codecs": list(args.segment_codec),
             "scratch_root": str(scratch_root),
             "scratch_sampling_interval_seconds": SCRATCH_SAMPLE_INTERVAL_SECONDS,
             "timed_region": "generation call including artifact publication; excludes set-up and deletion",

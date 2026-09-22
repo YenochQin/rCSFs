@@ -7,6 +7,60 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) const MIB: u64 = 1024 * 1024;
 
+/// Environment override for the temporary segments' Arrow IPC codec, for the
+/// P2a compression experiment. It is intentionally not a public option: the
+/// published interface exposes only user-meaningful settings, and compression
+/// is a decision experiment until its measurements are in.
+const SEGMENT_CODEC_ENV: &str = "RCSFS_SEGMENT_CODEC";
+
+/// The compression applied to the temporary Arrow IPC segments.
+///
+/// The default stays uncompressed: compression is a decision experiment
+/// (P2a), not a settled default, and the capacity pre-flight models segments
+/// uncompressed. A selected codec must genuinely reach the writer — a value
+/// that Arrow does not support fails the run instead of quietly writing plain
+/// segments and reporting itself compressed.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum SegmentCodec {
+    None,
+    Lz4Frame,
+    Zstd,
+}
+
+impl SegmentCodec {
+    /// Parse the value a caller names the codec by.
+    pub(crate) fn parse(value: &str) -> Result<Self> {
+        match value.trim() {
+            "none" => Ok(Self::None),
+            "lz4" => Ok(Self::Lz4Frame),
+            "zstd" => Ok(Self::Zstd),
+            other => bail!(
+                "invalid segment codec {other:?}; expected one of: none, lz4, zstd \
+                 (lz4 and zstd compress the temporary Arrow IPC segments)"
+            ),
+        }
+    }
+
+    /// The codec this process was asked to use; unset means uncompressed.
+    pub(crate) fn from_environment() -> Result<Self> {
+        match std::env::var(SEGMENT_CODEC_ENV) {
+            Ok(value) => Self::parse(&value),
+            Err(std::env::VarError::NotPresent) => Ok(Self::None),
+            Err(error) => {
+                Err(anyhow::Error::new(error).context(format!("cannot read {SEGMENT_CODEC_ENV}")))
+            }
+        }
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Lz4Frame => "lz4",
+            Self::Zstd => "zstd",
+        }
+    }
+}
+
 /// Execution settings shared by the in-memory and disk generation paths.
 ///
 /// The storage-specific batch constants stay internal defaults.  Callers only
@@ -27,6 +81,9 @@ pub(crate) struct GenerationOptions {
     pub(crate) allow_unchecked_space: bool,
     pub(crate) rows_per_batch: usize,
     pub(crate) rows_per_segment: usize,
+    /// Codec for the temporary Arrow IPC segments. Set through the
+    /// environment for the P2a experiment; the default is uncompressed.
+    pub(crate) segment_codec: SegmentCodec,
     pub(crate) budget: ResourceBudget,
 }
 
@@ -39,6 +96,7 @@ impl Default for GenerationOptions {
             allow_unchecked_space: false,
             rows_per_batch: 8_192,
             rows_per_segment: 131_072,
+            segment_codec: SegmentCodec::None,
             budget: ResourceBudget::unlimited(),
         }
     }
@@ -67,6 +125,7 @@ impl GenerationOptions {
             scratch_dir,
             budget,
             allow_unchecked_space,
+            segment_codec: SegmentCodec::from_environment()?,
             ..Self::default()
         })
     }
@@ -243,4 +302,37 @@ pub(crate) struct ResourceStats {
     pub(crate) peak_managed_bytes: u64,
     pub(crate) current_managed_bytes: u64,
     pub(crate) occupation_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segment_codec_names_round_trip_and_reject_the_rest() {
+        for codec in [
+            SegmentCodec::None,
+            SegmentCodec::Lz4Frame,
+            SegmentCodec::Zstd,
+        ] {
+            assert_eq!(SegmentCodec::parse(codec.name()).unwrap(), codec);
+        }
+        // Surrounding whitespace is tolerated because the value arrives from
+        // the environment; anything else has to be one of the three names.
+        assert_eq!(
+            SegmentCodec::parse(" lz4 ").unwrap(),
+            SegmentCodec::Lz4Frame
+        );
+        for invalid in ["", "gzip", "NONE", "lz4_frame", "zstd-3", "lz4,zstd"] {
+            let error = SegmentCodec::parse(invalid).unwrap_err().to_string();
+            assert!(
+                error.contains("invalid segment codec"),
+                "{invalid:?} was accepted: {error}"
+            );
+            assert!(
+                error.contains("none, lz4, zstd"),
+                "the error must list what is valid: {error}"
+            );
+        }
+    }
 }

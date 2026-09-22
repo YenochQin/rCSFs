@@ -155,6 +155,12 @@ class CsfGenerationPlanStats(TypedDict):
     unsplittable_records: int
 
 
+#: Codec for the temporary Arrow IPC segments. Selected through the
+#: ``RCSFS_SEGMENT_CODEC`` environment variable, which is a benchmark knob
+#: rather than a public option; ``"none"`` is the default.
+type CsfSegmentCodec = Literal["none", "lz4", "zstd"]
+
+
 class CsfGenerationEstimateBytes(TypedDict):
     """Estimated size of one path of a disk generation run, in bytes.
 
@@ -203,6 +209,10 @@ class CsfGenerationEstimate(TypedDict):
     pre_deduplication_records: int
     peel_subshells: int
     v2_columns: int
+    #: The codec the predicted run would write its temporary segments with. The
+    #: byte model is uncompressed, so a compressed run stays inside the
+    #: estimate rather than exceeding it.
+    segment_codec: CsfSegmentCodec
     enumeration_millis: int
     planning_millis: int
     plan_stats: CsfGenerationPlanStats
@@ -230,6 +240,9 @@ class CsfGenerationStats(TypedDict):
     duplicate_count: NotRequired[int]
     csf_bytes: NotRequired[int]
     descriptor_bytes: NotRequired[int]
+    #: The codec the temporary segments were written with, so a report can be
+    #: checked against the run that produced it.
+    segment_codec: NotRequired[CsfSegmentCodec]
     stage_stats: NotRequired[list[CsfGenerationStageStats]]
     resource_stats: NotRequired[CsfGenerationResourceStats]
     plan_stats: NotRequired[CsfGenerationPlanStats]

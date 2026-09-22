@@ -22,9 +22,11 @@
 - 旧的两遍尾部保留为参考实现，并由新测试 `the_combined_final_pass_publishes_what_merge_and_restore_published`
   逐字节差分：descriptor Parquet 与 CSF 文本完全一致，CSF Parquet 按逻辑行一致（其
   row group 边界随批次划分，不属于契约）。该差分在实现过程中立即抓到过一个自造缺陷。
-- 未实施并已在计划中标注：并行 Parquet 列块编码（当前 `parquet` crate 无受支持的
-  并行写入口）、CLI staging→目的地的 rename 发布、部分发布失败的报告策略——都属 P4 的
-  发布优化子步骤。
+- 未实施并已在计划中标注：并行 Parquet 列编码、CLI staging→目的地的 rename 发布、
+  部分发布失败的报告策略——都属 P4 的发布优化子步骤。其中并行编码的**能力已用探针
+  验证**：`parquet` crate 提供 `ArrowRowGroupWriterFactory` + `ArrowColumnChunk::append_to_row_group`
+  这条受支持的"多线程编码"路径（`temp/parquet_probe`），产物逻辑内容与 `ArrowWriter`
+  一致、字节布局不同；先前"无受支持入口"的说法是错的，已在计划中更正。
 
 计量（干净树 `de97127`，8 线程，默认 `verified_unique`，见
 [报告](benchmarks/v2_disk_generation_final_encoding_20260922.md)）：

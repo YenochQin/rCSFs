@@ -41,13 +41,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from benchmark_support import (
     DEFAULT_MANIFEST,
+    add_source_identity_arguments,
     environment,
+    finalize_report,
     filesystem_metadata,
     load_manifest,
     require_clean_source,
     sha256_file,
+    source_identity,
     verify_registered_transcript,
-    write_report,
 )
 from rcsfs import generate_disk_outputs_from_transcript
 
@@ -343,15 +345,7 @@ def main() -> int:
         help="Directory that holds the temporary output set (default: the system temp dir).",
     )
     _ = parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    _ = parser.add_argument(
-        "--allow-dirty-source",
-        action="store_true",
-        help=(
-            "Register this report even though the source tree has uncommitted "
-            "changes. The report records the tree hash, the changed paths and a "
-            "fingerprint of the changes, but it is not a clean-revision baseline."
-        ),
-    )
+    add_source_identity_arguments(parser)
     _ = parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
     if args.repeats <= 0:
@@ -369,6 +363,11 @@ def main() -> int:
         scratch_root = Path(tempfile.gettempdir())
     if not scratch_root.is_dir():
         parser.error(f"scratch root is not a directory: {scratch_root}")
+
+    # Snapshot and gate first: a source that cannot be registered must not cost
+    # a full benchmark, and the snapshot is what the process will actually run.
+    start_identity = source_identity()
+    require_clean_source(start_identity, args.allow_dirty_source)
 
     transcript = args.transcript.read_text(encoding="utf-8")
     digest = sha256_file(args.transcript)
@@ -437,8 +436,7 @@ def main() -> int:
         "summary": summary,
         "rejected": rejected,
     }
-    require_clean_source(report["environment"]["git"], args.allow_dirty_source)
-    write_report(report, args.output)
+    finalize_report(report, args.output, start_identity, args.allow_dirty_source)
     return 0
 
 

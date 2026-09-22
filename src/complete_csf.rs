@@ -23,7 +23,12 @@ use std::mem::size_of;
 use std::path::Path;
 
 const HEADER_LINE_COUNT: usize = 5;
-const FIELD_WIDTH: usize = 9;
+/// Width of one formatted CSF field, in characters.
+///
+/// The text, the Parquet row bound and the shared CSF Parquet producer all
+/// derive their widths from it, so the three cannot disagree about how wide a
+/// formatted record is.
+pub(crate) const FIELD_WIDTH: usize = 9;
 
 /// The only separator `rcsfblock.f90` writes between symmetry blocks.
 const BLOCK_SEPARATOR: &str = " *";

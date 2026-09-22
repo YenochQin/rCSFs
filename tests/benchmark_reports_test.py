@@ -572,12 +572,7 @@ def _digests(report: Path, *, codec: str, deduplication: str) -> dict[str, str]:
         ):
             return {
                 key: measurement[key]
-                for key in (
-                    "csf_text_sha256",
-                    "descriptor_sha256",
-                    "header_sha256",
-                    "csf_parquet_sha256",
-                )
+                for key in ("csf_text_sha256", "descriptor_sha256", "header_sha256")
             }
     raise AssertionError(f"{report.name} has no {deduplication}/{codec} measurement")
 
@@ -610,7 +605,9 @@ def test_the_one_pass_tail_published_what_the_two_pass_tail_published(
         assert measured[key] == reference[key], (
             f"the one-pass tail changed {key} for the {codec} codec"
         )
-    assert measured["csf_parquet_sha256"] != reference["csf_parquet_sha256"], (
-        "the CSF Parquet digest was expected to move with the batch layout; if it "
-        "stopped moving, this test's premise needs re-checking"
-    )
+    # The CSF Parquet is deliberately *not* compared here. Its row-group
+    # boundaries follow whichever path batched it, which the format contract
+    # does not fix, so equal or unequal bytes are both legitimate; asserting
+    # either direction would turn a layout detail into a contract. Its logical
+    # rows are compared where they can be: the live differentials in
+    # `streaming.rs` (both tails, and across thread counts).

@@ -11,7 +11,7 @@ use arrow::array::{Array, Int32Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ipc::reader::FileReader;
-use arrow_ipc::writer::FileWriter;
+use arrow_ipc::writer::{FileWriter, IpcWriteOptions};
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
@@ -31,9 +31,10 @@ use super::{
 use super::{
     EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, GeneratedRecordRef,
     GeneratedRecordSink, GenerationOptions, GenerationPlan, Parity, PlanStats, PlannedTask,
-    RecordSelection, ResourceBudget, ResourcePermit, ResourceStats, Subshell, SubshellOccupation,
-    TaskSpan, enumerate_occupations_with_budget, estimate_capacity, estimate_workload,
-    generate_configuration_records, plan_generation, report_plan, request_targets,
+    RecordSelection, ResourceBudget, ResourcePermit, ResourceStats, SegmentCodec, Subshell,
+    SubshellOccupation, TaskSpan, enumerate_occupations_with_budget, estimate_capacity,
+    estimate_workload, generate_configuration_records, plan_generation, report_plan,
+    request_targets,
 };
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
 use crate::complete_csf::OccupiedSubshell;
@@ -219,6 +220,9 @@ pub(crate) struct SegmentGeneration {
     pub(crate) segments: Vec<DescriptorSegment>,
     pub(crate) unique_occupations: usize,
     pub(crate) record_count: usize,
+    /// The codec the segments were actually written with, so a report can be
+    /// checked against the run that produced it.
+    pub(crate) segment_codec: SegmentCodec,
     pub(crate) stage_stats: Vec<StageStats>,
     pub(crate) budget: ResourceBudget,
     pub(crate) resource_stats: ResourceStats,
@@ -284,6 +288,10 @@ pub(crate) struct DiskGenerationStats {
     pub(crate) block_count: usize,
     pub(crate) csf_bytes: u64,
     pub(crate) descriptor_bytes: u64,
+    /// The codec the temporary segments were written with. The byte model
+    /// above describes uncompressed segments regardless, so a compressed run
+    /// is smaller than this accounting suggests.
+    pub(crate) segment_codec: &'static str,
     pub(crate) stage_stats: Vec<StageStats>,
     pub(crate) resource_stats: ResourceStats,
     pub(crate) plan_stats: PlanStats,
@@ -452,6 +460,7 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
         block_count: deduplicated.block_lengths.len(),
         csf_bytes,
         descriptor_bytes,
+        segment_codec: generated.segment_codec.name(),
         stage_stats,
         resource_stats: generated
             .budget
@@ -471,6 +480,9 @@ pub(crate) struct DiskEstimate {
     pub(crate) layout: DescriptorLayout,
     pub(crate) plan_stats: PlanStats,
     pub(crate) capacity: CapacityEstimate,
+    /// The codec the predicted run would write its segments with. The byte
+    /// model is uncompressed, so a compressed run stays inside the estimate.
+    pub(crate) segment_codec: &'static str,
     pub(crate) enumeration_millis: u128,
     pub(crate) planning_millis: u128,
 }
@@ -546,6 +558,7 @@ pub(crate) fn estimate_disk_generation_with_layout(
         layout: DescriptorLayout::new(DescriptorVersion::V2, peel.len()),
         plan_stats: plan.stats(),
         capacity,
+        segment_codec: options.segment_codec.name(),
         enumeration_millis,
         planning_millis: planning_timer.wall.elapsed().as_millis(),
     };
@@ -784,6 +797,7 @@ pub(crate) fn generate_v2_descriptor_segments_checked(
         segments,
         unique_occupations: occupations.configurations.len(),
         record_count,
+        segment_codec: options.segment_codec,
         stage_stats: vec![
             enumeration_stats,
             planning_stats,
@@ -1879,6 +1893,7 @@ struct RangeSegmentWriter {
     range_dir: PathBuf,
     rows_per_batch: usize,
     rows_per_segment: usize,
+    codec: SegmentCodec,
     budget: ResourceBudget,
     blocks: BTreeMap<(u16, bool), BlockSegmentWriter>,
 }
@@ -1897,6 +1912,7 @@ impl RangeSegmentWriter {
             range_dir,
             rows_per_batch: options.rows_per_batch,
             rows_per_segment: options.rows_per_segment,
+            codec: options.segment_codec,
             budget: options.budget.clone(),
             blocks: BTreeMap::new(),
         })
@@ -1920,6 +1936,7 @@ impl RangeSegmentWriter {
                 self.range_dir.clone(),
                 self.rows_per_batch,
                 self.rows_per_segment,
+                self.codec,
                 self.budget.clone(),
             )
         });
@@ -1952,6 +1969,7 @@ struct BlockSegmentWriter {
     range_dir: PathBuf,
     rows_per_batch: usize,
     rows_per_segment: usize,
+    codec: SegmentCodec,
     budget: ResourceBudget,
     next_part: u32,
     next_local_ordinal: u64,
@@ -1980,6 +1998,7 @@ impl BlockSegmentWriter {
         range_dir: PathBuf,
         rows_per_batch: usize,
         rows_per_segment: usize,
+        codec: SegmentCodec,
         budget: ResourceBudget,
     ) -> Self {
         Self {
@@ -1991,6 +2010,7 @@ impl BlockSegmentWriter {
             range_dir,
             rows_per_batch,
             rows_per_segment,
+            codec,
             budget,
             next_part: 0,
             next_local_ordinal: 0,
@@ -2093,8 +2113,12 @@ impl BlockSegmentWriter {
             columns.push(column);
         }
         let local_ordinals = Vec::with_capacity(self.rows_per_batch);
-        let writer = FileWriter::try_new_buffered(file, self.schema.as_ref())
-            .with_context(|| format!("failed to open Arrow segment {}", path.display()))?;
+        let writer = FileWriter::try_new_with_options(
+            BufWriter::new(file),
+            self.schema.as_ref(),
+            segment_write_options(self.codec)?,
+        )
+        .with_context(|| format!("failed to open Arrow segment {}", path.display()))?;
         self.current = Some(OpenSegment {
             path,
             local_start: self.next_local_ordinal,
@@ -2164,6 +2188,23 @@ impl BlockSegmentWriter {
             .with_context(|| format!("failed to write Arrow segment {}", current.path.display()))?;
         Ok(())
     }
+}
+
+/// The Arrow IPC write options a segment codec asks for.
+///
+/// Both codecs are compiled in (the `arrow-ipc` `lz4` and `zstd` features), so
+/// a selected codec genuinely compresses; a value Arrow could not honour would
+/// fail with Arrow's own error instead of silently writing plain segments that
+/// the statistics would still describe as compressed.
+fn segment_write_options(codec: SegmentCodec) -> Result<IpcWriteOptions> {
+    let compression = match codec {
+        SegmentCodec::None => None,
+        SegmentCodec::Lz4Frame => Some(arrow_ipc::CompressionType::LZ4_FRAME),
+        SegmentCodec::Zstd => Some(arrow_ipc::CompressionType::ZSTD),
+    };
+    IpcWriteOptions::default()
+        .try_with_compression(compression)
+        .map_err(|error| anyhow::anyhow!("segment codec {} is not usable: {error}", codec.name()))
 }
 
 fn segment_schema(layout: DescriptorLayout) -> Result<SchemaRef> {
@@ -2814,6 +2855,7 @@ mod tests {
                 .collect(),
             unique_occupations: generated.unique_occupations,
             record_count: generated.record_count + duplicate.record_count,
+            segment_codec: generated.segment_codec,
             stage_stats: generated.stage_stats.clone(),
             budget: generated.budget.clone(),
             resource_stats: generated.resource_stats.clone(),
@@ -2923,6 +2965,153 @@ mod tests {
         assert_eq!(stats.unique_count, read_rows(&descriptors).unwrap().len());
         assert!(stats.duplicate_count <= stats.generated_count);
         assert!(csf_parquet.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Every codec must reach the writer, be readable again, and be reported.
+    ///
+    /// Recording a codec the writer ignored is the failure this guards: the
+    /// reported bytes would then describe compressed segments while the files
+    /// are plain, and the compression experiment would "prove" a ratio that
+    /// does not exist. The rows are repetitive and numerous enough that
+    /// framing overhead cannot mask the effect.
+    #[test]
+    fn each_segment_codec_is_reported_readable_and_actually_compresses() {
+        let root = temporary_directory("segment-codec");
+        fs::create_dir(&root).unwrap();
+        let layout = DescriptorLayout::new(DescriptorVersion::V2, 3);
+        let row_len = layout.row_len();
+        let rows = 20_000;
+        let mut sizes = BTreeMap::new();
+        for codec in [
+            SegmentCodec::None,
+            SegmentCodec::Lz4Frame,
+            SegmentCodec::Zstd,
+        ] {
+            let directory = root.join(codec.name());
+            fs::create_dir(&directory).unwrap();
+            let mut writer = BlockSegmentWriter::new(
+                0,
+                0,
+                Parity::Even,
+                row_len,
+                segment_schema(layout).unwrap(),
+                directory,
+                128,
+                rows,
+                codec,
+                ResourceBudget::unlimited(),
+            );
+            // A row a real run could produce: a handful of distinct values,
+            // mostly MISSING, which is what the V2 payload looks like.
+            let row = (0..row_len)
+                .map(|index| if index % 5 == 0 { index as i32 } else { -1 })
+                .collect::<Vec<_>>();
+            for _ in 0..rows {
+                writer.push(&row).unwrap();
+            }
+            let (record_count, segments) = writer.finish().unwrap();
+            assert_eq!(record_count, rows);
+            let byte_count = segments
+                .iter()
+                .map(|segment| segment.byte_count)
+                .sum::<u64>();
+            assert!(byte_count > 0);
+            assert_eq!(read_segment_rows(&segments[0].path, 256), vec![row; 256]);
+            sizes.insert(codec, byte_count);
+        }
+        let uncompressed = sizes[&SegmentCodec::None];
+        for codec in [SegmentCodec::Lz4Frame, SegmentCodec::Zstd] {
+            assert!(
+                sizes[&codec] < uncompressed,
+                "{} wrote {} bytes against {uncompressed} uncompressed, so the codec \
+                 never reached the writer",
+                codec.name(),
+                sizes[&codec],
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Read the first `limit` rows back out of an Arrow IPC segment.
+    fn read_segment_rows(path: &Path, limit: usize) -> Vec<Vec<i32>> {
+        let file = File::open(path).unwrap();
+        let reader = FileReader::try_new(BufReader::new(file), None).unwrap();
+        let mut rows = Vec::new();
+        for batch in reader {
+            let batch = batch.unwrap();
+            let columns = batch
+                .columns()
+                .iter()
+                .take(batch.num_columns() - 2)
+                .map(|column| column.as_any().downcast_ref::<Int32Array>().unwrap())
+                .collect::<Vec<_>>();
+            for index in 0..batch.num_rows() {
+                if rows.len() == limit {
+                    return rows;
+                }
+                rows.push(columns.iter().map(|column| column.value(index)).collect());
+            }
+        }
+        rows
+    }
+
+    /// A codec must change nothing but the bytes on disk: the same input
+    /// publishes the same CSV text, descriptor rows and counts.
+    #[test]
+    fn the_segment_codec_changes_no_published_byte() {
+        let root = temporary_directory("codec-equivalence");
+        fs::create_dir(&root).unwrap();
+        let transcript = prefix_split_transcript();
+        let mut outputs = Vec::new();
+        for codec in [
+            SegmentCodec::None,
+            SegmentCodec::Lz4Frame,
+            SegmentCodec::Zstd,
+        ] {
+            let label = codec.name();
+            let directory = root.join(label);
+            fs::create_dir(&directory).unwrap();
+            let csf = directory.join("out.c");
+            let csf_parquet = directory.join("out.parquet");
+            let descriptors = directory.join("descriptors.parquet");
+            let header = directory.join("header.toml");
+            let stats = generate_disk_outputs_from_transcript_with_options(
+                transcript,
+                &csf,
+                &csf_parquet,
+                &descriptors,
+                &header,
+                &GenerationOptions {
+                    threads: Some(1),
+                    records_per_task: Some(4),
+                    rows_per_batch: 2,
+                    rows_per_segment: 3,
+                    segment_codec: codec,
+                    scratch_dir: Some(directory.join("scratch")),
+                    ..GenerationOptions::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                stats.segment_codec,
+                codec.name(),
+                "the run did not report the codec it was given"
+            );
+            assert!(stats.duplicate_count == 0, "the input repeats no record");
+            outputs.push((
+                label,
+                fs::read(&csf).unwrap(),
+                read_rows(&descriptors).unwrap(),
+                stats.generated_count,
+            ));
+        }
+        let (_, first_csf, first_rows, first_count) = &outputs[0];
+        for (label, csf, rows, count) in &outputs[1..] {
+            assert_eq!(csf, first_csf, "{label} changed the CSF text");
+            assert_eq!(rows, first_rows, "{label} changed the descriptor rows");
+            assert_eq!(count, first_count, "{label} changed the record count");
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

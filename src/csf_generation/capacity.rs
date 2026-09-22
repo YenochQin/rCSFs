@@ -239,7 +239,8 @@ pub(crate) fn estimate_capacity(
         ),
         format!(
             "segments {segment_row_bytes} bytes/row = 1.1x the {row_bytes}-byte V2 row plus \
-             two ordinals; measured overhead was 3.3%"
+             two ordinals; measured overhead was 3.3%, and the model assumes *uncompressed* \
+             segments, so a run that enables a segment codec writes fewer bytes than this"
         ),
         format!(
             "root buckets {bucket_row_bytes} bytes/row = V2 row + 16-byte digest + 8-byte \

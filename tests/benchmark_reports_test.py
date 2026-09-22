@@ -560,3 +560,57 @@ def test_a_windows_root_is_matched_case_insensitively(
     )
     # A different directory is not swallowed by the root above it.
     assert support.normalize_path(r"C:\Users\Alice\Other") == "<path>/Other"
+
+
+def _digests(report: Path, *, codec: str, deduplication: str) -> dict[str, str]:
+    """The published-artifact digests one report recorded for one combination."""
+    document = json.loads(report.read_text(encoding="utf-8"))
+    for measurement in document["measurements"]:
+        if (
+            measurement.get("segment_codec") == codec
+            and measurement.get("deduplication") == deduplication
+        ):
+            return {
+                key: measurement[key]
+                for key in (
+                    "csf_text_sha256",
+                    "descriptor_sha256",
+                    "header_sha256",
+                    "csf_parquet_sha256",
+                )
+            }
+    raise AssertionError(f"{report.name} has no {deduplication}/{codec} measurement")
+
+
+@pytest.mark.parametrize("codec", ["none", "zstd"])
+def test_the_one_pass_tail_published_what_the_two_pass_tail_published(
+    codec: str,
+) -> None:
+    """P4 replaced the tail; the content it publishes must not have moved.
+
+    The two campaigns were measured at different revisions (`47e04ea` and
+    `de97127`), so this compares two committed reports rather than two runs of
+    the current code. The CSF text, descriptor and header must be identical
+    byte for byte; the CSF Parquet digest is allowed to differ because its
+    row-group boundaries follow whichever path batched it. If the tail ever
+    changes the first three, this test fails on the registered evidence instead
+    of on a claim in a report.
+    """
+    reference = _digests(
+        BENCHMARK_DIRECTORY / "v2_disk_generation_dedup_b2_20260922.json",
+        codec=codec,
+        deduplication="verified_unique",
+    )
+    measured = _digests(
+        BENCHMARK_DIRECTORY / "v2_disk_generation_final_encoding_b2_20260922.json",
+        codec=codec,
+        deduplication="verified_unique",
+    )
+    for key in ("csf_text_sha256", "descriptor_sha256", "header_sha256"):
+        assert measured[key] == reference[key], (
+            f"the one-pass tail changed {key} for the {codec} codec"
+        )
+    assert measured["csf_parquet_sha256"] != reference["csf_parquet_sha256"], (
+        "the CSF Parquet digest was expected to move with the batch layout; if it "
+        "stopped moving, this test's premise needs re-checking"
+    )

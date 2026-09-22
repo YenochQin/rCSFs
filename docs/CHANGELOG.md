@@ -26,6 +26,20 @@
   并行写入口）、CLI staging→目的地的 rename 发布、部分发布失败的报告策略——都属 P4 的
   发布优化子步骤。
 
+计量（干净树 `de97127`，8 线程，默认 `verified_unique`，见
+[报告](benchmarks/v2_disk_generation_final_encoding_20260922.md)）：
+
+- 尾部（转换+写出）提速 2.36–2.47×（B1 8.536 → 3.450 秒，B2 2.575 → 1.090 秒），端到端
+  B1 9.263 → 5.819 秒（−37.2%）、B2 2.914 → 2.218 秒（−23.9%）；相对基线 `7ad18b1`
+  的 8 线程累计 **2.47× / 2.18×**，达到 P4 的"≥2×"目标（本机、本输入）。
+- 新尾部发布的 CSF 文本、descriptor 与 header 的 SHA-256 与两遍尾部逐一相同；只有
+  CSF Parquet 的摘要变化（其 row group 边界随批次划分，不属于契约）。该跨活动对照已
+  由 `tests/benchmark_reports_test.py::test_the_one_pass_tail_published_what_the_two_pass_tail_published`
+  作为回归测试固定下来。
+- 相位分离证实"并行准备 + 串行编码"：prepare 为 7.8–7.9× 并行度，encode 与 write 为
+  1.0×；encode 因此成为尾部最大单项（B1 1.387 秒、B2 0.655 秒），即未实施的并行
+  Parquet 列块编码所指向的收益点。
+
 
 ### P2a/P6b：在 47e04ea 上用独立进程 harness 复测（2026-09-22）
 

@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+### P4：单遍构建最终产物，取消描述符回读（2026-09-22）
+
+- 新增 `build_final_outputs_from_segments`：只读一遍 segment，每行的整数直接进入
+  descriptor Parquet，同一批行的解码/校验/格式化同时供 CSF 文本与 CSF Parquet 使用。
+  旧路径是"写 descriptor Parquet → 回读解压 → 生成文本"，即每行被编码一次、解码一次、
+  格式化一次且跨两遍磁盘 I/O；现在没有回读。
+- 准备阶段（解码、校验、格式化）在 `threads` 指定的线程池中按批并行；descriptor
+  Parquet 仍是单写者、CSF 文本仍是单笔，块分隔符与连续 `idx` 由按序的发布侧发出，
+  因此批次与线程边界不可能把行放进错误的块。
+- 三个相位分别计时上报 `final_encoding_prepare` / `final_encoding_encode` /
+  `final_encoding_write`（旧的 `descriptor_merge`、`csf_restore` 两个阶段合并为它们）。
+  分开计时是刻意的：prepare 的 CPU 是墙钟的数倍（e1 上 8 线程 1345ms CPU / 171ms 墙钟），
+  encode 与 write 基本是单线程——不把"并行准备 + 串行编码"说成并行编码。
+- 旧的两遍尾部保留为参考实现，并由新测试 `the_combined_final_pass_publishes_what_merge_and_restore_published`
+  逐字节差分：descriptor Parquet 与 CSF 文本完全一致，CSF Parquet 按逻辑行一致（其
+  row group 边界随批次划分，不属于契约）。该差分在实现过程中立即抓到过一个自造缺陷。
+- 未实施并已在计划中标注：并行 Parquet 列块编码（当前 `parquet` crate 无受支持的
+  并行写入口）、CLI staging→目的地的 rename 发布、部分发布失败的报告策略——都属 P4 的
+  发布优化子步骤。
+
+
 ### P2a/P6b：在 47e04ea 上用独立进程 harness 复测（2026-09-22）
 
 - 补齐两项登记缺口：每个组合的**独立进程 RSS**（codec 实验）与 B1/B2 **四个发布产物的
@@ -125,6 +146,7 @@
   `(2J, seniority)` 两两不同，并钉住支持的 `(2j, 电子/空穴占据)` 集合——新增态表会让
   它失败，逼使唯一性论证被重新审视。
 
+### 第五轮评审修正：未跟踪目录与身份类型（2026-09-22）
 
 - 修正未跟踪目录内改动不被指纹察觉的缺陷：`git status` 默认把一个未跟踪目录折叠成
   一行 `?? dir/`，其内容变化既不改变条目也不改变指纹，`--allow-dirty-source` 下的

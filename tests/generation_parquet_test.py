@@ -100,8 +100,9 @@ def test_config_generation_json_contains_stage_stats(
         "workload_planning",
         "csf_generation",
         "deduplication",
-        "descriptor_merge",
-        "csf_restore",
+        "final_encoding_prepare",
+        "final_encoding_encode",
+        "final_encoding_write",
     ]
     plan_stats = payload["plan_stats"]
     assert plan_stats["task_count"] >= 1

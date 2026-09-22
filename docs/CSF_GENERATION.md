@@ -238,10 +238,38 @@ memory_budget_mib = 8192
 
 The CLI flag `--memory-budget-mib` overrides the TOML value. The returned JSON
 contains `stage_stats` for enumeration, workload planning, generation,
-de-duplication, descriptor merge, and CSF restoration, plus
+de-duplication, and the three final-encoding phases, plus
 `resource_stats.memory_budget_mib`, `budget_bytes`, `peak_managed_bytes`,
 `current_managed_bytes`, and `occupation_bytes`. The budget accounts for
 selected internal data structures; it is not an operating-system RSS limit.
+
+### Final encoding
+
+The final artifacts are built from the segments in one ordered pass. The
+pre-P4 pipeline wrote the descriptor Parquet and then read it back to format
+the CSF text, so every row was Parquet-encoded once, Parquet-decoded once and
+formatted once across two passes over disk. The combined pass reads each
+surviving row from its segment exactly once: its integers go straight into the
+descriptor Parquet, and its decoded record is validated and formatted for the
+CSF text and CSF Parquet.
+
+The three phases are timed and reported separately, because they are
+separately real (`final_encoding_prepare`, `final_encoding_encode`,
+`final_encoding_write`): decoding, validation and formatting run in the thread
+pool over each batch's rows — the pool sized by `threads`, with the CSF-wide
+CPU time visible as `cpu_millis` above the wall clock — while the descriptor
+Parquet still has a single writer and the CSF text a single pen. That is
+parallel preparation over a serial encoder, and the statistics do not present
+it as fully parallel encoding. Block separators and the global `idx` sequence
+are emitted by the ordered publication side, so batch or thread boundaries
+cannot land a row in the wrong block.
+
+The old two-pass tail (`merge_v2_deduplicated_segments` plus the descriptor
+read-back) is kept as the reference implementation and differentially checked
+against the combined pass in the test suite: the descriptor Parquet and CSF
+text come out byte-identical, the CSF Parquet row-identical (its row-group
+boundaries follow whichever path batched it, which is not part of its
+contract). The standalone restoration API keeps its own full input validation.
 
 ### Counted workload planning
 

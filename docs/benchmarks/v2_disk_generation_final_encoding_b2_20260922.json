@@ -9,13 +9,13 @@
     },
     "git": {
       "branch": "1.3.1-beta2",
-      "commit": "e6f3b3efeab239e72b133021a4466e48c9f026a9",
-      "describe": "e6f3b3e",
+      "commit": "45618fc45abeda2cad8368806ead40d0e7391845",
+      "describe": "45618fc",
       "dirty": false,
       "dirty_ignores": [
         "docs/benchmarks"
       ],
-      "tree": "88c3f73a4182b47ae2fee56c506bfbf877dc1442"
+      "tree": "09cccef306c36b12a4af141f2b33a61a66c9dbd0"
     },
     "machine": "arm64",
     "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
@@ -26,16 +26,16 @@
     "total_memory_bytes": 17179869184
   },
   "filesystem": {
-    "free_bytes": 72468365312,
+    "free_bytes": 72466923520,
     "path": "<system-temp>",
     "total_bytes": 245107195904,
     "type": "apfs"
   },
-  "generated_at_unix_seconds": 1790085244.675319,
+  "generated_at_unix_seconds": 1790085678.843385,
   "measurements": [
     {
       "block_count": 1,
-      "cleanup_seconds": 0.03645583399338648,
+      "cleanup_seconds": 0.05313079201732762,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -79,7 +79,7 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 418643968,
+      "rss_peak_bytes": 572375040,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
@@ -87,6 +87,7 @@
       "scratch_peak_file_count": 19,
       "scratch_samples": 8,
       "segment_codec": "none",
+      "stage_seconds": 1.529,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -107,8 +108,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 169,
-          "elapsed_millis": 21,
+          "cpu_millis": 175,
+          "elapsed_millis": 22,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -116,8 +117,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1745,
-          "elapsed_millis": 271,
+          "cpu_millis": 1574,
+          "elapsed_millis": 263,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -143,8 +144,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 90,
-          "elapsed_millis": 93,
+          "cpu_millis": 94,
+          "elapsed_millis": 91,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -152,8 +153,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2285,
-          "elapsed_millis": 290,
+          "cpu_millis": 2166,
+          "elapsed_millis": 275,
           "input_bytes": 70044,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -161,7 +162,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 655,
+          "cpu_millis": 653,
           "elapsed_millis": 654,
           "input_bytes": 0,
           "input_records": 560351,
@@ -179,8 +180,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 195,
-          "elapsed_millis": 111,
+          "cpu_millis": 181,
+          "elapsed_millis": 105,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -189,7 +190,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 91,
+          "elapsed_millis": 75,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -199,12 +200,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.05109674999630087,
       "unique_occupations": 19243,
-      "wall_seconds": 1.627962833008496
+      "wall_seconds": 1.5800967499963008
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.026024749997304752,
+      "cleanup_seconds": 0.04639104098896496,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -248,7 +250,7 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 529137664,
+      "rss_peak_bytes": 483311616,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
@@ -256,6 +258,7 @@
       "scratch_peak_file_count": 19,
       "scratch_samples": 8,
       "segment_codec": "none",
+      "stage_seconds": 1.547,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -267,8 +270,8 @@
           "output_records": 0
         },
         {
-          "cpu_millis": 43,
-          "elapsed_millis": 43,
+          "cpu_millis": 44,
+          "elapsed_millis": 44,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -276,7 +279,7 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 172,
+          "cpu_millis": 170,
           "elapsed_millis": 21,
           "input_bytes": 0,
           "input_records": 19243,
@@ -285,8 +288,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1665,
-          "elapsed_millis": 254,
+          "cpu_millis": 1613,
+          "elapsed_millis": 268,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -294,7 +297,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2,
+          "cpu_millis": 1,
           "elapsed_millis": 1,
           "input_bytes": 530589180,
           "input_records": 560351,
@@ -303,7 +306,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 0,
+          "cpu_millis": 1,
           "elapsed_millis": 0,
           "input_bytes": 0,
           "input_records": 560351,
@@ -312,7 +315,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 87,
+          "cpu_millis": 90,
           "elapsed_millis": 92,
           "input_bytes": 0,
           "input_records": 560351,
@@ -321,8 +324,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2230,
-          "elapsed_millis": 282,
+          "cpu_millis": 2233,
+          "elapsed_millis": 283,
           "input_bytes": 70044,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -330,8 +333,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 654,
-          "elapsed_millis": 656,
+          "cpu_millis": 659,
+          "elapsed_millis": 655,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -348,8 +351,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 183,
-          "elapsed_millis": 106,
+          "cpu_millis": 180,
+          "elapsed_millis": 108,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -358,7 +361,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 74,
+          "elapsed_millis": 75,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -368,12 +371,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.05093779198662385,
       "unique_occupations": 19243,
-      "wall_seconds": 1.5811966670153197
+      "wall_seconds": 1.5979377919866238
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.006911833013873547,
+      "cleanup_seconds": 0.006284416012931615,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -417,7 +421,7 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 469630976,
+      "rss_peak_bytes": 465338368,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
@@ -425,9 +429,10 @@
       "scratch_peak_file_count": 19,
       "scratch_samples": 8,
       "segment_codec": "none",
+      "stage_seconds": 1.542,
       "stage_stats": [
         {
-          "cpu_millis": 1,
+          "cpu_millis": 0,
           "elapsed_millis": 0,
           "input_bytes": 0,
           "input_records": 0,
@@ -436,7 +441,7 @@
           "output_records": 0
         },
         {
-          "cpu_millis": 44,
+          "cpu_millis": 45,
           "elapsed_millis": 44,
           "input_bytes": 0,
           "input_records": 0,
@@ -445,8 +450,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 176,
-          "elapsed_millis": 22,
+          "cpu_millis": 165,
+          "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -454,8 +459,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1600,
-          "elapsed_millis": 252,
+          "cpu_millis": 1617,
+          "elapsed_millis": 288,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -472,7 +477,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1,
+          "cpu_millis": 0,
           "elapsed_millis": 0,
           "input_bytes": 0,
           "input_records": 560351,
@@ -490,8 +495,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1944,
-          "elapsed_millis": 247,
+          "cpu_millis": 2007,
+          "elapsed_millis": 257,
           "input_bytes": 70044,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -499,8 +504,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 660,
-          "elapsed_millis": 667,
+          "cpu_millis": 663,
+          "elapsed_millis": 659,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -517,8 +522,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 179,
-          "elapsed_millis": 108,
+          "cpu_millis": 183,
+          "elapsed_millis": 106,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -537,12 +542,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.05206908400706012,
       "unique_occupations": 19243,
-      "wall_seconds": 1.5602719169983175
+      "wall_seconds": 1.5940690840070602
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.0035176250094082206,
+      "cleanup_seconds": 0.004129040986299515,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -586,14 +592,15 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 403292160,
+      "rss_peak_bytes": 404406272,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
       "scratch_peak_bytes": 4762520,
       "scratch_peak_file_count": 19,
-      "scratch_samples": 8,
+      "scratch_samples": 9,
       "segment_codec": "zstd",
+      "stage_seconds": 1.7,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -614,8 +621,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 169,
-          "elapsed_millis": 21,
+          "cpu_millis": 175,
+          "elapsed_millis": 22,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -623,8 +630,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1580,
-          "elapsed_millis": 247,
+          "cpu_millis": 1487,
+          "elapsed_millis": 237,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -641,7 +648,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 0,
+          "cpu_millis": 1,
           "elapsed_millis": 0,
           "input_bytes": 0,
           "input_records": 560351,
@@ -650,8 +657,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 103,
-          "elapsed_millis": 92,
+          "cpu_millis": 116,
+          "elapsed_millis": 108,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -659,8 +666,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2225,
-          "elapsed_millis": 283,
+          "cpu_millis": 2324,
+          "elapsed_millis": 327,
           "input_bytes": 70044,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -668,8 +675,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 654,
-          "elapsed_millis": 654,
+          "cpu_millis": 723,
+          "elapsed_millis": 742,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -686,8 +693,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 179,
-          "elapsed_millis": 105,
+          "cpu_millis": 213,
+          "elapsed_millis": 132,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -696,7 +703,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 73,
+          "elapsed_millis": 87,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -706,12 +713,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.13823320799274375,
       "unique_occupations": 19243,
-      "wall_seconds": 1.649360292009078
+      "wall_seconds": 1.8382332079927437
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.0037641660019289702,
+      "cleanup_seconds": 0.0039464580186177045,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -755,7 +763,7 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 392347648,
+      "rss_peak_bytes": 392462336,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
@@ -763,6 +771,7 @@
       "scratch_peak_file_count": 19,
       "scratch_samples": 9,
       "segment_codec": "zstd",
+      "stage_seconds": 1.557,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -775,7 +784,7 @@
         },
         {
           "cpu_millis": 44,
-          "elapsed_millis": 44,
+          "elapsed_millis": 43,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -783,7 +792,7 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 170,
+          "cpu_millis": 171,
           "elapsed_millis": 21,
           "input_bytes": 0,
           "input_records": 19243,
@@ -792,8 +801,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1682,
-          "elapsed_millis": 255,
+          "cpu_millis": 1527,
+          "elapsed_millis": 238,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -801,7 +810,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2,
+          "cpu_millis": 1,
           "elapsed_millis": 1,
           "input_bytes": 4692476,
           "input_records": 560351,
@@ -820,7 +829,7 @@
         },
         {
           "cpu_millis": 97,
-          "elapsed_millis": 93,
+          "elapsed_millis": 95,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -828,8 +837,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2584,
-          "elapsed_millis": 328,
+          "cpu_millis": 2260,
+          "elapsed_millis": 292,
           "input_bytes": 70044,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -837,8 +846,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 660,
-          "elapsed_millis": 652,
+          "cpu_millis": 671,
+          "elapsed_millis": 674,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -855,8 +864,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 172,
-          "elapsed_millis": 106,
+          "cpu_millis": 188,
+          "elapsed_millis": 116,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -865,7 +874,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 74,
+          "elapsed_millis": 77,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -875,12 +884,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.13460608298261656,
       "unique_occupations": 19243,
-      "wall_seconds": 1.7026987080171239
+      "wall_seconds": 1.6916060829826165
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.0035166669986210763,
+      "cleanup_seconds": 0.004373207979369909,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -924,7 +934,7 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 408600576,
+      "rss_peak_bytes": 394084352,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
@@ -932,6 +942,7 @@
       "scratch_peak_file_count": 19,
       "scratch_samples": 9,
       "segment_codec": "zstd",
+      "stage_seconds": 1.539,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -952,8 +963,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 165,
-          "elapsed_millis": 20,
+          "cpu_millis": 166,
+          "elapsed_millis": 21,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -961,8 +972,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1505,
-          "elapsed_millis": 233,
+          "cpu_millis": 1521,
+          "elapsed_millis": 241,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -970,7 +981,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2,
+          "cpu_millis": 1,
           "elapsed_millis": 1,
           "input_bytes": 4692476,
           "input_records": 560351,
@@ -988,8 +999,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 90,
-          "elapsed_millis": 92,
+          "cpu_millis": 98,
+          "elapsed_millis": 94,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -997,8 +1008,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2463,
-          "elapsed_millis": 312,
+          "cpu_millis": 2281,
+          "elapsed_millis": 291,
           "input_bytes": 70044,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -1006,8 +1017,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 654,
-          "elapsed_millis": 655,
+          "cpu_millis": 666,
+          "elapsed_millis": 663,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -1024,8 +1035,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 184,
-          "elapsed_millis": 108,
+          "cpu_millis": 189,
+          "elapsed_millis": 110,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -1034,7 +1045,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 77,
+          "elapsed_millis": 75,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -1044,12 +1055,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.1319185409999919,
       "unique_occupations": 19243,
-      "wall_seconds": 1.6693992080108728
+      "wall_seconds": 1.6709185409999918
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.03396245799376629,
+      "cleanup_seconds": 0.007808291004039347,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -1093,14 +1105,15 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 447545344,
+      "rss_peak_bytes": 438173696,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 1019630332,
+      "scratch_peak_bytes": 1050594908,
       "scratch_peak_file_count": 274,
-      "scratch_samples": 16,
+      "scratch_samples": 17,
       "segment_codec": "none",
+      "stage_seconds": 4.367,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -1113,7 +1126,7 @@
         },
         {
           "cpu_millis": 44,
-          "elapsed_millis": 43,
+          "elapsed_millis": 44,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -1121,8 +1134,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 156,
-          "elapsed_millis": 20,
+          "cpu_millis": 166,
+          "elapsed_millis": 21,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -1130,8 +1143,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1655,
-          "elapsed_millis": 260,
+          "cpu_millis": 1580,
+          "elapsed_millis": 255,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -1139,8 +1152,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1606,
-          "elapsed_millis": 1661,
+          "cpu_millis": 1682,
+          "elapsed_millis": 2864,
           "input_bytes": 530589180,
           "input_records": 560351,
           "name": "deduplication",
@@ -1157,7 +1170,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 99,
+          "cpu_millis": 90,
           "elapsed_millis": 92,
           "input_bytes": 0,
           "input_records": 560351,
@@ -1166,8 +1179,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1950,
-          "elapsed_millis": 254,
+          "cpu_millis": 2030,
+          "elapsed_millis": 258,
           "input_bytes": 520075772,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -1175,8 +1188,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 654,
-          "elapsed_millis": 652,
+          "cpu_millis": 651,
+          "elapsed_millis": 653,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -1193,8 +1206,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 180,
-          "elapsed_millis": 106,
+          "cpu_millis": 184,
+          "elapsed_millis": 107,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -1203,7 +1216,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 88,
+          "elapsed_millis": 73,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -1213,12 +1226,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.05128441701363773,
       "unique_occupations": 19243,
-      "wall_seconds": 3.2272774589946494
+      "wall_seconds": 4.418284417013638
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.007820833008736372,
+      "cleanup_seconds": 0.04466054099611938,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -1262,14 +1276,15 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 518619136,
+      "rss_peak_bytes": 451657728,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 1027202812,
+      "scratch_peak_bytes": 1050594908,
       "scratch_peak_file_count": 274,
       "scratch_samples": 17,
       "segment_codec": "none",
+      "stage_seconds": 3.337,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -1282,7 +1297,7 @@
         },
         {
           "cpu_millis": 44,
-          "elapsed_millis": 43,
+          "elapsed_millis": 44,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -1290,8 +1305,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 171,
-          "elapsed_millis": 21,
+          "cpu_millis": 158,
+          "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -1299,8 +1314,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1575,
-          "elapsed_millis": 250,
+          "cpu_millis": 1591,
+          "elapsed_millis": 261,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -1308,8 +1323,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1616,
-          "elapsed_millis": 1838,
+          "cpu_millis": 1640,
+          "elapsed_millis": 1793,
           "input_bytes": 530589180,
           "input_records": 560351,
           "name": "deduplication",
@@ -1326,8 +1341,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 97,
-          "elapsed_millis": 94,
+          "cpu_millis": 92,
+          "elapsed_millis": 95,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -1335,8 +1350,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2116,
-          "elapsed_millis": 271,
+          "cpu_millis": 2104,
+          "elapsed_millis": 269,
           "input_bytes": 520075772,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -1344,8 +1359,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 663,
-          "elapsed_millis": 663,
+          "cpu_millis": 667,
+          "elapsed_millis": 665,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -1362,8 +1377,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 184,
-          "elapsed_millis": 112,
+          "cpu_millis": 185,
+          "elapsed_millis": 113,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -1372,7 +1387,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 74,
+          "elapsed_millis": 77,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -1382,12 +1397,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.0517087079929186,
       "unique_occupations": 19243,
-      "wall_seconds": 3.420086917001754
+      "wall_seconds": 3.388708707992919
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.03838016701047309,
+      "cleanup_seconds": 0.05153766702278517,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -1431,7 +1447,7 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 483803136,
+      "rss_peak_bytes": 436535296,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
@@ -1439,6 +1455,7 @@
       "scratch_peak_file_count": 274,
       "scratch_samples": 17,
       "segment_codec": "none",
+      "stage_seconds": 3.259,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -1450,8 +1467,8 @@
           "output_records": 0
         },
         {
-          "cpu_millis": 45,
-          "elapsed_millis": 44,
+          "cpu_millis": 44,
+          "elapsed_millis": 43,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -1459,7 +1476,7 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 166,
+          "cpu_millis": 161,
           "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
@@ -1468,8 +1485,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1615,
-          "elapsed_millis": 675,
+          "cpu_millis": 1579,
+          "elapsed_millis": 262,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -1477,8 +1494,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1608,
-          "elapsed_millis": 1778,
+          "cpu_millis": 1606,
+          "elapsed_millis": 1698,
           "input_bytes": 530589180,
           "input_records": 560351,
           "name": "deduplication",
@@ -1486,7 +1503,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 0,
+          "cpu_millis": 1,
           "elapsed_millis": 0,
           "input_bytes": 0,
           "input_records": 560351,
@@ -1495,8 +1512,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 89,
-          "elapsed_millis": 92,
+          "cpu_millis": 97,
+          "elapsed_millis": 91,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -1504,8 +1521,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1921,
-          "elapsed_millis": 244,
+          "cpu_millis": 2293,
+          "elapsed_millis": 291,
           "input_bytes": 520075772,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -1513,8 +1530,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 652,
-          "elapsed_millis": 651,
+          "cpu_millis": 649,
+          "elapsed_millis": 655,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -1531,8 +1548,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 182,
-          "elapsed_millis": 108,
+          "cpu_millis": 185,
+          "elapsed_millis": 106,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -1541,7 +1558,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 73,
+          "elapsed_millis": 93,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -1551,12 +1568,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.050940459002973615,
       "unique_occupations": 19243,
-      "wall_seconds": 3.7365012079826556
+      "wall_seconds": 3.3099404590029735
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.00446104200091213,
+      "cleanup_seconds": 0.0036952500231564045,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -1600,14 +1618,15 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 400424960,
+      "rss_peak_bytes": 402767872,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 511922428,
+      "scratch_peak_bytes": 522642684,
       "scratch_peak_file_count": 274,
       "scratch_samples": 17,
       "segment_codec": "zstd",
+      "stage_seconds": 3.344,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -1628,7 +1647,7 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 172,
+          "cpu_millis": 174,
           "elapsed_millis": 21,
           "input_bytes": 0,
           "input_records": 19243,
@@ -1637,8 +1656,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1673,
-          "elapsed_millis": 250,
+          "cpu_millis": 1506,
+          "elapsed_millis": 240,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -1646,8 +1665,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1763,
-          "elapsed_millis": 1822,
+          "cpu_millis": 1735,
+          "elapsed_millis": 1832,
           "input_bytes": 4692476,
           "input_records": 560351,
           "name": "deduplication",
@@ -1664,8 +1683,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 97,
-          "elapsed_millis": 93,
+          "cpu_millis": 94,
+          "elapsed_millis": 92,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -1673,8 +1692,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2291,
-          "elapsed_millis": 293,
+          "cpu_millis": 2245,
+          "elapsed_millis": 285,
           "input_bytes": 520075772,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -1682,8 +1701,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 660,
-          "elapsed_millis": 659,
+          "cpu_millis": 655,
+          "elapsed_millis": 652,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -1701,7 +1720,7 @@
         },
         {
           "cpu_millis": 176,
-          "elapsed_millis": 109,
+          "elapsed_millis": 105,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -1710,7 +1729,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 72,
+          "elapsed_millis": 74,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -1720,12 +1739,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.13070279198023504,
       "unique_occupations": 19243,
-      "wall_seconds": 3.491125208005542
+      "wall_seconds": 3.474702791980235
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.0037048330123070627,
+      "cleanup_seconds": 0.0037857080169487745,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -1769,14 +1789,15 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 403537920,
+      "rss_peak_bytes": 413859840,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 523511292,
+      "scratch_peak_bytes": 522568444,
       "scratch_peak_file_count": 274,
-      "scratch_samples": 17,
+      "scratch_samples": 18,
       "segment_codec": "zstd",
+      "stage_seconds": 3.394,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -1788,8 +1809,8 @@
           "output_records": 0
         },
         {
-          "cpu_millis": 44,
-          "elapsed_millis": 43,
+          "cpu_millis": 43,
+          "elapsed_millis": 42,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -1797,7 +1818,7 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 181,
+          "cpu_millis": 175,
           "elapsed_millis": 22,
           "input_bytes": 0,
           "input_records": 19243,
@@ -1806,8 +1827,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1602,
-          "elapsed_millis": 254,
+          "cpu_millis": 1673,
+          "elapsed_millis": 252,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -1815,8 +1836,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1761,
-          "elapsed_millis": 1834,
+          "cpu_millis": 1725,
+          "elapsed_millis": 1832,
           "input_bytes": 4692476,
           "input_records": 560351,
           "name": "deduplication",
@@ -1833,8 +1854,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 92,
-          "elapsed_millis": 93,
+          "cpu_millis": 96,
+          "elapsed_millis": 95,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -1842,8 +1863,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2522,
-          "elapsed_millis": 320,
+          "cpu_millis": 2409,
+          "elapsed_millis": 307,
           "input_bytes": 520075772,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -1851,8 +1872,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 659,
-          "elapsed_millis": 656,
+          "cpu_millis": 666,
+          "elapsed_millis": 665,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -1869,8 +1890,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 179,
-          "elapsed_millis": 107,
+          "cpu_millis": 178,
+          "elapsed_millis": 106,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -1879,7 +1900,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 71,
+          "elapsed_millis": 73,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -1889,12 +1910,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.1304947910250629,
       "unique_occupations": 19243,
-      "wall_seconds": 3.528325125022093
+      "wall_seconds": 3.524494791025063
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.003809499990893528,
+      "cleanup_seconds": 0.0037604579993057996,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -1938,14 +1960,15 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 403587072,
+      "rss_peak_bytes": 399998976,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
       "scratch_peak_bytes": 524698204,
       "scratch_peak_file_count": 274,
-      "scratch_samples": 17,
+      "scratch_samples": 18,
       "segment_codec": "zstd",
+      "stage_seconds": 3.355,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -1957,8 +1980,8 @@
           "output_records": 0
         },
         {
-          "cpu_millis": 43,
-          "elapsed_millis": 43,
+          "cpu_millis": 44,
+          "elapsed_millis": 44,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -1966,8 +1989,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 175,
-          "elapsed_millis": 22,
+          "cpu_millis": 164,
+          "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -1975,8 +1998,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1479,
-          "elapsed_millis": 227,
+          "cpu_millis": 1476,
+          "elapsed_millis": 233,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -1984,8 +2007,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1737,
-          "elapsed_millis": 1811,
+          "cpu_millis": 1727,
+          "elapsed_millis": 1834,
           "input_bytes": 4692476,
           "input_records": 560351,
           "name": "deduplication",
@@ -2002,7 +2025,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 87,
+          "cpu_millis": 93,
           "elapsed_millis": 92,
           "input_bytes": 0,
           "input_records": 560351,
@@ -2011,8 +2034,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2412,
-          "elapsed_millis": 306,
+          "cpu_millis": 2361,
+          "elapsed_millis": 300,
           "input_bytes": 520075772,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -2020,8 +2043,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 654,
-          "elapsed_millis": 651,
+          "cpu_millis": 651,
+          "elapsed_millis": 653,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -2038,7 +2061,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 177,
+          "cpu_millis": 179,
           "elapsed_millis": 106,
           "input_bytes": 0,
           "input_records": 560351,
@@ -2048,7 +2071,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 74,
+          "elapsed_millis": 73,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -2058,8 +2081,9 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.12959645800176078,
       "unique_occupations": 19243,
-      "wall_seconds": 3.4605150840070564
+      "wall_seconds": 3.4845964580017608
     }
   ],
   "rejected": [],
@@ -2088,7 +2112,7 @@
   },
   "summary": [
     {
-      "cleanup_seconds_median": 0.026024749997304752,
+      "cleanup_seconds_median": 0.04639104098896496,
       "dedup_temp_bytes_median": 70044,
       "deduplication": "verified_unique",
       "memory_budget_mib": null,
@@ -2098,102 +2122,13 @@
       "segment_codec": "none",
       "stages": {
         "csf_generation": {
-          "cpu_seconds_median": 1.665,
-          "wall_seconds_max": 0.271,
-          "wall_seconds_median": 0.254,
-          "wall_seconds_min": 0.252
+          "cpu_seconds_median": 1.613,
+          "wall_seconds_max": 0.288,
+          "wall_seconds_median": 0.268,
+          "wall_seconds_min": 0.263
         },
         "deduplication": {
           "cpu_seconds_median": 0.001,
-          "wall_seconds_max": 0.001,
-          "wall_seconds_median": 0.001,
-          "wall_seconds_min": 0.001
-        },
-        "enumeration": {
-          "cpu_seconds_median": 0.043,
-          "wall_seconds_max": 0.044,
-          "wall_seconds_median": 0.043,
-          "wall_seconds_min": 0.043
-        },
-        "final_encoding_csf_outputs_encode": {
-          "cpu_seconds_median": 0.183,
-          "wall_seconds_max": 0.111,
-          "wall_seconds_median": 0.108,
-          "wall_seconds_min": 0.106
-        },
-        "final_encoding_csf_outputs_write": {
-          "cpu_seconds_median": null,
-          "wall_seconds_max": 0.091,
-          "wall_seconds_median": 0.075,
-          "wall_seconds_min": 0.074
-        },
-        "final_encoding_descriptor_encode": {
-          "cpu_seconds_median": 0.655,
-          "wall_seconds_max": 0.667,
-          "wall_seconds_median": 0.656,
-          "wall_seconds_min": 0.654
-        },
-        "final_encoding_descriptor_write": {
-          "cpu_seconds_median": null,
-          "wall_seconds_max": 0.0,
-          "wall_seconds_median": 0.0,
-          "wall_seconds_min": 0.0
-        },
-        "final_encoding_prepare": {
-          "cpu_seconds_median": 2.23,
-          "wall_seconds_max": 0.29,
-          "wall_seconds_median": 0.282,
-          "wall_seconds_min": 0.247
-        },
-        "final_encoding_select": {
-          "cpu_seconds_median": 0.09,
-          "wall_seconds_max": 0.093,
-          "wall_seconds_median": 0.092,
-          "wall_seconds_min": 0.092
-        },
-        "header_write": {
-          "cpu_seconds_median": 0.0,
-          "wall_seconds_max": 0.0,
-          "wall_seconds_median": 0.0,
-          "wall_seconds_min": 0.0
-        },
-        "setup": {
-          "cpu_seconds_median": 0.0,
-          "wall_seconds_max": 0.0,
-          "wall_seconds_median": 0.0,
-          "wall_seconds_min": 0.0
-        },
-        "workload_planning": {
-          "cpu_seconds_median": 0.172,
-          "wall_seconds_max": 0.022,
-          "wall_seconds_median": 0.021,
-          "wall_seconds_min": 0.021
-        }
-      },
-      "threads": 8,
-      "wall_seconds_max": 1.627962833008496,
-      "wall_seconds_median": 1.5811966670153197,
-      "wall_seconds_min": 1.5602719169983175,
-      "wall_seconds_range": 0.06769091601017863
-    },
-    {
-      "cleanup_seconds_median": 0.0035176250094082206,
-      "dedup_temp_bytes_median": 70044,
-      "deduplication": "verified_unique",
-      "memory_budget_mib": null,
-      "runs": 3,
-      "scratch_peak_bytes_max": 4762520,
-      "segment_bytes_median": 4692476,
-      "segment_codec": "zstd",
-      "stages": {
-        "csf_generation": {
-          "cpu_seconds_median": 1.58,
-          "wall_seconds_max": 0.255,
-          "wall_seconds_median": 0.247,
-          "wall_seconds_min": 0.233
-        },
-        "deduplication": {
-          "cpu_seconds_median": 0.002,
           "wall_seconds_max": 0.001,
           "wall_seconds_median": 0.001,
           "wall_seconds_min": 0.001
@@ -2205,22 +2140,22 @@
           "wall_seconds_min": 0.043
         },
         "final_encoding_csf_outputs_encode": {
-          "cpu_seconds_median": 0.179,
+          "cpu_seconds_median": 0.181,
           "wall_seconds_max": 0.108,
           "wall_seconds_median": 0.106,
           "wall_seconds_min": 0.105
         },
         "final_encoding_csf_outputs_write": {
           "cpu_seconds_median": null,
-          "wall_seconds_max": 0.077,
-          "wall_seconds_median": 0.074,
-          "wall_seconds_min": 0.073
+          "wall_seconds_max": 0.075,
+          "wall_seconds_median": 0.075,
+          "wall_seconds_min": 0.075
         },
         "final_encoding_descriptor_encode": {
-          "cpu_seconds_median": 0.654,
-          "wall_seconds_max": 0.655,
-          "wall_seconds_median": 0.654,
-          "wall_seconds_min": 0.652
+          "cpu_seconds_median": 0.659,
+          "wall_seconds_max": 0.659,
+          "wall_seconds_median": 0.655,
+          "wall_seconds_min": 0.654
         },
         "final_encoding_descriptor_write": {
           "cpu_seconds_median": null,
@@ -2229,16 +2164,16 @@
           "wall_seconds_min": 0.0
         },
         "final_encoding_prepare": {
-          "cpu_seconds_median": 2.463,
-          "wall_seconds_max": 0.328,
-          "wall_seconds_median": 0.312,
-          "wall_seconds_min": 0.283
+          "cpu_seconds_median": 2.166,
+          "wall_seconds_max": 0.283,
+          "wall_seconds_median": 0.275,
+          "wall_seconds_min": 0.257
         },
         "final_encoding_select": {
-          "cpu_seconds_median": 0.097,
-          "wall_seconds_max": 0.093,
+          "cpu_seconds_median": 0.094,
+          "wall_seconds_max": 0.092,
           "wall_seconds_median": 0.092,
-          "wall_seconds_min": 0.092
+          "wall_seconds_min": 0.091
         },
         "header_write": {
           "cpu_seconds_median": 0.0,
@@ -2253,20 +2188,109 @@
           "wall_seconds_min": 0.0
         },
         "workload_planning": {
-          "cpu_seconds_median": 0.169,
-          "wall_seconds_max": 0.021,
+          "cpu_seconds_median": 0.17,
+          "wall_seconds_max": 0.022,
           "wall_seconds_median": 0.021,
           "wall_seconds_min": 0.02
         }
       },
       "threads": 8,
-      "wall_seconds_max": 1.7026987080171239,
-      "wall_seconds_median": 1.6693992080108728,
-      "wall_seconds_min": 1.649360292009078,
-      "wall_seconds_range": 0.0533384160080459
+      "wall_seconds_max": 1.5979377919866238,
+      "wall_seconds_median": 1.5940690840070602,
+      "wall_seconds_min": 1.5800967499963008,
+      "wall_seconds_range": 0.017841041990322992
     },
     {
-      "cleanup_seconds_median": 0.03396245799376629,
+      "cleanup_seconds_median": 0.004129040986299515,
+      "dedup_temp_bytes_median": 70044,
+      "deduplication": "verified_unique",
+      "memory_budget_mib": null,
+      "runs": 3,
+      "scratch_peak_bytes_max": 4762520,
+      "segment_bytes_median": 4692476,
+      "segment_codec": "zstd",
+      "stages": {
+        "csf_generation": {
+          "cpu_seconds_median": 1.521,
+          "wall_seconds_max": 0.241,
+          "wall_seconds_median": 0.238,
+          "wall_seconds_min": 0.237
+        },
+        "deduplication": {
+          "cpu_seconds_median": 0.001,
+          "wall_seconds_max": 0.001,
+          "wall_seconds_median": 0.001,
+          "wall_seconds_min": 0.001
+        },
+        "enumeration": {
+          "cpu_seconds_median": 0.044,
+          "wall_seconds_max": 0.044,
+          "wall_seconds_median": 0.043,
+          "wall_seconds_min": 0.043
+        },
+        "final_encoding_csf_outputs_encode": {
+          "cpu_seconds_median": 0.189,
+          "wall_seconds_max": 0.132,
+          "wall_seconds_median": 0.116,
+          "wall_seconds_min": 0.11
+        },
+        "final_encoding_csf_outputs_write": {
+          "cpu_seconds_median": null,
+          "wall_seconds_max": 0.087,
+          "wall_seconds_median": 0.077,
+          "wall_seconds_min": 0.075
+        },
+        "final_encoding_descriptor_encode": {
+          "cpu_seconds_median": 0.671,
+          "wall_seconds_max": 0.742,
+          "wall_seconds_median": 0.674,
+          "wall_seconds_min": 0.663
+        },
+        "final_encoding_descriptor_write": {
+          "cpu_seconds_median": null,
+          "wall_seconds_max": 0.0,
+          "wall_seconds_median": 0.0,
+          "wall_seconds_min": 0.0
+        },
+        "final_encoding_prepare": {
+          "cpu_seconds_median": 2.281,
+          "wall_seconds_max": 0.327,
+          "wall_seconds_median": 0.292,
+          "wall_seconds_min": 0.291
+        },
+        "final_encoding_select": {
+          "cpu_seconds_median": 0.098,
+          "wall_seconds_max": 0.108,
+          "wall_seconds_median": 0.095,
+          "wall_seconds_min": 0.094
+        },
+        "header_write": {
+          "cpu_seconds_median": 0.0,
+          "wall_seconds_max": 0.0,
+          "wall_seconds_median": 0.0,
+          "wall_seconds_min": 0.0
+        },
+        "setup": {
+          "cpu_seconds_median": 0.0,
+          "wall_seconds_max": 0.0,
+          "wall_seconds_median": 0.0,
+          "wall_seconds_min": 0.0
+        },
+        "workload_planning": {
+          "cpu_seconds_median": 0.171,
+          "wall_seconds_max": 0.022,
+          "wall_seconds_median": 0.021,
+          "wall_seconds_min": 0.021
+        }
+      },
+      "threads": 8,
+      "wall_seconds_max": 1.8382332079927437,
+      "wall_seconds_median": 1.6916060829826165,
+      "wall_seconds_min": 1.6709185409999918,
+      "wall_seconds_range": 0.16731466699275188
+    },
+    {
+      "cleanup_seconds_median": 0.04466054099611938,
       "dedup_temp_bytes_median": 520075772,
       "deduplication": "exact",
       "memory_budget_mib": null,
@@ -2276,40 +2300,40 @@
       "segment_codec": "none",
       "stages": {
         "csf_generation": {
-          "cpu_seconds_median": 1.615,
-          "wall_seconds_max": 0.675,
-          "wall_seconds_median": 0.26,
-          "wall_seconds_min": 0.25
+          "cpu_seconds_median": 1.58,
+          "wall_seconds_max": 0.262,
+          "wall_seconds_median": 0.261,
+          "wall_seconds_min": 0.255
         },
         "deduplication": {
-          "cpu_seconds_median": 1.608,
-          "wall_seconds_max": 1.838,
-          "wall_seconds_median": 1.778,
-          "wall_seconds_min": 1.661
+          "cpu_seconds_median": 1.64,
+          "wall_seconds_max": 2.864,
+          "wall_seconds_median": 1.793,
+          "wall_seconds_min": 1.698
         },
         "enumeration": {
           "cpu_seconds_median": 0.044,
           "wall_seconds_max": 0.044,
-          "wall_seconds_median": 0.043,
+          "wall_seconds_median": 0.044,
           "wall_seconds_min": 0.043
         },
         "final_encoding_csf_outputs_encode": {
-          "cpu_seconds_median": 0.182,
-          "wall_seconds_max": 0.112,
-          "wall_seconds_median": 0.108,
+          "cpu_seconds_median": 0.185,
+          "wall_seconds_max": 0.113,
+          "wall_seconds_median": 0.107,
           "wall_seconds_min": 0.106
         },
         "final_encoding_csf_outputs_write": {
           "cpu_seconds_median": null,
-          "wall_seconds_max": 0.088,
-          "wall_seconds_median": 0.074,
+          "wall_seconds_max": 0.093,
+          "wall_seconds_median": 0.077,
           "wall_seconds_min": 0.073
         },
         "final_encoding_descriptor_encode": {
-          "cpu_seconds_median": 0.654,
-          "wall_seconds_max": 0.663,
-          "wall_seconds_median": 0.652,
-          "wall_seconds_min": 0.651
+          "cpu_seconds_median": 0.651,
+          "wall_seconds_max": 0.665,
+          "wall_seconds_median": 0.655,
+          "wall_seconds_min": 0.653
         },
         "final_encoding_descriptor_write": {
           "cpu_seconds_median": null,
@@ -2318,14 +2342,103 @@
           "wall_seconds_min": 0.0
         },
         "final_encoding_prepare": {
-          "cpu_seconds_median": 1.95,
-          "wall_seconds_max": 0.271,
-          "wall_seconds_median": 0.254,
-          "wall_seconds_min": 0.244
+          "cpu_seconds_median": 2.104,
+          "wall_seconds_max": 0.291,
+          "wall_seconds_median": 0.269,
+          "wall_seconds_min": 0.258
         },
         "final_encoding_select": {
-          "cpu_seconds_median": 0.097,
-          "wall_seconds_max": 0.094,
+          "cpu_seconds_median": 0.092,
+          "wall_seconds_max": 0.095,
+          "wall_seconds_median": 0.092,
+          "wall_seconds_min": 0.091
+        },
+        "header_write": {
+          "cpu_seconds_median": 0.0,
+          "wall_seconds_max": 0.0,
+          "wall_seconds_median": 0.0,
+          "wall_seconds_min": 0.0
+        },
+        "setup": {
+          "cpu_seconds_median": 0.0,
+          "wall_seconds_max": 0.0,
+          "wall_seconds_median": 0.0,
+          "wall_seconds_min": 0.0
+        },
+        "workload_planning": {
+          "cpu_seconds_median": 0.161,
+          "wall_seconds_max": 0.021,
+          "wall_seconds_median": 0.02,
+          "wall_seconds_min": 0.02
+        }
+      },
+      "threads": 8,
+      "wall_seconds_max": 4.418284417013638,
+      "wall_seconds_median": 3.388708707992919,
+      "wall_seconds_min": 3.3099404590029735,
+      "wall_seconds_range": 1.1083439580106642
+    },
+    {
+      "cleanup_seconds_median": 0.0037604579993057996,
+      "dedup_temp_bytes_median": 520075772,
+      "deduplication": "exact",
+      "memory_budget_mib": null,
+      "runs": 3,
+      "scratch_peak_bytes_max": 524698204,
+      "segment_bytes_median": 4692476,
+      "segment_codec": "zstd",
+      "stages": {
+        "csf_generation": {
+          "cpu_seconds_median": 1.506,
+          "wall_seconds_max": 0.252,
+          "wall_seconds_median": 0.24,
+          "wall_seconds_min": 0.233
+        },
+        "deduplication": {
+          "cpu_seconds_median": 1.727,
+          "wall_seconds_max": 1.834,
+          "wall_seconds_median": 1.832,
+          "wall_seconds_min": 1.832
+        },
+        "enumeration": {
+          "cpu_seconds_median": 0.044,
+          "wall_seconds_max": 0.044,
+          "wall_seconds_median": 0.043,
+          "wall_seconds_min": 0.042
+        },
+        "final_encoding_csf_outputs_encode": {
+          "cpu_seconds_median": 0.178,
+          "wall_seconds_max": 0.106,
+          "wall_seconds_median": 0.106,
+          "wall_seconds_min": 0.105
+        },
+        "final_encoding_csf_outputs_write": {
+          "cpu_seconds_median": null,
+          "wall_seconds_max": 0.074,
+          "wall_seconds_median": 0.073,
+          "wall_seconds_min": 0.073
+        },
+        "final_encoding_descriptor_encode": {
+          "cpu_seconds_median": 0.655,
+          "wall_seconds_max": 0.665,
+          "wall_seconds_median": 0.653,
+          "wall_seconds_min": 0.652
+        },
+        "final_encoding_descriptor_write": {
+          "cpu_seconds_median": null,
+          "wall_seconds_max": 0.0,
+          "wall_seconds_median": 0.0,
+          "wall_seconds_min": 0.0
+        },
+        "final_encoding_prepare": {
+          "cpu_seconds_median": 2.361,
+          "wall_seconds_max": 0.307,
+          "wall_seconds_median": 0.3,
+          "wall_seconds_min": 0.285
+        },
+        "final_encoding_select": {
+          "cpu_seconds_median": 0.094,
+          "wall_seconds_max": 0.095,
           "wall_seconds_median": 0.092,
           "wall_seconds_min": 0.092
         },
@@ -2342,106 +2455,17 @@
           "wall_seconds_min": 0.0
         },
         "workload_planning": {
-          "cpu_seconds_median": 0.166,
-          "wall_seconds_max": 0.021,
-          "wall_seconds_median": 0.02,
+          "cpu_seconds_median": 0.174,
+          "wall_seconds_max": 0.022,
+          "wall_seconds_median": 0.021,
           "wall_seconds_min": 0.02
         }
       },
       "threads": 8,
-      "wall_seconds_max": 3.7365012079826556,
-      "wall_seconds_median": 3.420086917001754,
-      "wall_seconds_min": 3.2272774589946494,
-      "wall_seconds_range": 0.5092237489880063
-    },
-    {
-      "cleanup_seconds_median": 0.003809499990893528,
-      "dedup_temp_bytes_median": 520075772,
-      "deduplication": "exact",
-      "memory_budget_mib": null,
-      "runs": 3,
-      "scratch_peak_bytes_max": 524698204,
-      "segment_bytes_median": 4692476,
-      "segment_codec": "zstd",
-      "stages": {
-        "csf_generation": {
-          "cpu_seconds_median": 1.602,
-          "wall_seconds_max": 0.254,
-          "wall_seconds_median": 0.25,
-          "wall_seconds_min": 0.227
-        },
-        "deduplication": {
-          "cpu_seconds_median": 1.761,
-          "wall_seconds_max": 1.834,
-          "wall_seconds_median": 1.822,
-          "wall_seconds_min": 1.811
-        },
-        "enumeration": {
-          "cpu_seconds_median": 0.044,
-          "wall_seconds_max": 0.043,
-          "wall_seconds_median": 0.043,
-          "wall_seconds_min": 0.043
-        },
-        "final_encoding_csf_outputs_encode": {
-          "cpu_seconds_median": 0.177,
-          "wall_seconds_max": 0.109,
-          "wall_seconds_median": 0.107,
-          "wall_seconds_min": 0.106
-        },
-        "final_encoding_csf_outputs_write": {
-          "cpu_seconds_median": null,
-          "wall_seconds_max": 0.074,
-          "wall_seconds_median": 0.072,
-          "wall_seconds_min": 0.071
-        },
-        "final_encoding_descriptor_encode": {
-          "cpu_seconds_median": 0.659,
-          "wall_seconds_max": 0.659,
-          "wall_seconds_median": 0.656,
-          "wall_seconds_min": 0.651
-        },
-        "final_encoding_descriptor_write": {
-          "cpu_seconds_median": null,
-          "wall_seconds_max": 0.0,
-          "wall_seconds_median": 0.0,
-          "wall_seconds_min": 0.0
-        },
-        "final_encoding_prepare": {
-          "cpu_seconds_median": 2.412,
-          "wall_seconds_max": 0.32,
-          "wall_seconds_median": 0.306,
-          "wall_seconds_min": 0.293
-        },
-        "final_encoding_select": {
-          "cpu_seconds_median": 0.092,
-          "wall_seconds_max": 0.093,
-          "wall_seconds_median": 0.093,
-          "wall_seconds_min": 0.092
-        },
-        "header_write": {
-          "cpu_seconds_median": 0.0,
-          "wall_seconds_max": 0.0,
-          "wall_seconds_median": 0.0,
-          "wall_seconds_min": 0.0
-        },
-        "setup": {
-          "cpu_seconds_median": 0.0,
-          "wall_seconds_max": 0.0,
-          "wall_seconds_median": 0.0,
-          "wall_seconds_min": 0.0
-        },
-        "workload_planning": {
-          "cpu_seconds_median": 0.175,
-          "wall_seconds_max": 0.022,
-          "wall_seconds_median": 0.022,
-          "wall_seconds_min": 0.021
-        }
-      },
-      "threads": 8,
-      "wall_seconds_max": 3.528325125022093,
-      "wall_seconds_median": 3.491125208005542,
-      "wall_seconds_min": 3.4605150840070564,
-      "wall_seconds_range": 0.0678100410150364
+      "wall_seconds_max": 3.524494791025063,
+      "wall_seconds_median": 3.4845964580017608,
+      "wall_seconds_min": 3.474702791980235,
+      "wall_seconds_range": 0.04979199904482812
     }
   ],
   "transcript": {
@@ -2457,7 +2481,7 @@
   "warmups": [
     {
       "block_count": 1,
-      "cleanup_seconds": 0.007441958005074412,
+      "cleanup_seconds": 0.04000962499412708,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -2501,7 +2525,7 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 446431232,
+      "rss_peak_bytes": 539000832,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
@@ -2509,6 +2533,7 @@
       "scratch_peak_file_count": 19,
       "scratch_samples": 8,
       "segment_codec": "none",
+      "stage_seconds": 1.55,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -2529,8 +2554,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 168,
-          "elapsed_millis": 21,
+          "cpu_millis": 160,
+          "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -2538,8 +2563,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1550,
-          "elapsed_millis": 297,
+          "cpu_millis": 1532,
+          "elapsed_millis": 256,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -2547,7 +2572,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2,
+          "cpu_millis": 1,
           "elapsed_millis": 1,
           "input_bytes": 530589180,
           "input_records": 560351,
@@ -2565,8 +2590,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 93,
-          "elapsed_millis": 92,
+          "cpu_millis": 96,
+          "elapsed_millis": 93,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -2574,8 +2599,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2273,
-          "elapsed_millis": 289,
+          "cpu_millis": 2256,
+          "elapsed_millis": 288,
           "input_bytes": 70044,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -2583,8 +2608,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 654,
-          "elapsed_millis": 653,
+          "cpu_millis": 669,
+          "elapsed_millis": 662,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -2601,8 +2626,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 184,
-          "elapsed_millis": 107,
+          "cpu_millis": 182,
+          "elapsed_millis": 109,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -2621,12 +2646,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.052655208000214726,
       "unique_occupations": 19243,
-      "wall_seconds": 1.6329689160047565
+      "wall_seconds": 1.6026552080002148
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.022178291983436793,
+      "cleanup_seconds": 0.003357875015353784,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -2670,14 +2696,15 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 388661248,
+      "rss_peak_bytes": 396181504,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
       "scratch_peak_bytes": 4762520,
       "scratch_peak_file_count": 19,
-      "scratch_samples": 8,
+      "scratch_samples": 9,
       "segment_codec": "zstd",
+      "stage_seconds": 1.581,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -2689,8 +2716,8 @@
           "output_records": 0
         },
         {
-          "cpu_millis": 44,
-          "elapsed_millis": 43,
+          "cpu_millis": 45,
+          "elapsed_millis": 44,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -2698,8 +2725,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 172,
-          "elapsed_millis": 21,
+          "cpu_millis": 174,
+          "elapsed_millis": 22,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -2707,8 +2734,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1559,
-          "elapsed_millis": 243,
+          "cpu_millis": 1487,
+          "elapsed_millis": 236,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -2725,7 +2752,7 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1,
+          "cpu_millis": 0,
           "elapsed_millis": 0,
           "input_bytes": 0,
           "input_records": 560351,
@@ -2734,8 +2761,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 93,
-          "elapsed_millis": 92,
+          "cpu_millis": 90,
+          "elapsed_millis": 93,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -2743,8 +2770,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2293,
-          "elapsed_millis": 290,
+          "cpu_millis": 2689,
+          "elapsed_millis": 342,
           "input_bytes": 70044,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -2752,8 +2779,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 650,
-          "elapsed_millis": 650,
+          "cpu_millis": 663,
+          "elapsed_millis": 660,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -2770,8 +2797,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 174,
-          "elapsed_millis": 106,
+          "cpu_millis": 185,
+          "elapsed_millis": 108,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -2780,7 +2807,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 74,
+          "elapsed_millis": 75,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -2790,12 +2817,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.13153787502064374,
       "unique_occupations": 19243,
-      "wall_seconds": 1.6496157920046244
+      "wall_seconds": 1.7125378750206437
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.03154887500568293,
+      "cleanup_seconds": 0.027191125001991168,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -2839,14 +2867,15 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 467320832,
+      "rss_peak_bytes": 451641344,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 530659224,
       "scratch_final_file_count": 19,
-      "scratch_peak_bytes": 1016512252,
+      "scratch_peak_bytes": 1050594908,
       "scratch_peak_file_count": 274,
       "scratch_samples": 17,
       "segment_codec": "none",
+      "stage_seconds": 3.497,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -2858,8 +2887,8 @@
           "output_records": 0
         },
         {
-          "cpu_millis": 44,
-          "elapsed_millis": 43,
+          "cpu_millis": 48,
+          "elapsed_millis": 48,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -2867,8 +2896,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 170,
-          "elapsed_millis": 21,
+          "cpu_millis": 182,
+          "elapsed_millis": 23,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -2876,8 +2905,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1552,
-          "elapsed_millis": 252,
+          "cpu_millis": 1759,
+          "elapsed_millis": 297,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -2885,8 +2914,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1633,
-          "elapsed_millis": 1787,
+          "cpu_millis": 1664,
+          "elapsed_millis": 1891,
           "input_bytes": 530589180,
           "input_records": 560351,
           "name": "deduplication",
@@ -2903,8 +2932,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 92,
-          "elapsed_millis": 92,
+          "cpu_millis": 97,
+          "elapsed_millis": 94,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -2912,8 +2941,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2029,
-          "elapsed_millis": 259,
+          "cpu_millis": 2119,
+          "elapsed_millis": 270,
           "input_bytes": 520075772,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -2921,8 +2950,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 658,
-          "elapsed_millis": 656,
+          "cpu_millis": 665,
+          "elapsed_millis": 666,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -2939,8 +2968,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 180,
-          "elapsed_millis": 106,
+          "cpu_millis": 191,
+          "elapsed_millis": 109,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -2949,7 +2978,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 73,
+          "elapsed_millis": 99,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -2959,12 +2988,13 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.055373791986610854,
       "unique_occupations": 19243,
-      "wall_seconds": 3.340179833001457
+      "wall_seconds": 3.5523737919866107
     },
     {
       "block_count": 1,
-      "cleanup_seconds": 0.0036937920085620135,
+      "cleanup_seconds": 0.003737291001016274,
       "csf_bytes": 168534272,
       "csf_parquet_bytes": 40697360,
       "csf_parquet_sha256": "b5e59c34cc35f51122e94d585588e2169908c161026b04d665f13545921228a1",
@@ -3008,14 +3038,15 @@
         "occupation_bytes": 17182050,
         "peak_managed_bytes": 136785514
       },
-      "rss_peak_bytes": 392806400,
+      "rss_peak_bytes": 399802368,
       "rss_scope": "single_measurement_process",
       "scratch_final_bytes": 4762520,
       "scratch_final_file_count": 19,
       "scratch_peak_bytes": 524698204,
       "scratch_peak_file_count": 274,
-      "scratch_samples": 17,
+      "scratch_samples": 18,
       "segment_codec": "zstd",
+      "stage_seconds": 3.409,
       "stage_stats": [
         {
           "cpu_millis": 0,
@@ -3028,7 +3059,7 @@
         },
         {
           "cpu_millis": 44,
-          "elapsed_millis": 44,
+          "elapsed_millis": 43,
           "input_bytes": 0,
           "input_records": 0,
           "name": "enumeration",
@@ -3036,8 +3067,8 @@
           "output_records": 19243
         },
         {
-          "cpu_millis": 170,
-          "elapsed_millis": 21,
+          "cpu_millis": 163,
+          "elapsed_millis": 20,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "workload_planning",
@@ -3045,8 +3076,8 @@
           "output_records": 18
         },
         {
-          "cpu_millis": 1627,
-          "elapsed_millis": 250,
+          "cpu_millis": 1453,
+          "elapsed_millis": 232,
           "input_bytes": 0,
           "input_records": 19243,
           "name": "csf_generation",
@@ -3054,8 +3085,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 1726,
-          "elapsed_millis": 1778,
+          "cpu_millis": 1723,
+          "elapsed_millis": 1865,
           "input_bytes": 4692476,
           "input_records": 560351,
           "name": "deduplication",
@@ -3072,8 +3103,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 96,
-          "elapsed_millis": 95,
+          "cpu_millis": 90,
+          "elapsed_millis": 93,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_select",
@@ -3081,8 +3112,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 2347,
-          "elapsed_millis": 318,
+          "cpu_millis": 2461,
+          "elapsed_millis": 316,
           "input_bytes": 520075772,
           "input_records": 560351,
           "name": "final_encoding_prepare",
@@ -3090,8 +3121,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 661,
-          "elapsed_millis": 662,
+          "cpu_millis": 664,
+          "elapsed_millis": 661,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_descriptor_encode",
@@ -3108,8 +3139,8 @@
           "output_records": 560351
         },
         {
-          "cpu_millis": 177,
-          "elapsed_millis": 106,
+          "cpu_millis": 178,
+          "elapsed_millis": 107,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_encode",
@@ -3118,7 +3149,7 @@
         },
         {
           "cpu_millis": null,
-          "elapsed_millis": 93,
+          "elapsed_millis": 72,
           "input_bytes": 0,
           "input_records": 560351,
           "name": "final_encoding_csf_outputs_write",
@@ -3128,8 +3159,9 @@
       ],
       "success": true,
       "threads": 8,
+      "unattributed_seconds": 0.1301864169796465,
       "unique_occupations": 19243,
-      "wall_seconds": 3.4969727499992587
+      "wall_seconds": 3.5391864169796463
     }
   ]
 }

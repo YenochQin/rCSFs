@@ -320,8 +320,13 @@ would refuse jobs that fit.
 
 The exact path is kept rather than deleted: it is the reference the verified
 path is differentially checked against (`the_verified_path_publishes_what_the_exact_path_publishes`
-in `streaming.rs`, plus the B1/B2 runs in `docs/benchmarks/`), and it is what a
-future path that *can* schedule the same configuration twice would have to use.
+in `streaming.rs`, plus registered benchmark runs). The benchmark harness now
+records hashes for all four published artifacts; B1/B2 reports written before
+that change contain only lengths and must be rerun before they count as content
+differentials. The exact path is also what a future path that *can* schedule the
+same configuration twice would have to use. Automatic fallback is not currently
+implemented because no such construction is reachable; the performance plan
+keeps that acceptance item open rather than presenting it as complete.
 
 ### Capacity pre-flight
 

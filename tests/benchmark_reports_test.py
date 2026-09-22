@@ -55,6 +55,26 @@ def _load_support() -> object:
 support = _load_support()
 
 
+def _load_generation_benchmark() -> object:
+    """Import the benchmark module without running its command-line entry point."""
+    scripts = REPO_ROOT / "scripts"
+    sys.path.insert(0, str(scripts))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "benchmark_v2_generation_for_test",
+            scripts / "benchmark_v2_generation.py",
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.remove(str(scripts))
+
+
+generation_benchmark = _load_generation_benchmark()
+
+
 WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
@@ -97,7 +117,7 @@ def test_environment_identifies_the_source_and_the_binary() -> None:
     environment = support.environment()
     git = environment["git"]
     assert git["commit"] and git["tree"]
-    assert git["dirty"] in (True, False, None)
+    assert git["dirty"] in (True, False)
     # `describe` identifies the revision; whether the source was modified is the
     # `dirty` field's job, and it uses a definition that excludes this harness's
     # own reports, so `--dirty` must not be folded into the version string.
@@ -303,6 +323,153 @@ def test_an_unreadable_untracked_path_is_refused(
     (repository / "gone.rs").unlink()
     with pytest.raises(SystemExit, match="cannot fingerprint"):
         support._dirty_fingerprint(entries)  # noqa: SLF001
+
+
+def test_an_untracked_symlink_is_fingerprinted_as_a_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source fingerprint must neither follow nor confuse symbolic links."""
+    repository = _temporary_repository(tmp_path, monkeypatch)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    first = outside / "first.rs"
+    second = outside / "second.rs"
+    first.write_text("same\n", encoding="utf-8")
+    second.write_text("same\n", encoding="utf-8")
+    link = repository / "linked.rs"
+    link.symlink_to(first)
+
+    entries = support._source_entries()  # noqa: SLF001
+    before = support._dirty_fingerprint(entries)  # noqa: SLF001
+    first.write_text("external edit\n", encoding="utf-8")
+    assert support._dirty_fingerprint(entries) == before  # noqa: SLF001
+
+    link.unlink()
+    link.symlink_to(second)
+    assert support._dirty_fingerprint(entries) != before  # noqa: SLF001
+
+
+def test_recursive_directory_fingerprinting_never_follows_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fallback directory row may contain a link cycle without recursing."""
+    repository = _temporary_repository(tmp_path, monkeypatch)
+    directory = repository / "newdir"
+    directory.mkdir()
+    (directory / "source.rs").write_text("fn source() {}\n", encoding="utf-8")
+    (directory / "cycle").symlink_to(".")
+    entries = [("??", "newdir", None)]
+
+    first = support._dirty_fingerprint(entries)  # noqa: SLF001
+    assert support._dirty_fingerprint(entries) == first  # noqa: SLF001
+    (directory / "cycle").unlink()
+    (directory / "cycle").symlink_to("..")
+    assert support._dirty_fingerprint(entries) != first  # noqa: SLF001
+
+
+def test_an_unreadable_descendant_of_a_directory_entry_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fallback recursion must propagate a nested directory scan failure."""
+    repository = _temporary_repository(tmp_path, monkeypatch)
+    directory = repository / "newdir"
+    private = directory / "private"
+    private.mkdir(parents=True)
+    real_scandir = support.os.scandir
+
+    def refused_scandir(path: object) -> object:
+        if Path(path) == private:
+            raise PermissionError("permission denied")
+        return real_scandir(path)
+
+    monkeypatch.setattr(support.os, "scandir", refused_scandir)
+    with pytest.raises(SystemExit, match="cannot fingerprint newdir/private"):
+        support._dirty_fingerprint([("??", "newdir", None)])  # noqa: SLF001
+
+
+def test_git_status_warning_refuses_the_source_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unreadable directory reported only on stderr must not look clean."""
+    completed = subprocess.CompletedProcess(
+        ["git", "status"],
+        0,
+        stdout="",
+        stderr="warning: could not open directory 'private/': Permission denied\n",
+    )
+    monkeypatch.setattr(support.subprocess, "run", lambda *_args, **_kwargs: completed)
+    with pytest.raises(SystemExit, match="cannot inspect the source tree"):
+        support._source_entries()  # noqa: SLF001
+
+
+def test_git_status_failure_does_not_masquerade_as_a_clean_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unavailable Git answer must fail closed before benchmarking."""
+    monkeypatch.setattr(support, "_run_git", lambda *_args, **_kwargs: None)
+    with pytest.raises(SystemExit, match="git status failed"):
+        support._source_entries()  # noqa: SLF001
+
+
+def test_strategy_agreement_compares_content_not_only_file_lengths() -> None:
+    """Equal-sized but different outputs are not a successful P6b differential."""
+    common = {
+        "segment_codec": "none",
+        "threads": 8,
+        "memory_budget_mib": None,
+        "generated_count": 10,
+        "record_count": 10,
+        "duplicate_count": 0,
+        "block_count": 1,
+        "csf_bytes": 100,
+        "descriptor_bytes": 200,
+        "csf_text_sha256": "text",
+        "csf_parquet_sha256": "parquet",
+        "descriptor_sha256": "descriptor",
+        "header_sha256": "header-a",
+    }
+    measurements = [
+        {**common, "deduplication": "verified_unique"},
+        {**common, "deduplication": "exact", "header_sha256": "header-b"},
+    ]
+    with pytest.raises(SystemExit, match="de-duplication strategies disagree"):
+        generation_benchmark._check_strategy_agreement(measurements)  # noqa: SLF001
+
+
+def test_each_benchmark_measurement_has_an_isolated_rss_scope(tmp_path: Path) -> None:
+    """Per-run RSS must come from a process whose high-water mark starts fresh."""
+    transcript = tmp_path / "tiny.rcsfgenerate"
+    transcript.write_text(
+        "* ! Orbital order\n0\n2s(2,*)2p(1,*)\n\n3s,3p,3d\n1,3\n1\nn\n",
+        encoding="utf-8",
+    )
+    report = tmp_path / "report.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "benchmark_v2_generation.py"),
+            str(transcript),
+            "--threads",
+            "1",
+            "--warmup",
+            "0",
+            "--repeats",
+            "1",
+            "--allow-dirty-source",
+            "--output",
+            str(report),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    document = json.loads(report.read_text(encoding="utf-8"))
+    assert document["settings"]["measurement_process_model"] == "spawned_process_per_run"
+    measurement = document["measurements"][0]
+    assert measurement["rss_scope"] == "single_measurement_process"
+    for artifact in ("csf_text", "csf_parquet", "descriptor", "header"):
+        assert re.fullmatch(r"[0-9a-f]{64}", measurement[f"{artifact}_sha256"])
 
 
 @pytest.mark.parametrize(

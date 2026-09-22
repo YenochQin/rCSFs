@@ -23,8 +23,10 @@ They are not part of the test suite: no file in this directory is run by
   content of every untracked file. Untracked directories are listed file by file
   (`--untracked-files=all`), since a collapsed `?? dir/` row would hide an edit
   inside it; a directory row that arrives anyway is hashed recursively, and an
-  unreadable path refuses the report rather than contributing a constant. A
-  reader can rebuild the recorded tree and compare binaries.
+  unreadable path or `git status` warning refuses the report rather than
+  contributing a constant. Symbolic links are hashed as Git objects (type plus
+  link-target text) and are never followed outside the repository. A reader can
+  rebuild the recorded tree and compare binaries.
 - The scripts **refuse to run against a dirty tree** unless
   `--allow-dirty-source` is given, and check it before doing any work: a
   measurement taken while the source is being edited is not a baseline, and one
@@ -102,16 +104,26 @@ same way. The extension reads each from the environment (`RCSFS_SEGMENT_CODEC`,
 refuses a run whose report disagrees with the request: a report that named a
 codec or a strategy the run did not use would make the measurement fiction.
 Both are storage or checking choices, never output choices — the published
-bytes and counts are unchanged. The harness also compares the two
-de-duplication strategies against each other within one invocation, and refuses
-to write a report when their counts or published sizes differ.
+bytes and counts are unchanged. The harness records SHA-256 for the CSF text,
+CSF Parquet, descriptor and header, compares the two de-duplication strategies
+within one invocation, and refuses to write a report when their counts or any
+published artifact differ.
 
-The script verifies the transcript against the manifest, discards a warm-up run
-per combination, records execution order, and reports wall-clock per stage
-(the temporary output set's deletion is timed separately), peak RSS, managed
+The script verifies the transcript against the manifest and runs every warm-up
+and measured combination in a fresh spawned process. Process creation and
+artifact hashing are outside the timed generation call; this keeps `ru_maxrss`
+scoped to one run instead of inheriting the high-water mark of earlier matrix
+entries. It records execution order, wall-clock per stage, peak RSS, managed
 memory, a sampled scratch peak, file counts and physical process I/O where the
 platform exposes it. A measurement whose registry hash or record count does not
 match is rejected rather than silently recorded.
+
+Reports written before this isolated-process harness do not contain artifact
+digests, and their `rss_peak_bytes` is the monotonically increasing peak of the
+whole benchmark process. In particular, the codec and dedup campaigns dated
+2026-09-22 remain valid for timings, logical I/O, scratch and managed memory,
+but must be rerun before they are used for per-combination RSS or B1/B2 content
+differential claims.
 
 ## Registered campaigns
 

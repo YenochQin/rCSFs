@@ -409,7 +409,9 @@ def test_symlink_output_rejected(tmp_path: Path) -> None:
 
 
 def test_publication_race_preserves_other_writer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
 ) -> None:
     config = config_file(tmp_path)
     original = cli.generate_disk_outputs_from_transcript
@@ -421,8 +423,14 @@ def test_publication_race_preserves_other_writer(
         return result
 
     monkeypatch.setattr(cli, "generate_disk_outputs_from_transcript", racing_writer)
-    assert cli.main(["csfsgenerate", "--config", str(config)]) == 1
+    assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 1
+    result = json.loads(capfd.readouterr().out)
+    assert result["success"] is False
+    assert result["failed_destination"] == str(sentinel)
+    assert result["published_outputs"] == [str(tmp_path / "out.c")]
+    assert "left in place" in result["error"]
     assert sentinel.read_bytes() == b"another writer"
+    assert (tmp_path / "out.c").is_file()
 
 
 def test_extension_positional_signature(tmp_path: Path) -> None:

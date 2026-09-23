@@ -9,7 +9,6 @@ import sys
 import tempfile
 import tomllib
 from collections.abc import Mapping, Sequence
-from contextlib import ExitStack
 from pathlib import Path
 from typing import Literal, Protocol, TextIO, cast
 
@@ -25,6 +24,7 @@ from . import (
     select_interacting_csfs,
 )
 from ._types import InteractionHamiltonian, InteractionMethod
+from ._publication import PartialPublicationError, publish_outputs
 
 #: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
 _MAX_REFERENCE_CONFIGURATIONS = 100
@@ -981,7 +981,8 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
         _print_estimate_summary(estimate, file=sys.stderr)
 
     # The existing converters truncate their destinations. Run them only in a
-    # private staging directory, then hold exclusive handles for publication.
+    # private staging directory, then publish each complete file under a new
+    # final name without replacing another process's file.
     # Staged under the current working directory rather than the system temp
     # dir: disk-mode generation can write far more Arrow/Parquet data than a
     # tmpfs-backed /tmp has room for, so the caller's own filesystem is the
@@ -1070,11 +1071,7 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
             encoding="utf-8",
         )
         sources = [csf, parquet, staged_header, descriptors, sidecar]
-        with ExitStack() as stack:
-            handles = [stack.enter_context(path.open("xb")) for path in destinations]
-            for source, handle in zip(sources, handles, strict=True):
-                with source.open("rb") as reader:
-                    shutil.copyfileobj(reader, handle)
+        publish_outputs(sources, destinations)
         stats.update(
             output_file=str(args.output),
             parquet_file=str(csf_parquet),
@@ -1205,6 +1202,13 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
 
     try:
         stats = _generate_outputs(transcript, args)
+    except PartialPublicationError as exc:
+        stats = {
+            "success": False,
+            "error": str(exc),
+            "published_outputs": [str(path) for path in exc.published],
+            "failed_destination": str(exc.destination),
+        }
     except (OSError, ValueError, RuntimeError) as exc:
         stats = {"success": False, "error": str(exc)}
 

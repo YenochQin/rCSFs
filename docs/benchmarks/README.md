@@ -150,12 +150,14 @@ historical descriptor digest.
 | `v2_disk_generation_codec_b1/b2_20260922.json` | Uncompressed / LZ4 / ZSTD temporary segments at 8 threads; first round `3588df1`, re-measured with per-run RSS and digests at `47e04ea` |
 | `v2_disk_generation_dedup_b1/b2_20260922.json` | Verified-unique vs exact de-duplication, each with and without zstd segments; first round `bbcd714`, re-measured with content digests at `47e04ea` |
 | `v2_disk_generation_final_encoding_b1/b2_20260922.json` | One-pass final encoding vs the two-pass merge+restore tail at 8 threads; seven-phase/bounded-row-group clean report `fbcf884` |
+| `v2_disk_generation_parallel_descriptor_b1/b2_20260923.json` | Parallel Parquet descriptor column encoding at 8 threads; clean report `c91e51e`, none/zstd × verified/exact |
 | `v2_disk_generation_p0b_*_20260921.json` | (legacy) measured before source identity was captured |
 | `v2_disk_generation_b3_capacity_20260921.json` | Full-scale capacity, workload and time-range estimate (no generation) |
 | `v2_disk_generation_matrix_20260922.md` | What the three 2026-09-22 campaigns show |
 | `v2_disk_generation_codec_20260922.md` | What the P2a codec experiment shows |
 | `v2_disk_generation_dedup_20260922.md` | What the P6b fast path saves, and what the P2a+P6b combination costs |
 | `v2_disk_generation_final_encoding_20260922.md` | What the P4 one-pass tail saves, and the cumulative gain against the `7ad18b1` baseline |
+| `v2_disk_generation_parallel_descriptor_20260923.md` | Parallel descriptor encoding speedup, CPU/墙钟并行度、受管内存与新物理摘要 |
 
 A rejected configuration is part of the matrix, not a hole in it: the plan asks
 for a low budget to be reported as a resource rejection rather than being

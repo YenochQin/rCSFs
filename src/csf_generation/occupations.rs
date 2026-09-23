@@ -923,7 +923,14 @@ fn split_occupation(orbital: Orbital, electrons: u8) -> Vec<(u8, u8)> {
     let lower_bound = electrons.saturating_sub(2 * orbital.l);
     loop {
         let lower = electrons - upper;
-        result.push((lower, upper));
+        // BLANDA/BLANDB restrict the j=l+1/2 partner of every g shell
+        // to at most two electrons. For h and higher, both partners are
+        // restricted to two. These checks appear in the next orbital's loop
+        // (or the final loop) in GRASP; apply them here before a configuration
+        // reaches the CSF generator so counting and generation agree.
+        if (orbital.l < 4 || upper <= 2) && (orbital.l < 5 || lower <= 2) {
+            result.push((lower, upper));
+        }
         if upper == lower_bound {
             break;
         }

@@ -1,5 +1,6 @@
 """Generation CLI output safety and metadata regressions."""
 
+import hashlib
 import json
 import tomllib
 from pathlib import Path
@@ -20,6 +21,37 @@ from rcsfs import (
 from rcsfs._rcsfs import generate_csfs_from_transcript
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_grasp_five_g_text_is_byte_exact(tmp_path: Path) -> None:
+    """Golden digest from GRASP rcsfgenerate, with no GRASP test dependency."""
+    transcript = (
+        "* ! Orbital order\n"
+        "1 ! Selected core\n"
+        "2s(2,i)2p(6,i)3s(2,1)3p(6,i)3d(8,*)4s(2,*)\n"
+        "*\n5g\n8,8\n3 ! Number of excitations\nn\n"
+    )
+    output = tmp_path / "rcsfs.c"
+    stats = generate_csfs_from_transcript(transcript, str(output), False, 8)
+    assert stats["success"] is True
+    assert stats["record_count"] == 13_129
+    assert hashlib.sha256(output.read_bytes()).hexdigest() == (
+        "3cd1174cb277ab71ac0a17bb0551302bf2ab998a8b19271a6aa015924adeba47"
+    )
+
+
+def test_ni_three_excitations_estimate_matches_grasp_record_count() -> None:
+    """The 5g/6g/7g high-j overcount was 5,463 rows in this input."""
+    transcript = (
+        "* ! Orbital order\n"
+        "1 ! Selected core\n"
+        "2s(2,i)2p(6,i)3s(2,1)3p(6,i)3d(8,*)4s(2,*)\n"
+        "2s(2,i)2p(6,i)3s(2,i)3p(6,5)3d(8,*)4s(2,*)\n"
+        "*\n9s,9p,9d,9f,7g\n8,8\n3 ! Number of excitations\nn\n"
+    )
+    estimate = estimate_disk_generation(transcript, threads=8)
+    assert estimate["pre_deduplication_records"] == 77_362_152
+    assert estimate["unique_occupations"] == 482_898
 
 
 def test_generation_estimate_type_names_the_deduplication_strategy() -> None:

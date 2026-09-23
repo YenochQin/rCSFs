@@ -236,6 +236,60 @@ fn registered_rcsfgenerate_inputs_reproduce_grasp_block_counts() {
 }
 
 #[test]
+fn grasp_five_g_reference_excludes_high_j_three_electron_branch() {
+    // GRASP rcsfgenerate: one reference, active 5g, 2J=8, three excitations.
+    // Its 13,129 records include 5g-(3), but none with 5g(3).
+    let transcript = "* ! Orbital order\n1 ! Selected core\n\
+        2s(2,i)2p(6,i)3s(2,1)3p(6,i)3d(8,*)4s(2,*)\n\
+        *\n5g\n8,8 ! Lower and higher 2*J\n3 ! Number of excitations\nn\n";
+    let input = ExcitationRequest::from_transcript(transcript).unwrap();
+    let occupations = enumerate_occupations(&input).unwrap();
+    let high_j: Subshell = "5g".parse().unwrap();
+    let low_j: Subshell = "5g-".parse().unwrap();
+    assert!(occupations.configurations.iter().all(|configuration| {
+        configuration
+            .occupations
+            .iter()
+            .all(|entry| entry.subshell != high_j || entry.electrons <= 2)
+    }));
+    assert!(occupations.configurations.iter().any(|configuration| {
+        configuration
+            .occupations
+            .iter()
+            .any(|entry| entry.subshell == low_j && entry.electrons == 3)
+    }));
+    let count = occupations
+        .configurations
+        .iter()
+        .map(|configuration| {
+            generate_csfs(&GenerationRequest {
+                core_subshells: occupations.core_subshells.clone(),
+                configuration: configuration.occupations.clone(),
+                min_two_j: 8,
+                max_two_j: 8,
+            })
+            .unwrap()
+            .records
+            .len()
+        })
+        .sum::<usize>();
+    assert_eq!(count, 13_129);
+}
+
+#[test]
+fn grasp_high_l_partners_are_each_limited_to_two_electrons() {
+    let input = ExcitationRequest::from_transcript(
+        "* ! Orbital order\n0 ! Selected core\n6h(4,*)\n*\n6h\n0,0\n0 ! Number of excitations\nn\n",
+    )
+    .unwrap();
+    let occupations = enumerate_occupations(&input).unwrap();
+    assert_eq!(occupations.configurations.len(), 1);
+    let branches = &occupations.configurations[0].occupations;
+    assert_eq!(branches.len(), 2);
+    assert!(branches.iter().all(|branch| branch.electrons == 2));
+}
+
+#[test]
 fn registered_rcsfgenerate_inputs_parse_and_merge_reference_tasks() {
     for input in [
         include_str!("fixtures/e1_cc1as1.rcsfgenerate"),

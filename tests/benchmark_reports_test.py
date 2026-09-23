@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -609,6 +610,38 @@ def test_the_one_pass_tail_published_what_the_two_pass_tail_published(
     # either direction would turn a layout detail into a contract. Its logical
     # rows are compared where they can be: the live differentials in
     # `streaming.rs` (both tails, and across thread counts).
+
+
+@pytest.mark.parametrize("fixture", ["b1", "b2"])
+@pytest.mark.parametrize("codec", ["none", "zstd"])
+def test_parallel_columns_preserve_non_descriptor_artifacts(
+    fixture: str, codec: str
+) -> None:
+    """Parallel Parquet layout may change; CSF/header bytes may not."""
+    old = json.loads(
+        (
+            BENCHMARK_DIRECTORY
+            / f"v2_disk_generation_final_encoding_{fixture}_20260922.json"
+        ).read_text()
+    )
+    new = json.loads(
+        (
+            BENCHMARK_DIRECTORY
+            / f"v2_disk_generation_parallel_descriptor_{fixture}_20260923.json"
+        ).read_text()
+    )
+    def measured(report: dict[str, object], key: str) -> str:
+        measurements = cast(list[dict[str, object]], report["measurements"])
+        return next(
+            cast(str, item[key])
+            for item in measurements
+            if item["kind"] == "measured"
+            and item["segment_codec"] == codec
+            and item["deduplication"] == "verified_unique"
+        )
+
+    for key in ("csf_text_sha256", "csf_parquet_sha256", "header_sha256"):
+        assert measured(new, key) == measured(old, key), f"{fixture}/{codec} changed {key}"
 
 def test_the_harness_refuses_a_run_whose_stages_do_not_cover_the_call() -> None:
     """A stage claim needs complete timers, so the harness checks for them.

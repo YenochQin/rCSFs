@@ -1,6 +1,6 @@
 # V2 描述符与 CSF 生成性能实施计划
 
-状态：P0a 与 P1 已实施并验收；P0b、P5a、P1.5 代码已实施、**验收未完成**——本机证据已登记，但目标机器校准、压力矩阵与慢消费者故障注入仍缺，B4 因此不能启动。P6a 已给出结论：内部生成路径全局唯一，**P3 不适用**，证明与穷举程序见 [V2_GENERATION_UNIQUENESS.md](V2_GENERATION_UNIQUENESS.md)（完成条件中的“一起评审”尚未进行）。P2a 已在 `47e04ea` 上用独立进程重测：I/O、CPU、受管内存与**独立 RSS** 均已登记，lz4/zstd 无单向结论，默认仍不压缩。P6b 已实施并在 `47e04ea` 上重测计量（已验证路径跳过根桶：B1 −30.2%、B2 −37.4% 端到端，scratch 减半，四个发布产物的 SHA-256 在两种策略与两种 codec 下完全一致）；“自动回退”尚未评审豁免，仍属**验收未完成**。P4 的单遍最终编码及评审修正已在干净提交 `fbcf884` 上完成七相位复测：尾部 B1/B2 为 2.49×/2.13×，累计相对 `7ad18b1` 为 3.53×/3.19×；descriptor encode 仍占尾部 45%/60%，因此并行 Parquet 编码具备继续投入的量化理由。发布优化子步骤仍未实施。P2b 的紧凑记录与 P5b 待实施。基线：`7ad18b1`。制定日期：2026-09-21；最近修订：2026-09-23（P4 七相位复测）。
+状态：P0a 与 P1 已实施并验收；P0b、P5a、P1.5 代码已实施、**验收未完成**——本机证据已登记，但目标机器校准、压力矩阵与慢消费者故障注入仍缺，B4 因此不能启动。P6a 已给出结论：内部生成路径全局唯一，**P3 不适用**，证明与穷举程序见 [V2_GENERATION_UNIQUENESS.md](V2_GENERATION_UNIQUENESS.md)（完成条件中的“一起评审”尚未进行）。P2a 已在 `47e04ea` 上用独立进程重测：I/O、CPU、受管内存与**独立 RSS** 均已登记，lz4/zstd 无单向结论，默认仍不压缩。P6b 已实施并在 `47e04ea` 上重测计量（已验证路径跳过根桶：B1 −30.2%、B2 −37.4% 端到端，scratch 减半，四个发布产物的 SHA-256 在两种策略与两种 codec 下完全一致）；“自动回退”尚未评审豁免，仍属**验收未完成**。P4 的单遍最终编码及评审修正已在干净提交 `fbcf884` 上完成七相位复测；并行 descriptor 列编码在 `c91e51e` 上测得端到端 B1/B2 3.317/0.979 秒，累计相对 `7ad18b1` 为 4.34×/4.93×。CLI 单文件发布优化已实现，仍需干净源码验收与文档登记；多文件发布不宣称全组原子性。P2b 的紧凑记录与 P5b 待实施。基线：`7ad18b1`。制定日期：2026-09-21；最近修订：2026-09-23（P4 并行编码及 CLI 发布）。
 
 本文规划当前磁盘生成路径的性能改造。表中的测量是已有事实；阶段任务、接口、性能门槛是待实现目标，不代表已经具备。本文补充 [CSF_GENERATION.md](CSF_GENERATION.md) 和 [原生成开发计划](rcsfgenerate_rust_development_plan.md)，不沿用旧计划中“全部生成结果默认驻留内存”的资源假设。
 
@@ -143,6 +143,8 @@ B1 中生成仅占端到端时间的小部分，去重、合并和还原合计�
 
 ### 2.4 代码定位
 
+以下是制定计划时的成本定位，后续阶段的实施状态以 §3 和各阶段登记报告为准。
+
 | 位置（相对 rCSFs 根目录） | 已确认的成本 |
 | --- | --- |
 | `src/csf_generation/streaming.rs`：`generate_range_segments` | 固定组态数划分，每任务同步写 Arrow |
@@ -250,19 +252,19 @@ P0a 与 P1 已完成，P6a 已给出结论（内部路径全局唯一，P3 不�
 
 完成条件：新旧暂存路径在 B0/B1/B2 上输出相同文本和 V2 逻辑行；损坏 offsets/截断文件明确失败；记录临时空间、逻辑 I/O 与 CPU 代价。B2 暂存峰值空间降低至少 50% 作为默认启用目标；未达目标则记录原因并继续实验，不直接宣称完成优化。**2026-09-22 状态：该 50% 目标已由 P2a 的 segment 压缩单独达成**（B2 1001.9 → 500.4 MiB），但达成方式不是紧凑记录，且剩余峰值全部是根桶。因此本阶段的验收改为：P6b 取消根桶后，B2 的 scratch 峰值应降到 segment 量级（当前 zstd 下为 4.5 MiB 量级）；紧凑记录只在仍需保留精确去重的路径上验收。同时用 P1.5 的模型估算 B3 峰值；“B2 降低 50%”不能单独作为 B4 可启动的证据。
 
-### P4：并行构建最终产物，取消不必要的回读（单遍编码已实施；并行 Parquet 编码与发布优化未完成）
+### P4：并行构建最终产物，取消不必要的回读（单遍与并行列编码已实施；CLI 发布待验收）
 
 改动范围：segment merge、V2 编码、`csfs_descriptor.rs` 输出路径、`rcsfs/cli.py` 发布路径。
 
 - [x] 从精确去重后的有序幸存记录，或 P6a 已证明安全的内部有序记录，生成带稳定序号的 batch；共享该批数据，分别生成 descriptor 和 CSF 三行文本/Parquet。`build_final_outputs_from_segments` 只读一遍 segment：每行的整数直接进入 descriptor Parquet，同一批行的解码/校验/格式化同时供 CSF 文本与 CSF Parquet 使用，不再有第二遍读回。
 - [x] 文本格式化、合法性校验和批次转换在线程池内完成，发布端按序写出；正确处理跨 batch 的 J/parity 块分隔符和全局 idx。prepare 阶段对每批的幸存行用 `into_par_iter` 并行，块分隔符与连续 `idx` 由按序的发布侧发出，因此批次/线程边界不可能把行放进错误的块。
-- [x] 描述符不再先写最终 Parquet，再回读解压以生成文本。独立的外部 descriptor 还原 API 继续保留完整输入校验。旧的两遍尾部（`merge_v2_deduplicated_segments` + 描述符回读）保留为参考实现，并由 `the_combined_final_pass_publishes_what_merge_and_restore_published` 逐字节差分：descriptor Parquet 与 CSF 文本完全一致，CSF Parquet 按逻辑行一致（其 row group 边界随批次划分，不属于契约）。该差分在实现过程中立刻抓到过一个自造缺陷（错误的 per-segment 记录数断言）。
-- [ ] 先验证当前 Parquet 依赖能否并行编码独立 row group/列块，再由单一文件提交端写入 footer。若采用临时分片，必须通过受支持的读取/重编码或元数据重建方式合并，禁止字节拼接多个 Parquet 文件。**能力已验证，实现未做**：`parquet` crate 确有受支持的路径——`ArrowRowGroupWriterFactory::create_column_writers` 产出的列写入器归调用者所有（可移到工作线程），关闭后得到 `ArrowColumnChunk`，再经 `ArrowColumnChunk::append_to_row_group` **拼进单一 `SerializedFileWriter`**，由它写 footer；crate 文档把这条接口标注为 "encoding using multiple threads"。约束是工厂借用文件写入器，因此它必须在 `next_row_group()` 之前释放——这正好决定了流水线形状（worker 编码、主线程按序拼接）。`temp/parquet_probe` 的探针（5 批 × 8 列 × 3000 行）验证：拼接产物**逻辑内容与 `ArrowWriter` 完全一致**（行列与 dtype 全等），但**字节不同**（110,564 对 127,733 字节）——计划允许压缩布局变化，因此这不是阻塞项，但落地时必须重测并重新登记发布摘要。实现未做：需处理在途 chunk 的受管内存记账、流水线背压与错误传播，属独立投入；本页下方的测量（encode 为尾部最大单项）是其量化理由。
+- [x] 描述符不再先写最终 Parquet，再回读解压以生成文本。独立的外部 descriptor 还原 API 继续保留完整输入校验。旧的两遍尾部（`merge_v2_deduplicated_segments` + 描述符回读）保留为参考实现；`the_combined_final_pass_publishes_what_merge_and_restore_published` 逐字节差分 CSF 文本，并比较 descriptor 的 V2 逻辑行、schema/元数据及 CSF Parquet 逻辑行。Parquet 的 row group/列块布局不属于字节契约。
+- [x] 使用 `ArrowRowGroupWriterFactory::create_column_writers` 在 Rayon 线程池中独立编码列块，再由单一 `SerializedFileWriter` 按 schema 顺序追加并写 footer；不拼接 Parquet 文件。一次仅有一个行组在途，在创建列写入器前为编码缓冲与 chunk 预留受管预算，出错时不发布 descriptor。`c91e51e` 的[干净树报告](benchmarks/v2_disk_generation_parallel_descriptor_20260923.md)：descriptor encode 墙钟 B1 1.526→0.395 秒（3.86×）、B2 0.727→0.176 秒（4.13×），CPU/墙钟均约 6.5×；端到端 4.075→3.317 秒、1.512→0.979 秒。Parquet 物理摘要重新登记，逻辑行、schema 与元数据由实时两遍差分守住。
 - [x] 不以“并行准备 batch + 全部压缩仍在一个 ArrowWriter”冒充编码并行；分别计时读取、筛选、准备、压缩和写入。单遍尾部按**七个**相位上报：`final_encoding_read`（IPC 读取、解压和批次结构校验）、`final_encoding_select`（按位图筛选并收集所选列，串行）、`final_encoding_prepare`（V2 解码、校验、格式化，线程池内并行），以及每个产物族的 `_encode` 与 `_write` 两半。两个 writer 的 `close`/footer、文本 flush、发布都计入所属相位，`setup` 与 `header_write` 也各自成项。harness 对正、负残差都设 10%/50 ms 门槛，既拒绝漏计，也拒绝相位重叠或重复计时。CPU 只记在计算侧：`getrusage` 无法把系统调用归给调用者。
-- [ ] 同文件系统探索无覆盖的原子单文件发布，目标旁 staging 与重命名/链接策略先验证平台能力；跨文件系统保留复制。注入竞争写入，确认不覆盖其他进程的产物。**未实施**：流水线内部的暂存→发布已是 rename 语义（`atomic_output`，含竞争写入测试），但 CLI 的 staging→目的地仍是复制；本项属 P4 的发布优化子步骤，未开始。
-- [ ] 明确部分发布失败后的报告和清理策略；所有产物完成发布后才输出任务成功。**未实施**，同为发布优化子步骤。
+- [x] CLI 同卷以 hard link 原子无覆盖发布完整 staging 文件；跨卷先复制到目标旁私有临时文件、flush/fsync，再以 hard link 原子显现。无安全链接能力的平台拒绝而不退化为直接写最终路径。竞争写入与跨卷回退由维护测试覆盖；仍需在目标机器验证文件系统能力。
+- [x] 多文件发布不是事务：后续产物失败时，已发布的完整文件保留，不自动删除可能已被其他进程接管的路径；错误和 JSON 显式列出 `published_outputs` 与 `failed_destination`，临时副本尽力清理。只有全部产物均完成发布后返回成功。目标机器故障注入尚未验收。
 
-完成条件（正确性与本机性能已满足，发布子步骤未实施）：生成流程中没有读取刚写出的最终 descriptor 以还原文本（由差分测试守住）；**线程数变化不改变 CSF 字节及 V2/CSF Parquet 逻辑行**（`the_combined_final_pass_is_thread_invariant` 对同一输入跑 1/2/4/8 线程）；`fbcf884` 的七相位干净树复测登记尾部 B1/B2 2.49×/2.13×、累计相对 `7ad18b1` 为 3.53×/3.19×，并包含解码前 source-batch 预留和 8,192 行 row-group 上限。发布竞争测试仍作用于流水线内部暂存发布；CLI 发布路径的竞争测试属未实施子步骤。descriptor encode 仍占尾部 45%/60%，因此并行 Parquet 列编码继续实施，而非因累计目标已经达到就掩盖剩余串行瓶颈。
+完成条件（本机实现与计量已满足，目标机器发布/容量验收未完成）：单遍差分与 1/2/4/8 线程逻辑行不变性持续通过；`fbcf884` 的七相位复测登记尾部 B1/B2 2.49×/2.13×；`c91e51e` 的并行列编码把累计端到端相对 `7ad18b1` 提至 4.34×/4.93×，受管预算阶梯与四个产物摘要随报告登记。CLI 单文件发布与部分失败策略有维护测试，但不能称多文件全组原子。
 
 ### P3（条件阶段）：去重全链路并行化（**不适用**：P6a 已证明内部路径全局唯一）
 

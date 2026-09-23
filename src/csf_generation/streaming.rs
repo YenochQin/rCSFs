@@ -3303,6 +3303,10 @@ mod tests {
                 read_rows(&descriptors).unwrap(),
                 ParquetRecordBatchReaderBuilder::try_new(File::open(&descriptors).unwrap())
                     .unwrap()
+                    .schema()
+                    .clone(),
+                ParquetRecordBatchReaderBuilder::try_new(File::open(&descriptors).unwrap())
+                    .unwrap()
                     .metadata()
                     .file_metadata()
                     .key_value_metadata()
@@ -3310,12 +3314,18 @@ mod tests {
                 read_csf_parquet_rows(&csf_parquet).unwrap(),
             ));
         }
-        let (old_csf, old_descriptors, old_metadata, old_parquet_rows) = &publications[0];
-        let (new_csf, new_descriptors, new_metadata, new_parquet_rows) = &publications[1];
+        let (old_csf, old_descriptors, old_schema, old_metadata, old_parquet_rows) =
+            &publications[0];
+        let (new_csf, new_descriptors, new_schema, new_metadata, new_parquet_rows) =
+            &publications[1];
         assert_eq!(new_csf, old_csf, "the combined pass changed the CSF text");
         assert_eq!(
             new_descriptors, old_descriptors,
             "the combined pass changed the descriptor V2 rows"
+        );
+        assert_eq!(
+            new_schema, old_schema,
+            "the combined pass changed the V2 schema"
         );
         assert_eq!(
             new_metadata, old_metadata,

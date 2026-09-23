@@ -201,9 +201,14 @@ options (see the configuration example above).
 All destinations must be new and distinct: CSF text, CSF Parquet, its
 `{csf_stem}_header.toml` sidecar, descriptor Parquet, and its same-stem `.toml`
 sidecar. Outputs cannot alias the configuration file. The descriptor pipeline
-stages files in a temporary directory before publishing through exclusively
-created destination handles; existing files are never truncated. Staging requires
-temporary disk space for the complete output set.
+stages files in a temporary directory before each complete file is published
+through an atomic no-overwrite hard link. For a destination on another volume,
+it first copies into a private file beside the destination, then links that
+complete file. Existing files are never truncated. The five-file set is not an
+atomic transaction: a late publication failure leaves earlier complete outputs
+in place and reports their paths in `published_outputs`; inspect these before
+removing or retrying. Staging requires temporary disk space for the complete
+output set.
 
 The descriptor sidecar schema is:
 
@@ -370,7 +375,7 @@ generation and the staged set coexists with its published copies during
 publication. Each volume is required to hold the larger of those two phases. The
 generation call checks the scratch and staging volumes; the CLI passes its final
 destinations to the estimate so one model covers all of them, since publication
-copies the staged set into paths only the CLI knows. Each artifact is named by
+may copy the staged set into paths only the CLI knows. Each artifact is named by
 kind (`csf_text`, `csf_parquet`, `descriptor`, `header`, `descriptor_metadata`),
 so the header and the descriptor sidecar are charged to their own volumes even
 when those differ. A run that cannot fit is

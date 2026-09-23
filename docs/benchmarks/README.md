@@ -5,6 +5,14 @@ Measurements recorded here back the performance work in
 They are not part of the test suite: no file in this directory is run by
 `cargo test` or `pytest`.
 
+The GRASP occupation-branch compatibility fix of 2026-09-23 changes B1 and B3
+counts without changing their transcript bytes. Reports recorded before that fix
+remain historical measurements of their named source revisions, **not** current
+generator baselines. The current expected counts are registered in
+`tests/fixtures/transcripts.toml`: B1 19,454 configurations / 2,693,941 records,
+B2 19,243 / 560,351, and B3 7,027,846 / 5,811,925,522. New performance
+comparisons require new clean-source measurements; no old timing is rebased.
+
 ## Conventions
 
 - One `.md` interpretation per run or campaign, with the raw aggregated

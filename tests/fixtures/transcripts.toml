@@ -6,9 +6,10 @@
 #
 # `sha256` covers the transcript bytes exactly. A drifted fixture is rejected
 # before a new measurement is compared with a recorded baseline, because a
-# changed input makes the comparison meaningless. The expected counts are the
-# values registered in docs/benchmarks; the maintained test suite checks the
-# hash and `unique_occupations` (cheap), while `scripts/benchmark_v2_generation.py`
+# changed input makes the comparison meaningless. Expected counts describe the
+# current generator; historical reports in docs/benchmarks keep the counts of
+# the revisions that produced them. The maintained test suite checks the hash
+# and `unique_occupations` (cheap), while `scripts/benchmark_v2_generation.py`
 # additionally cross-checks `records` against a real run (expensive).
 #
 # `manual = true` marks an input whose enumeration is too expensive for the
@@ -23,8 +24,8 @@ name = "b1"
 file = "b1_cc1_5spdfg_3exc.rcsfgenerate"
 sha256 = "dc5f73baeb3bd5ee6d460393213e14b42bd06c5bf5186ffdb346fc310d0c1d99"
 description = "core 1, both registered references, active 5s,5p,5d,5f,5g, 2J = 8, 3 excitations"
-unique_occupations = 19480
-records = 2695762
+unique_occupations = 19454
+records = 2693941
 
 [[transcript]]
 name = "b2"
@@ -39,8 +40,8 @@ name = "b3"
 file = "b3_cc1_9spdfg_4exc.rcsfgenerate"
 sha256 = "1ec027bcbe6532e6855d82c965a1c4713ee9e0396ef461fb6f709cd9070dd1a8"
 description = "core 1, both registered references, full active space 9s,9p,9d,9f,7g, 2J = 8, 4 excitations"
-unique_occupations = 7031941
-records = 5814175207
+unique_occupations = 7027846
+records = 5811925522
 # 7.03M configurations: the enumeration alone takes ~15 s at 8 threads and
 # several GiB, which does not belong in the default suite.
 manual = true

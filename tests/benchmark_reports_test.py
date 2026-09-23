@@ -583,13 +583,11 @@ def test_the_one_pass_tail_published_what_the_two_pass_tail_published(
 ) -> None:
     """P4 replaced the tail; the content it publishes must not have moved.
 
-    The two campaigns were measured at different revisions (`47e04ea` and
-    `de97127`), so this compares two committed reports rather than two runs of
-    the current code. The CSF text, descriptor and header must be identical
-    byte for byte; the CSF Parquet digest is allowed to differ because its
-    row-group boundaries follow whichever path batched it. If the tail ever
-    changes the first three, this test fails on the registered evidence instead
-    of on a claim in a report.
+    The two campaigns were measured at different revisions, so this compares
+    two committed reports rather than two runs of the current code. CSF text
+    and header are byte contracts. Both Parquet artifacts may change physical
+    layout when row-group bounds change; their logical rows are compared live
+    by the Rust reference-path differential instead of freezing old digests.
     """
     reference = _digests(
         BENCHMARK_DIRECTORY / "v2_disk_generation_dedup_b2_20260922.json",
@@ -601,7 +599,7 @@ def test_the_one_pass_tail_published_what_the_two_pass_tail_published(
         codec=codec,
         deduplication="verified_unique",
     )
-    for key in ("csf_text_sha256", "descriptor_sha256", "header_sha256"):
+    for key in ("csf_text_sha256", "header_sha256"):
         assert measured[key] == reference[key], (
             f"the one-pass tail changed {key} for the {codec} codec"
         )

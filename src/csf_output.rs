@@ -14,10 +14,17 @@ use crate::descriptor_schema::DescriptorLayout;
 pub(crate) const ROW_GROUP_ROWS: usize = 8_192;
 
 pub(crate) mod descriptor {
+    use std::io::Write;
+
     use anyhow::{Context, Result};
+    use arrow::record_batch::RecordBatch;
+    use parquet::arrow::arrow_writer::{ArrowRowGroupWriterFactory, compute_leaves};
     use parquet::file::metadata::KeyValue;
     use parquet::file::properties::WriterProperties;
+    use parquet::file::writer::SerializedFileWriter;
+    use rayon::prelude::*;
 
+    use crate::csf_generation::ResourceBudget;
     use crate::descriptor_schema::{DescriptorLayout, output_kv_metadata};
 
     use super::ROW_GROUP_ROWS;
@@ -69,6 +76,72 @@ pub(crate) mod descriptor {
             .and_then(|value| value.checked_add(1 << 20))
             .context("Parquet writer managed byte count overflow")?;
         u64::try_from(bytes).context("Parquet writer bytes exceed u64")
+    }
+
+    /// A row group's column encoders run independently; their completed chunks
+    /// are appended in schema order by the only file writer. Keep exactly one
+    /// group in flight, with its additional encoder/chunk memory reserved before
+    /// constructing any column writer. The Arrow batch itself is charged by the
+    /// caller and remains alive until this function returns.
+    pub(crate) fn write_batch_parallel<W: Write + Send>(
+        writer: &mut SerializedFileWriter<W>,
+        factory: &ArrowRowGroupWriterFactory,
+        batch: &RecordBatch,
+        budget: &ResourceBudget,
+    ) -> Result<()> {
+        for start in (0..batch.num_rows()).step_by(ROW_GROUP_ROWS) {
+            let rows = (batch.num_rows() - start).min(ROW_GROUP_ROWS);
+            let group = batch.slice(start, rows);
+            let _encoder_permit = budget.try_reserve(
+                parallel_group_managed_bytes(group.num_columns(), rows)?,
+                "parallel descriptor row group",
+            )?;
+            let writers = factory
+                .create_column_writers(writer.flushed_row_groups().len())
+                .context("failed to create parallel descriptor column writers")?;
+            let fields = group.schema().fields().clone();
+            let chunks = writers
+                .into_par_iter()
+                .zip(fields.into_par_iter())
+                .zip(group.columns().to_vec().into_par_iter())
+                .map(|((mut column_writer, field), column)| {
+                    let mut leaves = compute_leaves(&field, &column)?;
+                    anyhow::ensure!(
+                        leaves.len() == 1,
+                        "descriptor Int32 column unexpectedly has {} leaves",
+                        leaves.len()
+                    );
+                    column_writer.write(&leaves.remove(0))?;
+                    column_writer.close().map_err(Into::into)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut row_group = writer
+                .next_row_group()
+                .context("failed to start descriptor row group")?;
+            for chunk in chunks {
+                chunk
+                    .append_to_row_group(&mut row_group)
+                    .context("failed to append descriptor column chunk")?;
+            }
+            row_group
+                .close()
+                .context("failed to finish descriptor row group")?;
+        }
+        Ok(())
+    }
+
+    fn parallel_group_managed_bytes(columns: usize, rows: usize) -> Result<u64> {
+        // Dictionary hash tables, encoded pages and column chunks may coexist.
+        // Six raw Int32 copies plus fixed per-column overhead is deliberately
+        // conservative and is additive to the long-lived writer allowance.
+        let bytes = columns
+            .checked_mul(rows)
+            .and_then(|values| values.checked_mul(std::mem::size_of::<i32>()))
+            .and_then(|raw| raw.checked_mul(6))
+            .and_then(|value| value.checked_add(columns.checked_mul(16 * 1024)?))
+            .and_then(|value| value.checked_add(1 << 20))
+            .context("parallel descriptor row-group byte count overflow")?;
+        u64::try_from(bytes).context("parallel descriptor row-group bytes exceed u64")
     }
 
     fn format_usize_list(values: &[usize]) -> String {

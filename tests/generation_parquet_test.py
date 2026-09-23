@@ -259,13 +259,14 @@ def test_the_final_encoding_bounds_the_memory_owned_by_its_writers(
     """A budget must be spent on what the run is about to hold, not after.
 
     The one-pass final encoding holds a batch's selected columns, its formatted
-    three-line records and two live Parquet writers at once. Each of those has to
+    three-line records, two live Parquet writers and one parallel descriptor row
+    group at once. Each of those has to
     be reserved *before* it exists and for what it really is, or a low budget
     fails only after the allocation it was meant to prevent and then reports a
     managed peak lower than the process held. The ladder below is the observable
     form of that: as the budget rises the refusal moves from the generation
-    batch to the CSF Parquet writer to the final-encoding batch, and only a
-    budget covering all of them runs.
+    batch to the CSF Parquet writer, then to the final-encoding batch and
+    parallel row group; only a budget covering all of them runs.
     """
     transcript = (FIXTURES / "o1_cc1as1.rcsfgenerate").read_text(encoding="utf-8")
 
@@ -302,7 +303,7 @@ def test_the_final_encoding_bounds_the_memory_owned_by_its_writers(
     # Enough for generation, not for the final encoding: the refusal must name a
     # reservation this stage makes, which is what proves the charge exists and
     # happens before the allocation.
-    for budget in (12, 16, 20, 24):
+    for budget in (12, 16, 20, 24, 28, 36, 40):
         message, _, _, _ = run(budget)
         assert message != "ok", f"{budget} MiB was accepted; the charges are too small"
         assert any(
@@ -312,14 +313,15 @@ def test_the_final_encoding_bounds_the_memory_owned_by_its_writers(
                 "final descriptor encoding",
                 "final-encoding source batch",
                 "final-encoding batch",
+                "parallel descriptor row group",
             )
         ), f"{budget} MiB refused for an unrelated reason: {message}"
 
     # And the two writers are charged separately: a budget that covers one
     # writer's allowance plus the batch is not automatically enough for both.
-    outcome, peak, descriptor_parquet, csf_parquet = run(28)
+    outcome, peak, descriptor_parquet, csf_parquet = run(48)
     assert outcome == "ok", outcome
-    assert 20.0 <= peak <= 28.0, peak
+    assert 40.0 <= peak <= 48.0, peak
     assert descriptor_parquet is not None
     assert csf_parquet is not None
     for path in (descriptor_parquet, csf_parquet):

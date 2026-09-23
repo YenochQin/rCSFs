@@ -13,7 +13,8 @@
 //!
 //! * **Accounting before allocation.** The managed budget is charged for the
 //!   structures a batch will hold *before* they exist and for what they really
-//!   are, including both live Parquet writers. A reserve that happens after the
+//!   are, including both live Parquet writers and the parallel descriptor
+//!   row group. A reserve that happens after the
 //!   allocation, or that counts survivors while the batch was sized for every
 //!   row, is a budget that reports a peak lower than the process ever held.
 //! * **Complete phase timing.** The phases are named after the operations they
@@ -206,8 +207,9 @@ impl FinalEncodingStats {
 /// Build every final artifact from the segments in one ordered pass.
 ///
 /// Preparation (decode, validate, format) runs in the thread pool over each
-/// batch's rows; the descriptor Parquet still has a single writer and the CSF
-/// text a single pen. Block separators and the global `idx` sequence come from
+/// batch's rows; the descriptor columns are encoded in parallel, then a single
+/// writer appends them in schema order. The CSF text has a single pen. Block
+/// separators and the global `idx` sequence come from
 /// this ordered side, so no batch or thread boundary can put a row in the wrong
 /// block.
 pub(crate) fn build_final_outputs_from_segments(
@@ -268,12 +270,14 @@ fn build_final_outputs_from_segments_inner(
     )?;
     let (descriptor_temporary, descriptor_file) = create_temporary_output(descriptor_output)?;
     let descriptor_io_nanos = Arc::new(AtomicU64::new(0));
-    let mut descriptor_writer = ArrowWriter::try_new(
+    let (mut descriptor_writer, descriptor_factory) = ArrowWriter::try_new(
         CountedWriter::new(descriptor_file, Arc::clone(&descriptor_io_nanos)),
         schema.clone(),
         Some(properties),
     )
-    .context("failed to create the final descriptor Parquet writer")?;
+    .context("failed to create the final descriptor Parquet writer")?
+    .into_serialized_writer()
+    .context("failed to initialize parallel descriptor encoding")?;
 
     let (text_temporary, text_file) = create_temporary_output(csf_output)?;
     let csf_outputs_io_nanos = Arc::new(AtomicU64::new(0));
@@ -487,7 +491,13 @@ fn build_final_outputs_from_segments_inner(
                         .collect();
                     let batch = RecordBatch::try_new(schema.clone(), arrays)
                         .context("failed to construct the final descriptor batch")?;
-                    descriptor_writer.write(&batch).with_context(|| {
+                    descriptor::write_batch_parallel(
+                        &mut descriptor_writer,
+                        &descriptor_factory,
+                        &batch,
+                        &deduplicated.budget,
+                    )
+                    .with_context(|| {
                         format!(
                             "failed to write the final descriptor Parquet for segment {}",
                             segment.path.display()

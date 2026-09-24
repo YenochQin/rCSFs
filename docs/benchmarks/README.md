@@ -13,6 +13,11 @@ generator baselines. The current expected counts are registered in
 B2 19,243 / 560,351, and B3 7,027,846 / 5,811,925,522. New performance
 comparisons require new clean-source measurements; no old timing is rebased.
 
+The [2026-09-24 target-machine campaign](v2_target_xfs_20260924.md) registers
+the post-fix B1/B2 thread, budget and codec reports plus a B3 count/capacity
+estimate. The host's XFS type was confirmed with `findmnt`; the JSON metadata
+helper did not recognize Linux's `mount` output and records the type as null.
+
 ## Conventions
 
 - One `.md` interpretation per run or campaign, with the raw aggregated

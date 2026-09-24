@@ -1,0 +1,115 @@
+{
+  "environment": {
+    "cpu_count": 48,
+    "extension": {
+      "module": "_rcsfs.cpython-314-x86_64-linux-gnu.so",
+      "module_sha256": "27303f2ac1c7cfb4793dbeb333e829d5eb29fca843e0a19551ec0e2e8f3941ee",
+      "path": "<repo-root>/rcsfs/_rcsfs.cpython-314-x86_64-linux-gnu.so",
+      "version": "1.3.1"
+    },
+    "git": {
+      "branch": "1.3.1-beta2",
+      "commit": "7da458b015c3ccddad3be7d2e5abf5809b475c92",
+      "describe": "7da458b",
+      "dirty": false,
+      "dirty_ignores": [
+        "docs/benchmarks"
+      ],
+      "tree": "acdf9efd52c728ee6aed83c4eaca8c74dd274cfa"
+    },
+    "machine": "x86_64",
+    "platform": "Linux-5.14.0-687.12.1.el9_8.x86_64-x86_64-with-glibc2.34",
+    "processor": "x86_64",
+    "python": "3.14.0",
+    "release": "5.14.0-687.12.1.el9_8.x86_64",
+    "system": "Linux",
+    "total_memory_bytes": 810775953408
+  },
+  "estimate": {
+    "assumptions": [
+      "record counts are pre-de-duplication: no record is assumed to be removed (B1/B2 removed none, and a removing input only lowers the published sizes)",
+      "de-duplication is the verified path: the generator cannot repeat a row, so no root or recursive bucket is written and the scratch model covers segments and survivor bitsets only",
+      "segments 1007 bytes/row = 1.1x the 904-byte V2 row plus two ordinals; measured overhead was 3.3%, and the model assumes *uncompressed* segments, so a run that enables a segment codec writes fewer bytes than this",
+      "root buckets 960 bytes/row = V2 row + 16-byte digest + 8-byte ordinal + framing; measured exactly V2 row + 24",
+      "recursive bucketing assumes 1 additional full repartition; it was never triggered by the registered inputs",
+      "descriptor 1/100 bytes per V2 integer per row; measured 0.0098 (61 columns) and 0.0062 (226 columns) bytes, so every shape is rounded up",
+      "CSF text 321 bytes/record and CSF Parquet 73 bytes/record; measured 320.05/27.51 and 300.77/72.60, rounded up",
+      "publishing copies the staged set to its destinations, so the staged set and the published files exist at the same time",
+      "safety margin 5/4 on every requirement",
+      "free space is checked with statvfs where the platform provides it; elsewhere it is reported as unchecked rather than assumed sufficient"
+    ],
+    "bytes": {
+      "csf_parquet": 424270563106,
+      "csf_text": 1865628092562,
+      "descriptor": 13134951679,
+      "recursive_buckets": 0,
+      "required_output": 2878792173023,
+      "required_scratch": 7316669364340,
+      "root_buckets": 0,
+      "scratch_peak": 5853335491472,
+      "segments": 5852609000654,
+      "staged_outputs": 2303033738419,
+      "survivor_bitsets": 726490818
+    },
+    "deduplication": "verified_unique",
+    "enumeration_millis": 19653,
+    "failure_recovery": "restart",
+    "peel_subshells": 56,
+    "plan_stats": {
+      "estimated_records_per_task": {
+        "count": 1454,
+        "maximum": 4000000,
+        "minimum": 2336874,
+        "p50": 3999140,
+        "p95": 3999948,
+        "total": 5811925522
+      },
+      "estimated_total_records": 5811925522,
+      "target_records_per_task": 4000000,
+      "task_count": 1454,
+      "unique_occupations": 7027846,
+      "unsplittable_records": 0,
+      "unsplittable_tasks": 0,
+      "zero_record_configurations": 14185
+    },
+    "planning_millis": 4773,
+    "pre_deduplication_records": 5811925522,
+    "segment_codec": "none",
+    "space_checks": [
+      {
+        "free_bytes": 1388388642816,
+        "path": "<path>/rcsfs_bench_scratch",
+        "required_bytes": 10195461537363,
+        "sufficient": false
+      }
+    ],
+    "success": true,
+    "unique_occupations": 7027846,
+    "v2_columns": 226
+  },
+  "filesystem": {
+    "free_bytes": 693548666880,
+    "path": "<repo-root>",
+    "total_bytes": 751252275200,
+    "type": null
+  },
+  "generated_at_unix_seconds": 1790176069.5777,
+  "schema": "rcsfs-v2-generation-capacity/1",
+  "settings": {
+    "counted_records_are": "pre-de-duplication",
+    "memory_budget_mib": null,
+    "space_checked": true,
+    "threads": 8
+  },
+  "transcript": {
+    "description": "core 1, both registered references, full active space 9s,9p,9d,9f,7g, 2J = 8, 4 excitations",
+    "expected_records": 5811925522,
+    "expected_unique_occupations": 7027846,
+    "name": "b3",
+    "path": "b3_cc1_9spdfg_4exc.rcsfgenerate",
+    "registered": true,
+    "sha256": "1ec027bcbe6532e6855d82c965a1c4713ee9e0396ef461fb6f709cd9070dd1a8",
+    "size_bytes": 190
+  },
+  "wall_seconds": 24.649945368990302
+}

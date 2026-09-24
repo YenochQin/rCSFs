@@ -104,6 +104,24 @@ class PartitionStats(TypedDict):
     error: NotRequired[str]
 
 
+class ActiveSpaceOutputStats(TypedDict):
+    """Selection count and block lengths for one active-space output."""
+
+    output_file: str
+    maximum_orbitals: str
+    csf_count: int
+    block_lengths: list[int]
+
+
+class ActiveSpaceSplitStats(TypedDict):
+    """Statistics from one pass splitting a CSF Parquet stream."""
+
+    success: bool
+    input_csf_count: int
+    block_count: int
+    outputs: list[ActiveSpaceOutputStats]
+
+
 class CsfGenerationStageStats(TypedDict):
     """Coarse logical measurements for one disk-generation stage."""
 

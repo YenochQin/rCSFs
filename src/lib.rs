@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 // Public modules for integration testing
 pub mod atomic_output;
 pub mod complete_csf;
+pub mod csf_active_space_split;
 pub mod csf_generation;
 mod csf_output;
 pub mod csf_partition;
@@ -27,6 +28,7 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_csfs_arrow, m)?)?;
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
     m.add_function(wrap_pyfunction!(partition_csfs, m)?)?;
+    m.add_function(wrap_pyfunction!(split_csfs_by_active_spaces, m)?)?;
     m.add_function(wrap_pyfunction!(generate_csfs_from_transcript, m)?)?;
     m.add_function(wrap_pyfunction!(generate_disk_outputs_from_transcript, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_disk_generation, m)?)?;
@@ -325,6 +327,49 @@ fn partition_csfs(
             Ok(d.into())
         }
     }
+}
+
+/// Split a CSF Parquet stream into independent, possibly overlapping active spaces.
+#[pyfunction]
+fn split_csfs_by_active_spaces(
+    py: Python<'_>,
+    input_parquet: String,
+    header_path: String,
+    targets: Vec<(String, String)>,
+) -> PyResult<Py<PyAny>> {
+    let targets: Vec<csf_active_space_split::ActiveSpaceTarget> = targets
+        .into_iter()
+        .map(
+            |(output, maximum_orbitals)| csf_active_space_split::ActiveSpaceTarget {
+                maximum_orbitals,
+                output: PathBuf::from(output),
+            },
+        )
+        .collect();
+    let stats = py
+        .detach(|| {
+            csf_active_space_split::split_csfs_by_active_spaces(
+                Path::new(&input_parquet),
+                Path::new(&header_path),
+                &targets,
+            )
+        })
+        .map_err(|error| PyIOError::new_err(format!("{error:#}")))?;
+    let result = PyDict::new(py);
+    result.set_item("success", true)?;
+    result.set_item("input_csf_count", stats.input_csf_count)?;
+    result.set_item("block_count", stats.block_count)?;
+    let outputs = PyList::empty(py);
+    for output in stats.outputs {
+        let entry = PyDict::new(py);
+        entry.set_item("output_file", output.output_file)?;
+        entry.set_item("maximum_orbitals", output.maximum_orbitals)?;
+        entry.set_item("csf_count", output.csf_count)?;
+        entry.set_item("block_lengths", output.block_lengths)?;
+        outputs.append(entry)?;
+    }
+    result.set_item("outputs", outputs)?;
+    Ok(result.into())
 }
 
 /// Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript.

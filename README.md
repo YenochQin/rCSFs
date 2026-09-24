@@ -603,9 +603,37 @@ rather than treated as an identity selection.
 | `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False, compression=None, *, descriptor_version=2, header_path=None)` | Generate descriptor Parquet from converted CSFs; `descriptor_version=2` (default) writes named columns, `1` writes the legacy `col_{i}` layout and is required for `normalize=True` |
 | `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | Rebuild a CSF text file from a V2 descriptor Parquet file and its source header TOML |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | Reorder a CSF list into zero-order + first-order space per symmetry block |
+| `split_csfs_by_active_spaces(input_parquet, header_path, targets)` | Split one Parquet CSF list into independently selected, possibly overlapping active-space CSF text files; `targets` maps output path to orbital limits |
 | `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | Write a conservative, non-exact upper bound of interacting candidates; returned stats always include `exact=False` |
 | `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` |
 | `generate_disk_outputs_from_transcript(transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None, *, memory_budget_mib=None)` | Generate staged CSF and reversible V2 outputs with managed-memory accounting |
+
+### Split CSFs by active space
+
+Use the CSF Parquet file and matching `*_header.toml` produced by conversion or
+disk generation. For example, from a large source space, request two nested
+spaces in one pass:
+
+```bash
+rcsfs split-active source.parquet --header source_header.toml \
+  --output-dir results --space '_small=5s,4p,3d' \
+  --space '_large=7s,6p,5d,4f'
+```
+
+This writes `results/source_small.c` and `results/source_large.c`.
+`rcsfs rcsfsplit` is an alias for `rcsfs split-active`. Each output is filtered
+independently, so a CSF belonging to both spaces appears in both.
+The five-line header is retained with its peel list filtered to the target;
+CSF order and symmetry-block separators are preserved. Occupation lines are
+parsed as exact orbital tokens (`5g` cannot accidentally match `15g`), and
+relativistic partners such as `5g-` and `5g` share the `5g` maximum. Even an
+explicitly zero-occupied orbital is checked, matching GRASP's line-based
+filter and keeping every listed orbital within the output header. Input is
+read in bounded Parquet batches; a 77-million-row source is not loaded into
+RAM. Each output needs an existing parent directory and must not already
+exist. A completed output is published atomically, but a group of outputs is
+not an all-or-nothing transaction: on a late publication failure, earlier
+completed outputs remain and are named in the error.
 
 ## Input Format
 

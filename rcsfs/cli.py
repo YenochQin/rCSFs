@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -22,6 +23,7 @@ from . import (
     read_peel_subshells,
     restore_csfs_from_descriptors,
     select_interacting_csfs,
+    split_csfs_by_active_spaces,
 )
 from ._types import InteractionHamiltonian, InteractionMethod
 from ._publication import PartialPublicationError, publish_outputs
@@ -69,6 +71,18 @@ class ZeroFirstArgs(Protocol):
     json: bool
 
 
+class SplitActiveArgs(Protocol):
+    """Parsed arguments for ``split-active``."""
+
+    command: Literal["split-active", "rcsfsplit"]
+    input_parquet: Path
+    header: Path
+    space: list[str]
+    output_dir: Path
+    prefix: str | None
+    json: bool
+
+
 class CsfsGenerateArgs(Protocol):
     """Parsed arguments for the ``csfsgenerate`` subcommand."""
 
@@ -109,6 +123,7 @@ type CliArgs = (
     | CsfsGenerateArgs
     | InteractingArgs
     | RestoreCsfsArgs
+    | SplitActiveArgs
 )
 
 
@@ -263,6 +278,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print partition statistics as JSON.",
     )
+
+    split_active = subparsers.add_parser(
+        "split-active",
+        aliases=["rcsfsplit"],
+        help="Split one CSF Parquet file into GRASP-style active-space CSF lists.",
+        description=(
+            "Read CSF Parquet once and independently select each active space. "
+            "Outputs may overlap; no output is overwritten."
+        ),
+    )
+    _ = split_active.add_argument("input_parquet", type=Path)
+    _ = split_active.add_argument(
+        "--header", required=True, type=Path, help="Matching CSF *_header.toml file."
+    )
+    _ = split_active.add_argument(
+        "--space", required=True, action="append", metavar="LABEL=5s,4p,3d",
+        help="Output label and maximum orbitals; repeat for each active space.",
+    )
+    _ = split_active.add_argument(
+        "--output-dir", required=True, type=Path,
+        help="Existing directory for output CSF text files.",
+    )
+    _ = split_active.add_argument(
+        "--prefix", default=None,
+        help="Output filename prefix (default: input Parquet stem).",
+    )
+    _ = split_active.add_argument("--json", action="store_true")
 
     csfsgenerate = subparsers.add_parser(
         "csfsgenerate",
@@ -648,6 +690,42 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
     finally:
         if not args.keep_parquet:
             shutil.rmtree(root, ignore_errors=True)
+
+
+def _run_split_active(args: SplitActiveArgs) -> int:
+    try:
+        if not args.output_dir.is_dir():
+            raise ValueError(f"output directory does not exist: {args.output_dir}")
+        prefix = args.prefix if args.prefix is not None else args.input_parquet.stem
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
+            raise ValueError("output prefix must contain only letters, digits, _ or -")
+        targets: dict[str | Path, str] = {}
+        labels: set[str] = set()
+        for item in args.space:
+            label, separator, orbitals = item.partition("=")
+            if not separator or not re.fullmatch(r"[A-Za-z0-9_-]+", label):
+                raise ValueError(f"invalid --space {item!r}; expected LABEL=5s,4p,3d")
+            if label in labels:
+                raise ValueError(f"duplicate active-space label: {label}")
+            labels.add(label)
+            targets[args.output_dir / f"{prefix}{label}.c"] = orbitals
+        if len(targets) != len(args.space):
+            raise ValueError("active-space labels produce duplicate output paths")
+        stats = split_csfs_by_active_spaces(args.input_parquet, args.header, targets)
+    except (OSError, ValueError, RuntimeError) as exc:
+        if args.json:
+            json.dump({"success": False, "error": str(exc)}, sys.stdout, indent=2)
+            _ = sys.stdout.write("\n")
+        else:
+            print(f"Active-space split failed: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        json.dump(stats, sys.stdout, indent=2)
+        _ = sys.stdout.write("\n")
+    else:
+        for output in stats["outputs"]:
+            print(f"{output['output_file']}: {output['csf_count']} CSFs")
+    return 0
 
 
 def _prompt(message: str) -> str:
@@ -1310,7 +1388,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "restore-csfs":
         return _run_restore_csfs(args)
 
-    return _run_zero_first(args)
+    if args.command == "split-active":
+        return _run_split_active(args)
+    if args.command == "rcsfsplit":
+        return _run_split_active(args)
+
+    if args.command == "zero-first":
+        return _run_zero_first(args)
+    raise AssertionError(f"unsupported command: {args.command}")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 from typing import Protocol
 
 from ._types import (
+    ActiveSpaceSplitStats,
     ConversionStats,
     CsfGenerationEstimate,
     CsfGenerationStats,
@@ -46,6 +47,11 @@ def partition_csfs(
     full_header: str,
     output_csf: str,
 ) -> PartitionStats: ...
+def split_csfs_by_active_spaces(
+    input_parquet: str,
+    header_path: str,
+    targets: list[tuple[str, str]],
+) -> ActiveSpaceSplitStats: ...
 def py_generate_descriptors_from_parquet(
     input_parquet: str,
     output_file: str,

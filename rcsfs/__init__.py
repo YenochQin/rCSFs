@@ -56,6 +56,8 @@ from pathlib import Path
 from polars import DataFrame
 
 from ._types import (
+    ActiveSpaceOutputStats,
+    ActiveSpaceSplitStats,
     ConversionStats,
     CsfBlockInfo,
     CsfDataStats,
@@ -106,6 +108,7 @@ from ._rcsfs import (
 )
 from ._rcsfs import read_csfs_arrow as _read_csfs_arrow
 from ._rcsfs import select_interacting_csfs as _select_interacting_csfs
+from ._rcsfs import split_csfs_by_active_spaces as _split_csfs_by_active_spaces
 
 # ///////////////////////////////////////////////////////////////////////////////
 # Python Wrapper Functions (with Path support)
@@ -472,6 +475,27 @@ def partition_csfs(
     )
 
 
+def split_csfs_by_active_spaces(
+    input_parquet: str | Path,
+    header_path: str | Path,
+    targets: Mapping[str | Path, str],
+) -> ActiveSpaceSplitStats:
+    """Split a CSF Parquet file into independent GRASP-style active spaces.
+
+    ``targets`` maps each output CSF text path to maximum orbitals such as
+    ``"5s,4p,3d"``. A CSF is selected for every target whose orbital limits
+    contain every orbital listed in its occupation line (including any
+    explicitly zero-occupied orbital); outputs may therefore overlap. The
+    input is streamed in bounded batches, and existing outputs are never
+    overwritten. Each output parent directory must already exist.
+    """
+    return _split_csfs_by_active_spaces(
+        input_parquet=str(input_parquet),
+        header_path=str(header_path),
+        targets=[(str(path), orbitals) for path, orbitals in targets.items()],
+    )
+
+
 # ///////////////////////////////////////////////////////////////////////////////
 # Structural Interaction Selection
 # ///////////////////////////////////////////////////////////////////////////////
@@ -720,6 +744,7 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     "read_peel_subshells",
     # Zero-first partition
     "partition_csfs",
+    "split_csfs_by_active_spaces",
     # Structural interaction selection
     "select_interacting_csfs",
     # CSF generation
@@ -736,6 +761,8 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     "DescriptorGenerationStats",
     "CsfRestoreStats",
     "PartitionStats",
+    "ActiveSpaceOutputStats",
+    "ActiveSpaceSplitStats",
     "CsfGenerationStats",
     "CsfGenerationEstimate",
     "CsfGenerationEstimateBytes",

@@ -1015,7 +1015,10 @@ def _print_estimate_summary(
     print(f"failure_recovery: {stats.get('failure_recovery')}", file=stream)
 
 
-def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, object]:
+def _generate_outputs(
+    transcript: str | list[str], args: CsfsGenerateArgs
+) -> dict[str, object]:
+    multiple_lists = isinstance(transcript, list)
     rcsfs_parquet = args.rcsfs_parquet or args.rcsfs_out.with_suffix(".parquet")
     descriptor_output = args.descriptor or args.rcsfs_out.with_name(
         f"{args.rcsfs_out.stem}_descriptors.parquet"
@@ -1035,11 +1038,13 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
             raise FileExistsError(f"Output already exists: {path}")
         if not path.parent.is_dir():
             raise FileNotFoundError(f"Output directory does not exist: {path.parent}")
-    if args.memory_budget_mib is not None and not args.generate_descriptors:
+    if args.memory_budget_mib is not None and not (
+        args.generate_descriptors or multiple_lists
+    ):
         raise ValueError(
             "memory_budget_mib requires descriptor-producing disk generation"
         )
-    if not args.generate_descriptors:
+    if not args.generate_descriptors and not multiple_lists:
         return dict(
             generate_csfs_from_transcript(
                 transcript,
@@ -1058,6 +1063,16 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
         )
     if args.generation_storage == "disk":
         scratch_base = args.scratch_dir if args.scratch_dir is not None else Path.cwd()
+        estimate_destinations = {"csf_text": args.rcsfs_out}
+        if args.generate_descriptors:
+            estimate_destinations.update(
+                {
+                    "csf_parquet": rcsfs_parquet,
+                    "descriptor": descriptor_output,
+                    "header": csfs_header,
+                    "descriptor_metadata": metadata,
+                }
+            )
         # The estimate run every check itself, from the same model the
         # generation path uses: requirements that share a volume are added and
         # each phase is compared by its maximum. Only the paths are the CLI's
@@ -1069,15 +1084,7 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
                 memory_budget_mib=args.memory_budget_mib,
                 scratch_dir=scratch_base,
                 staging_dir=Path.cwd(),
-                destinations={
-                    "csf_text": args.rcsfs_out,
-                    "csf_parquet": rcsfs_parquet,
-                    "descriptor": descriptor_output,
-                    # The header and the descriptor sidecar can land on different
-                    # volumes, so each is charged to its own destination.
-                    "header": csfs_header,
-                    "descriptor_metadata": metadata,
-                },
+                destinations=estimate_destinations,
             )
         )
         if args.estimate_only:
@@ -1140,7 +1147,10 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
         else:
             stats = dict(
                 generate_csfs_from_transcript(
-                    transcript, csf, normalize=args.normalize, threads=args.threads
+                    cast(str, transcript),
+                    csf,
+                    normalize=args.normalize,
+                    threads=args.threads,
                 )
             )
         if stats.get("success") is not True:
@@ -1152,6 +1162,17 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
                     "success": False,
                     "error": conversion.get("error", "CSF conversion failed"),
                 }
+        if multiple_lists and not args.generate_descriptors:
+            publish_outputs([csf], [args.rcsfs_out])
+            for key in (
+                "parquet_file",
+                "descriptor_file",
+                "header_file",
+                "descriptor_count",
+            ):
+                _ = stats.pop(key, None)
+            stats["output_file"] = str(args.rcsfs_out)
+            return stats
         shells = read_peel_subshells(staged_header)
         if args.generation_storage == "disk":
             result: Mapping[str, object] = stats
@@ -1213,21 +1234,41 @@ def _config_reference_configuration(value: object) -> list[str]:
     return [_config_string(item) for item in cast(list[object], value)]
 
 
+def _generation_transcript(generate: Mapping[str, object]) -> str:
+    references = _config_reference_configuration(generate["reference_configuration"])
+    return "\n".join(
+        [
+            f"{_config_string(generate.get('orbital_order', '*'))} ! Orbital order",
+            str(_config_int(generate["inactive_core"])),
+            *references,
+            "",
+            _config_string(generate["active_space"]),
+            f"{_config_int(generate['j_min'])},{_config_int(generate['j_max'])}",
+            str(_config_int(generate["excitations"])),
+            "n",
+        ]
+    )
+
+
 def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
     if args.generation is not None:
         try:
             generate = args.generation
-            orbital_order = _config_string(generate.get("orbital_order", "*"))
-            inactive_core = _config_int(generate["inactive_core"])
-            reference_configuration = _config_reference_configuration(
-                generate["reference_configuration"]
-            )
-            active_space = _config_string(generate["active_space"])
-            j_min = _config_int(generate["j_min"])
-            j_max = _config_int(generate["j_max"])
-            excitations = _config_int(generate["excitations"])
-            if _config_bool(generate.get("continue_lists", False)):
-                raise ValueError("continue_lists is not supported yet; use false")
+            if "lists" in generate:
+                raw_lists = generate["lists"]
+                if not isinstance(raw_lists, list):
+                    raise ValueError("lists must contain at least two tables")
+                list_items = cast(list[object], raw_lists)
+                if len(list_items) < 2:
+                    raise ValueError("lists must contain at least two tables")
+                transcripts: str | list[str] = [
+                    _generation_transcript(cast(Mapping[str, object], item))
+                    for item in list_items
+                ]
+            else:
+                if _config_bool(generate.get("continue_lists", False)):
+                    raise ValueError("continue_lists is not supported yet; use false")
+                transcripts = _generation_transcript(generate)
         except (OSError, KeyError, TypeError, ValueError) as exc:
             print(f"Invalid generation config: {exc}", file=sys.stderr)
             return 2
@@ -1238,6 +1279,17 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
         active_space = _read_active_orbitals()
         j_min, j_max = _read_j_range()
         excitations = _read_excitations()
+        transcripts = _generation_transcript(
+            {
+                "orbital_order": orbital_order,
+                "inactive_core": inactive_core,
+                "reference_configuration": reference_configuration,
+                "active_space": active_space,
+                "j_min": j_min,
+                "j_max": j_max,
+                "excitations": excitations,
+            }
+        )
     if args.generation is None and _read_continue():
         print(
             "Multiple lists are not supported yet; only the first list "
@@ -1246,31 +1298,22 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
         )
         return 1
 
+    multiple_lists = isinstance(transcripts, list)
+    if multiple_lists and args.generation_storage == "memory":
+        print("Multiple lists require disk generation storage.", file=sys.stderr)
+        return 2
     if args.generation_storage is None:
         args.generation_storage = (
             "disk"
-            if args.generate_descriptors and args.config is not None
+            if multiple_lists or (args.generate_descriptors and args.config is not None)
             else "memory"
         )
     if args.generation_storage not in ("memory", "disk"):
         print("Invalid generation storage: expected memory or disk", file=sys.stderr)
         return 2
 
-    transcript = "\n".join(
-        [
-            f"{orbital_order} ! Orbital order",
-            str(inactive_core),
-            *reference_configuration,
-            "",
-            active_space,
-            f"{j_min},{j_max}",
-            str(excitations),
-            "n",
-        ]
-    )
-
     try:
-        stats = _generate_outputs(transcript, args)
+        stats = _generate_outputs(transcripts, args)
     except PartialPublicationError as exc:
         stats = {
             "success": False,

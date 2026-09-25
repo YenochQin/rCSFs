@@ -448,7 +448,7 @@ fn generate_csfs_from_transcript(
 #[allow(clippy::too_many_arguments)]
 fn generate_disk_outputs_from_transcript(
     py: Python,
-    transcript: String,
+    transcript: &Bound<'_, PyAny>,
     csf_output: String,
     csf_parquet_output: String,
     descriptor_output: String,
@@ -458,6 +458,14 @@ fn generate_disk_outputs_from_transcript(
     memory_budget_mib: Option<usize>,
     allow_unchecked_space: bool,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    let single = transcript.extract::<String>().ok();
+    let multiple = if single.is_none() {
+        Some(transcript.extract::<Vec<String>>().map_err(|_| {
+            PyValueError::new_err("transcript must be a string or an array of strings")
+        })?)
+    } else {
+        None
+    };
     if matches!(threads, Some(0)) {
         return Err(PyValueError::new_err("threads must be greater than 0"));
     }
@@ -474,15 +482,26 @@ fn generate_disk_outputs_from_transcript(
     )
     .map_err(|error| PyValueError::new_err(format!("invalid generation options: {error:#}")))?;
     let stats = py
-        .detach(|| {
-            crate::csf_generation::streaming::generate_disk_outputs_from_transcript_with_options(
-                &transcript,
-                Path::new(&csf_output),
-                Path::new(&csf_parquet_output),
-                Path::new(&descriptor_output),
-                Path::new(&header_output),
-                &options,
-            )
+        .detach(|| match (single.as_deref(), multiple.as_deref()) {
+            (Some(text), _) =>
+                crate::csf_generation::streaming::generate_disk_outputs_from_transcript_with_options(
+                    text,
+                    Path::new(&csf_output),
+                    Path::new(&csf_parquet_output),
+                    Path::new(&descriptor_output),
+                    Path::new(&header_output),
+                    &options,
+                ),
+            (_, Some(texts)) =>
+                crate::csf_generation::streaming::generate_disk_outputs_from_transcripts_with_options(
+                    texts,
+                    Path::new(&csf_output),
+                    Path::new(&csf_parquet_output),
+                    Path::new(&descriptor_output),
+                    Path::new(&header_output),
+                    &options,
+                ),
+            _ => unreachable!(),
         })
         .map_err(|error| PyIOError::new_err(format!("{error:#}")))?;
     let output = PyDict::new(py);
@@ -577,13 +596,21 @@ fn plan_stats_dict(
 #[allow(clippy::too_many_arguments)] // PyO3 exposes one argument per Python parameter.
 fn estimate_disk_generation(
     py: Python,
-    transcript: String,
+    transcript: &Bound<'_, PyAny>,
     threads: Option<usize>,
     memory_budget_mib: Option<usize>,
     scratch_dir: Option<String>,
     staging_dir: Option<String>,
     destinations: Option<Vec<(String, String)>>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    let single = transcript.extract::<String>().ok();
+    let multiple = if single.is_none() {
+        Some(transcript.extract::<Vec<String>>().map_err(|_| {
+            PyValueError::new_err("transcript must be a string or an array of strings")
+        })?)
+    } else {
+        None
+    };
     if matches!(threads, Some(0)) {
         return Err(PyValueError::new_err("threads must be greater than 0"));
     }
@@ -613,12 +640,16 @@ fn estimate_disk_generation(
             .map_err(|error| PyValueError::new_err(format!("{error:#}")))?,
     };
     let (estimate, checks) = py
-        .detach(|| {
-            crate::csf_generation::streaming::estimate_disk_generation_with_layout(
-                &transcript,
-                &options,
-                &layout,
-            )
+        .detach(|| match (single.as_deref(), multiple.as_deref()) {
+            (Some(text), _) =>
+                crate::csf_generation::streaming::estimate_disk_generation_with_layout(
+                    text, &options, &layout,
+                ),
+            (_, Some(texts)) =>
+                crate::csf_generation::streaming::estimate_disk_generation_from_transcripts_with_layout(
+                    texts, &options, &layout,
+                ),
+            _ => unreachable!(),
         })
         .map_err(|error| PyIOError::new_err(format!("{error:#}")))?;
     let output = PyDict::new(py);

@@ -127,7 +127,51 @@ serialization, and serial/parallel consistency regressions.
 
 The transcript parser accepts default orbital order (`*`) and one list terminated
 by `n`. Nondefault order, continuation (`y`), missing termination, and trailing
-input fail explicitly. Existing-list expansion remains unfinished.
+input fail explicitly. The TOML CLI can now submit multiple independent lists;
+raw transcript continuation (`y`) and existing-list expansion remain unfinished.
+
+## Multiple lists in one TOML file
+
+Use `[[csfsgenerate.lists]]` for each list that would follow a `y` answer in
+GRASP. The core and output settings belong to the run. Every list supplies its
+own references, active space, `2J` range, and excitation count, including values
+that happen to be the same across lists. No list inherits values from another.
+
+```toml
+[csfsgenerate]
+inactive_core = 0
+rcsfs_out = "combined.c"
+generate_descriptors = true
+
+[[csfsgenerate.lists]]
+reference_configuration = ["1s(2,*)"]
+active_space = "2s"
+j_min = 0
+j_max = 0
+excitations = 0
+
+[[csfsgenerate.lists]]
+reference_configuration = ["1s(2,*)", "2s(2,*)"]
+active_space = "3s"
+j_min = 0
+j_max = 0
+excitations = -2
+```
+
+Run `rcsfs csfsgenerate --config input.toml`. Multi-list runs use the disk
+pipeline even when only the CSF text is requested. They generate lists in TOML
+order, use one union Peel table, and remove duplicate complete CSF records by
+exact V2-row comparison. Publication starts only after every list succeeds.
+Lists must have the same closed core
+and electron count. The old flat `[csfsgenerate]` format remains supported;
+mixing its list-specific keys with `[[csfsgenerate.lists]]` is an error.
+For a multi-list run, `unique_occupations` in the workload report sums each
+list's internally unique occupations before cross-list CSF de-duplication;
+`record_count` and `duplicate_count` describe the final union.
+
+This is a complete-CSF union. GRASP's `y` merge instead discards all CSFs from
+a later list when an occupation configuration already appeared in an earlier
+list; the two behaviors can differ when lists request different `2J` ranges.
 
 ## Transcript input normalization
 

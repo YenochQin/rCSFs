@@ -110,6 +110,83 @@ def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
     assert restored.read_bytes() == (tmp_path / "out.c").read_bytes()
 
 
+def test_config_multiple_lists_union_and_exact_dedup(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "multiple.toml"
+    output = tmp_path / "union.c"
+    config.write_text(
+        f'[csfsgenerate]\ninactive_core = 0\nrcsfs_out = "{output}"\n'
+        'generate_descriptors = true\ngeneration_storage = "disk"\n'
+        '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        "[[csfsgenerate.lists]]\n"
+        'reference_configuration = ["1s(2,*)", "2s(2,*)"]\n'
+        'active_space = "3s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+    )
+    assert (
+        cli.main(["csfsgenerate", "--config", str(config), "--estimate-only", "--json"])
+        == 0
+    )
+    estimate = json.loads(capfd.readouterr().out)
+    assert estimate["deduplication"] == "exact"
+    assert estimate["pre_deduplication_records"] == 3
+    assert estimate["peel_subshells"] == 2
+    assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 0
+    stats = json.loads(capfd.readouterr().out)
+    assert stats["deduplication"] == "exact"
+    assert stats["generated_count"] == 3
+    assert stats["duplicate_count"] == 1
+    descriptors = pl.read_parquet(tmp_path / "union_descriptors.parquet")
+    assert descriptors.height == 2
+    assert {row[0] for row in descriptors.select("sub0_n").iter_rows()} == {0, 2}
+    restored = tmp_path / "restored.c"
+    restore_csfs_from_descriptors(
+        tmp_path / "union_descriptors.parquet",
+        tmp_path / "union_header.toml",
+        restored,
+    )
+    assert restored.read_bytes() == output.read_bytes()
+
+
+def test_config_multiple_lists_text_only_and_distinct_j_ranges(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "multiple-text.toml"
+    output = tmp_path / "union.c"
+    config.write_text(
+        f'[csfsgenerate]\ninactive_core = 0\nrcsfs_out = "{output}"\n'
+        '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        "[[csfsgenerate.lists]]\n"
+        'reference_configuration = ["1s(1,*)2s(1,*)"]\n'
+        'active_space = "2s"\nj_min = 2\nj_max = 2\nexcitations = 0\n'
+    )
+    assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 0
+    stats = json.loads(capfd.readouterr().out)
+    assert stats["record_count"] == 2
+    assert stats["block_count"] == 2
+    assert "descriptor_file" not in stats
+    assert set(tmp_path.iterdir()) == {config, output}
+
+
+def test_config_multiple_lists_reject_different_electron_counts(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "different-electrons.toml"
+    output = tmp_path / "union.c"
+    config.write_text(
+        f'[csfsgenerate]\ninactive_core = 0\nrcsfs_out = "{output}"\n'
+        '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        '[[csfsgenerate.lists]]\nreference_configuration = ["2s(1,*)"]\n'
+        'active_space = "2s"\nj_min = 1\nj_max = 1\nexcitations = 0\n'
+    )
+    assert cli.main(["csfsgenerate", "--config", str(config)]) == 1
+    assert "generation list 2 has 1 electrons; expected 2" in capfd.readouterr().err
+    assert not output.exists()
+
+
 def test_config_generation_rejects_v2_normalization_without_outputs(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
@@ -280,9 +357,9 @@ def test_the_estimate_prices_the_strategy_the_run_will_use(
     assert exact["bytes"]["recursive_buckets"] > 0
     assert exact["bytes"]["segments"] == verified["bytes"]["segments"]
     assert any("exact path" in line for line in exact["assumptions"])
-    assert (
-        exact["bytes"]["scratch_peak"] > verified["bytes"]["scratch_peak"]
-    ), "the exact path writes buckets the verified path does not"
+    assert exact["bytes"]["scratch_peak"] > verified["bytes"]["scratch_peak"], (
+        "the exact path writes buckets the verified path does not"
+    )
 
 
 def test_the_final_encoding_bounds_the_memory_owned_by_its_writers(
@@ -480,7 +557,10 @@ def test_estimate_only_reports_capacity_without_writing(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     config = config_file(tmp_path)
-    assert cli.main(["csfsgenerate", "--config", str(config), "--estimate-only", "--json"]) == 0
+    assert (
+        cli.main(["csfsgenerate", "--config", str(config), "--estimate-only", "--json"])
+        == 0
+    )
     payload = json.loads(capfd.readouterr().out)
     assert payload["success"] is True
     assert payload["estimate_only"] is True
@@ -501,7 +581,10 @@ def test_estimate_matches_the_run_it_predicts(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     config = config_file(tmp_path)
-    assert cli.main(["csfsgenerate", "--config", str(config), "--estimate-only", "--json"]) == 0
+    assert (
+        cli.main(["csfsgenerate", "--config", str(config), "--estimate-only", "--json"])
+        == 0
+    )
     estimate = json.loads(capfd.readouterr().out)
     assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 0
     generated = json.loads(capfd.readouterr().out)
@@ -609,7 +692,9 @@ def test_estimate_and_generation_reject_the_same_low_budget(tmp_path: Path) -> N
     budget rejects both at enumeration. Charging the estimate an unlimited arena
     would have reported success for a run that cannot start.
     """
-    transcript = (Path(__file__).parent / "fixtures" / "b2_cc1_fullas_2exc.rcsfgenerate").read_text()
+    transcript = (
+        Path(__file__).parent / "fixtures" / "b2_cc1_fullas_2exc.rcsfgenerate"
+    ).read_text()
     with pytest.raises(OSError, match="memory budget exceeded"):
         estimate_disk_generation(transcript, memory_budget_mib=1)
     with pytest.raises(OSError, match="memory budget exceeded"):
@@ -624,11 +709,7 @@ def test_estimate_and_generation_reject_the_same_low_budget(tmp_path: Path) -> N
         )
     # Neither attempt may leave an artifact behind. The API owns the scratch
     # directory it was asked to create; the CLI removes its own on failure.
-    assert [
-        path
-        for path in tmp_path.iterdir()
-        if path.name != "scratch"
-    ] == []
+    assert [path for path in tmp_path.iterdir() if path.name != "scratch"] == []
 
 
 def test_cli_accepts_the_unchecked_space_opt_out(

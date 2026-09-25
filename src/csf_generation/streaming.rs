@@ -339,6 +339,60 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
     header_output: &Path,
     options: &GenerationOptions,
 ) -> Result<DiskGenerationStats> {
+    let request = ExcitationRequest::from_transcript(transcript)?;
+    generate_disk_outputs_from_requests(
+        &[request],
+        csf_output,
+        csf_parquet_output,
+        descriptor_output,
+        header_output,
+        options,
+    )
+}
+
+pub(crate) fn generate_disk_outputs_from_transcripts_with_options(
+    transcripts: &[String],
+    csf_output: &Path,
+    csf_parquet_output: &Path,
+    descriptor_output: &Path,
+    header_output: &Path,
+    options: &GenerationOptions,
+) -> Result<DiskGenerationStats> {
+    ensure!(
+        transcripts.len() >= 2,
+        "multiple lists require at least two transcripts"
+    );
+    let requests = transcripts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            ExcitationRequest::from_transcript(text)
+                .with_context(|| format!("generation list {}", index + 1))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    generate_disk_outputs_from_requests(
+        &requests,
+        csf_output,
+        csf_parquet_output,
+        descriptor_output,
+        header_output,
+        options,
+    )
+}
+
+fn generate_disk_outputs_from_requests(
+    requests: &[ExcitationRequest],
+    csf_output: &Path,
+    csf_parquet_output: &Path,
+    descriptor_output: &Path,
+    header_output: &Path,
+    supplied_options: &GenerationOptions,
+) -> Result<DiskGenerationStats> {
+    let mut effective_options = supplied_options.clone();
+    if requests.len() > 1 {
+        effective_options.deduplication = DeduplicationStrategy::Exact;
+    }
+    let options = &effective_options;
     options.validate()?;
     let scratch_dir = options
         .scratch_dir
@@ -361,7 +415,6 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
     // Parsing and scratch creation are part of the call the caller times, so
     // they are part of what the stages must account for.
     let setup_timer = StageTimer::start();
-    let request = ExcitationRequest::from_transcript(transcript)?;
     fs::create_dir(scratch_dir).with_context(|| {
         format!(
             "failed to create disk generation scratch directory {}",
@@ -378,18 +431,22 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
         descriptor_output,
         header_output,
     ];
-    let generated =
-        generate_v2_descriptor_segments_checked(&request, scratch_dir, options, |estimate| {
-            for check in preflight_run(
-                estimate,
-                scratch_dir,
-                &outputs,
-                options.allow_unchecked_space,
-            )? {
-                report_space_check(&check);
-            }
-            Ok(())
-        })?;
+    let preflight = |estimate: &CapacityEstimate| {
+        for check in preflight_run(
+            estimate,
+            scratch_dir,
+            &outputs,
+            options.allow_unchecked_space,
+        )? {
+            report_space_check(&check);
+        }
+        Ok(())
+    };
+    let generated = if requests.len() == 1 {
+        generate_v2_descriptor_segments_checked(&requests[0], scratch_dir, options, preflight)?
+    } else {
+        generate_multiple_list_segments(requests, scratch_dir, options, preflight)?
+    };
     stage_stats.extend(generated.stage_stats.iter().cloned());
     eprintln!(
         "Generated {} CSFs across {} symmetry blocks",
@@ -545,6 +602,131 @@ pub(crate) struct DiskEstimate {
     pub(crate) planning_millis: u128,
 }
 
+fn merge_plans(mut plans: Vec<GenerationPlan>) -> Result<GenerationPlan> {
+    let mut merged = plans.remove(0);
+    for next in plans {
+        merge_plan_into(&mut merged, next)?;
+    }
+    Ok(merged)
+}
+
+fn merge_plan_into(merged: &mut GenerationPlan, mut next: GenerationPlan) -> Result<()> {
+    let configuration_offset = merged.workload.configuration_records.len();
+    merged.tasks.append(&mut next.tasks);
+    merged
+        .workload
+        .configuration_records
+        .append(&mut next.workload.configuration_records);
+    merged.workload.total_records = merged
+        .workload
+        .total_records
+        .checked_add(next.workload.total_records)
+        .context("multi-list record count overflow")?;
+    merged.workload.zero_record_configurations = merged
+        .workload
+        .zero_record_configurations
+        .checked_add(next.workload.zero_record_configurations)
+        .context("multi-list zero-configuration count overflow")?;
+    merged.workload.unique_occupations = merged
+        .workload
+        .unique_occupations
+        .checked_add(next.workload.unique_occupations)
+        .context("multi-list occupation count overflow")?;
+    merged.target_records_per_task = merged
+        .target_records_per_task
+        .max(next.target_records_per_task);
+    for mut work in next.unsplittable {
+        work.configuration = work
+            .configuration
+            .checked_add(configuration_offset)
+            .context("multi-list configuration index overflow")?;
+        merged.unsplittable.push(work);
+    }
+    Ok(())
+}
+
+fn prepare_multiple_lists(
+    requests: &[ExcitationRequest],
+    options: &GenerationOptions,
+) -> Result<(Vec<Subshell>, Vec<Subshell>, GenerationPlan, u128, u128)> {
+    ensure!(
+        !requests.is_empty(),
+        "at least one generation list is required"
+    );
+    let mut peel = HashSet::new();
+    let mut core: Option<Vec<Subshell>> = None;
+    let mut electron_count: Option<usize> = None;
+    let mut plans = Vec::with_capacity(requests.len());
+    let mut enumeration_millis = 0;
+    let mut planning_millis = 0;
+    for (index, request) in requests.iter().enumerate() {
+        let start = Instant::now();
+        let (occupations, _charge) =
+            enumerate_occupations_with_budget(request, Some(&options.budget))
+                .with_context(|| format!("generation list {}", index + 1))?;
+        ensure!(
+            !occupations.configurations.is_empty(),
+            "generation list {} produced no occupations",
+            index + 1
+        );
+        if let Some(previous) = &core {
+            ensure!(
+                previous == &occupations.core_subshells,
+                "generation list {} has a different closed core",
+                index + 1
+            );
+        } else {
+            core = Some(occupations.core_subshells.clone());
+        }
+        let electrons = occupations
+            .core_subshells
+            .iter()
+            .map(|shell| usize::from(shell.capacity()))
+            .sum::<usize>()
+            + occupations.configurations[0]
+                .occupations
+                .iter()
+                .map(|entry| usize::from(entry.electrons))
+                .sum::<usize>();
+        if let Some(previous) = electron_count {
+            ensure!(
+                previous == electrons,
+                "generation list {} has {} electrons; expected {}",
+                index + 1,
+                electrons,
+                previous
+            );
+        } else {
+            electron_count = Some(electrons);
+        }
+        peel.extend(precompute_peel_subshells(&occupations));
+        enumeration_millis += start.elapsed().as_millis();
+        let start = Instant::now();
+        let workload = estimate_workload(request, &occupations, options.threads)?;
+        plans.push(plan_generation(
+            request,
+            &occupations,
+            workload,
+            options.threads,
+            options.records_per_task,
+        )?);
+        planning_millis += start.elapsed().as_millis();
+    }
+    let mut peel = peel.into_iter().collect::<Vec<_>>();
+    peel.sort_by_key(|shell| (shell.n(), shell.l(), shell.kappa() < 0));
+    ensure!(
+        !peel.is_empty(),
+        "no occupied Peel subshells were enumerated"
+    );
+    Ok((
+        peel,
+        core.unwrap(),
+        merge_plans(plans)?,
+        enumeration_millis,
+        planning_millis,
+    ))
+}
+
 /// Where a run will put its data, for the pre-flight's space checks.
 ///
 /// The roles are what make the check meaningful: paths sharing a volume have
@@ -622,6 +804,59 @@ pub(crate) fn estimate_disk_generation_with_layout(
         enumeration_millis,
         planning_millis: planning_timer.wall.elapsed().as_millis(),
     };
+    let checks = estimate_space_checks(&estimate, layout)?;
+    Ok((estimate, checks))
+}
+
+pub(crate) fn estimate_disk_generation_from_transcripts_with_layout(
+    transcripts: &[String],
+    supplied_options: &GenerationOptions,
+    layout: &SpaceLayout,
+) -> Result<(DiskEstimate, Vec<SpaceCheck>)> {
+    ensure!(
+        transcripts.len() >= 2,
+        "multiple lists require at least two transcripts"
+    );
+    let requests = transcripts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            ExcitationRequest::from_transcript(text)
+                .with_context(|| format!("generation list {}", index + 1))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut options = supplied_options.clone();
+    options.deduplication = DeduplicationStrategy::Exact;
+    options.validate()?;
+    let (peel, _core, plan, enumeration_millis, planning_millis) =
+        prepare_multiple_lists(&requests, &options)?;
+    let targets = requests
+        .iter()
+        .map(request_targets)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<HashSet<_>>();
+    let capacity = estimate_capacity(
+        peel.len(),
+        plan.workload.total_records,
+        u64::try_from(targets.len())?.saturating_mul(2),
+        DeduplicationStrategy::Exact,
+    )?;
+    let estimate = DiskEstimate {
+        layout: DescriptorLayout::new(DescriptorVersion::V2, peel.len()),
+        plan_stats: plan.stats(),
+        capacity,
+        segment_codec: options.segment_codec.name(),
+        deduplication: "exact",
+        enumeration_millis,
+        planning_millis,
+    };
+    let checks = estimate_space_checks(&estimate, layout)?;
+    Ok((estimate, checks))
+}
+
+fn estimate_space_checks(estimate: &DiskEstimate, layout: &SpaceLayout) -> Result<Vec<SpaceCheck>> {
     let mut entries: Vec<(PathBuf, SpaceRole)> = Vec::new();
     if let Some(scratch) = &layout.scratch_dir {
         entries.push((scratch.clone(), SpaceRole::Scratch));
@@ -642,12 +877,11 @@ pub(crate) fn estimate_disk_generation_with_layout(
     // would fit, so an impossible requirement is a result it must be able to
     // report. Callers that are about to write use `SpacePolicy::Require`
     // instead -- the generation path does, and so does the CLI.
-    let checks = if entries.is_empty() {
-        Vec::new()
+    if entries.is_empty() {
+        Ok(Vec::new())
     } else {
-        check_space(&estimate.capacity, &entries, SpacePolicy::Report)?
-    };
-    Ok((estimate, checks))
+        check_space(&estimate.capacity, &entries, SpacePolicy::Report)
+    }
 }
 
 /// Report one pre-flight space check on stderr.
@@ -691,6 +925,80 @@ pub(crate) fn precompute_peel_subshells(occupations: &EnumeratedOccupations) -> 
     peel
 }
 
+fn generate_multiple_list_segments(
+    requests: &[ExcitationRequest],
+    scratch_dir: &Path,
+    options: &GenerationOptions,
+    preflight: impl FnOnce(&CapacityEstimate) -> Result<()>,
+) -> Result<SegmentGeneration> {
+    let (peel, core, estimated_plan, _, _) = prepare_multiple_lists(requests, options)?;
+    let targets = requests
+        .iter()
+        .map(request_targets)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<HashSet<_>>();
+    let capacity = estimate_capacity(
+        peel.len(),
+        estimated_plan.workload.total_records,
+        u64::try_from(targets.len())?.saturating_mul(2),
+        DeduplicationStrategy::Exact,
+    )?;
+    preflight(&capacity)?;
+
+    let mut combined: Option<SegmentGeneration> = None;
+    let mut ordinal_offset = 0u32;
+    for (index, request) in requests.iter().enumerate() {
+        let list_root = scratch_dir.join(format!("list-{:04}", index + 1));
+        let mut part = generate_v2_descriptor_segments_with_peel(
+            request,
+            &list_root,
+            options,
+            |_| Ok(()),
+            Some(&peel),
+            ordinal_offset,
+        )
+        .with_context(|| format!("generation list {}", index + 1))?;
+        ensure!(
+            part.core_subshells == core,
+            "generation list {} changed the closed core",
+            index + 1
+        );
+        ordinal_offset = ordinal_offset
+            .checked_add(u32::try_from(part.plan.tasks.len())?)
+            .context("multi-list task ordinal overflow")?;
+        if let Some(result) = &mut combined {
+            merge_plan_into(&mut result.plan, part.plan)?;
+            result.record_count = result
+                .record_count
+                .checked_add(part.record_count)
+                .context("multi-list generated count overflow")?;
+            result.unique_occupations = result
+                .unique_occupations
+                .checked_add(part.unique_occupations)
+                .context("multi-list occupation count overflow")?;
+            result.segments.append(&mut part.segments);
+            result.stage_stats.append(&mut part.stage_stats);
+            result.resource_stats.occupation_bytes = result
+                .resource_stats
+                .occupation_bytes
+                .max(part.resource_stats.occupation_bytes);
+        } else {
+            combined = Some(part);
+        }
+    }
+    let mut result = combined.context("no generation lists were supplied")?;
+    ensure!(
+        result.record_count > 0,
+        "no CSFs generated for the requested 2J ranges"
+    );
+    result.resource_stats = options
+        .budget
+        .snapshot(result.resource_stats.occupation_bytes);
+    Ok(result)
+}
+
 /// Generate V2 descriptor rows into ordered Arrow IPC segments.
 ///
 /// `scratch_dir` is an operation-owned directory.  Each range creates a
@@ -717,6 +1025,17 @@ pub(crate) fn generate_v2_descriptor_segments_checked(
     options: &StreamingGenerationOptions,
     preflight: impl FnOnce(&CapacityEstimate) -> Result<()>,
 ) -> Result<SegmentGeneration> {
+    generate_v2_descriptor_segments_with_peel(request, scratch_dir, options, preflight, None, 0)
+}
+
+fn generate_v2_descriptor_segments_with_peel(
+    request: &ExcitationRequest,
+    scratch_dir: &Path,
+    options: &StreamingGenerationOptions,
+    preflight: impl FnOnce(&CapacityEstimate) -> Result<()>,
+    shared_peel: Option<&[Subshell]>,
+    ordinal_offset: u32,
+) -> Result<SegmentGeneration> {
     options.validate()?;
     let enumerate_timer = StageTimer::start();
     let (occupations, occupation_charge) =
@@ -735,7 +1054,10 @@ pub(crate) fn generate_v2_descriptor_segments_checked(
         !occupations.configurations.is_empty(),
         "occupation enumeration produced no configurations"
     );
-    let peel = precompute_peel_subshells(&occupations);
+    let peel = shared_peel.map_or_else(
+        || precompute_peel_subshells(&occupations),
+        ToOwned::to_owned,
+    );
     ensure!(
         !peel.is_empty(),
         "no occupied Peel subshells were enumerated"
@@ -750,13 +1072,19 @@ pub(crate) fn generate_v2_descriptor_segments_checked(
     let ranges_root = scratch_dir.join("ranges");
     let planning_timer = StageTimer::start();
     let workload = estimate_workload(request, &occupations, options.threads)?;
-    let plan = plan_generation(
+    let mut plan = plan_generation(
         request,
         &occupations,
         workload,
         options.threads,
         options.records_per_task,
     )?;
+    for task in &mut plan.tasks {
+        task.ordinal = task
+            .ordinal
+            .checked_add(ordinal_offset)
+            .context("multi-list task ordinal overflow")?;
+    }
     report_plan(&plan);
     let planning_stats = planning_timer.finish(
         "workload_planning",
@@ -828,7 +1156,7 @@ pub(crate) fn generate_v2_descriptor_segments_checked(
         segments.extend(result.segments);
     }
     ensure!(
-        record_count > 0,
+        record_count > 0 || shared_peel.is_some(),
         "no CSFs generated for the requested 2J range"
     );
     // The plan claims to cover every counted record. Comparing the generated

@@ -1,0 +1,28 @@
+# Run a capacity check first:
+# rcsfs csfsgenerate --config examples/two_generation_lists.toml --estimate-only
+# The default orbital order (*) is used; the original u/clist.ref order is not supported.
+
+[csfsgenerate]
+inactive_core = 4
+rcsfs_out = "rcsf.out"
+
+[[csfsgenerate.lists]]
+reference_configuration = [
+  "4d(10,i)4f(7,6)5s(2,i)5p(6,i)5d(1,*)6s(2,*)",
+]
+active_space = "11s,10p,9d,8f,7g,6h"
+j_min = 2
+j_max = 2
+excitations = 2
+
+[[csfsgenerate.lists]]
+reference_configuration = [
+  "4d(10,9)4f(7,7)5s(2,i)5p(6,i)5d(1,*)6s(2,1)",
+  "4d(10,i)4f(7,7)5s(2,1)5p(6,i)5d(1,*)6s(2,1)",
+  "4d(10,i)4f(7,7)5s(2,i)5p(6,5)5d(1,*)6s(2,1)",
+  "4d(10,i)4f(7,6)5s(2,i)5p(6,i)5d(1,*)6s(2,1)",
+]
+active_space = "10s,9p,8d,7f,6g"
+j_min = 2
+j_max = 2
+excitations = -2

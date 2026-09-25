@@ -176,6 +176,56 @@ def test_user_named_generation_and_split_sections_share_one_file(
         ]
 
 
+def test_multiple_generation_lists_keep_their_own_parameters(tmp_path: Path) -> None:
+    config = tmp_path / "multiple.toml"
+    config.write_text(
+        '[csfsgenerate]\ninactive_core = 0\nrcsfs_out = "out.c"\n'
+        '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        '[[csfsgenerate.lists]]\nreference_configuration = ["2s(2,*)"]\n'
+        'active_space = "3s"\nj_min = 2\nj_max = 2\nexcitations = -2\n'
+    )
+    args = parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c", str(config)])
+    assert args.generation == {
+        "lists": [
+            {
+                "inactive_core": 0,
+                "orbital_order": "*",
+                "reference_configuration": ["1s(2,*)"],
+                "active_space": "2s",
+                "j_min": 0,
+                "j_max": 0,
+                "excitations": 0,
+            },
+            {
+                "inactive_core": 0,
+                "orbital_order": "*",
+                "reference_configuration": ["2s(2,*)"],
+                "active_space": "3s",
+                "j_min": 2,
+                "j_max": 2,
+                "excitations": -2,
+            },
+        ]
+    }
+
+
+def test_multiple_generation_lists_reject_root_level_list_parameters(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "ambiguous.toml"
+    config.write_text(
+        "[csfsgenerate]\ninactive_core = 0\nexcitations = 2\n"
+        '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        '[[csfsgenerate.lists]]\nreference_configuration = ["2s(2,*)"]\n'
+        'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+    )
+    with pytest.raises(SystemExit) as exc:
+        parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c", str(config)])
+    assert exc.value.code == 2
+
+
 def test_previous_flat_and_split_tables_still_parse(tmp_path: Path) -> None:
     previous = tmp_path / "previous.toml"
     previous.write_text(

@@ -77,7 +77,7 @@ def generate_csfs_from_transcript(
     threads: int | None = None,
 ) -> CsfGenerationStats: ...
 def generate_disk_outputs_from_transcript(
-    transcript: str,
+    transcript: str | list[str],
     csf_output: str,
     csf_parquet_output: str,
     descriptor_output: str,
@@ -88,7 +88,7 @@ def generate_disk_outputs_from_transcript(
     allow_unchecked_space: bool = False,
 ) -> CsfGenerationStats: ...
 def estimate_disk_generation(
-    transcript: str,
+    transcript: str | list[str],
     threads: int | None = None,
     memory_budget_mib: int | None = None,
     scratch_dir: str | None = None,

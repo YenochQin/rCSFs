@@ -49,7 +49,7 @@ For detailed documentation, see function documentation:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -635,7 +635,7 @@ def generate_csfs_from_transcript(
 
 
 def generate_disk_outputs_from_transcript(
-    transcript: str,
+    transcript: str | Sequence[str],
     csf_output: str | Path,
     csf_parquet_output: str | Path,
     descriptor_output: str | Path,
@@ -647,6 +647,9 @@ def generate_disk_outputs_from_transcript(
     allow_unchecked_space: bool = False,
 ) -> CsfGenerationStats:
     """Generate staged CSF and reversible V2 descriptors with bounded memory.
+
+    A sequence of at least two single-list transcripts generates their complete
+    CSF union with exact de-duplication and a shared Peel layout.
 
     This lower-level API intentionally writes only to caller-owned staging
     paths. The CLI uses it inside its output transaction before it publishes
@@ -664,7 +667,7 @@ def generate_disk_outputs_from_transcript(
     from ._rcsfs import generate_disk_outputs_from_transcript as native_generate
 
     return native_generate(
-        transcript=transcript,
+        transcript=transcript if isinstance(transcript, str) else list(transcript),
         csf_output=str(csf_output),
         csf_parquet_output=str(csf_parquet_output),
         descriptor_output=str(descriptor_output),
@@ -677,7 +680,7 @@ def generate_disk_outputs_from_transcript(
 
 
 def estimate_disk_generation(
-    transcript: str,
+    transcript: str | Sequence[str],
     threads: int | None = None,
     *,
     memory_budget_mib: int | None = None,
@@ -686,6 +689,9 @@ def estimate_disk_generation(
     destinations: Mapping[str, str | Path] | None = None,
 ) -> CsfGenerationEstimate:
     """Count a transcript's workload and estimate a disk run's capacity.
+
+    A sequence of at least two single-list transcripts estimates their union
+    using the shared Peel layout and exact de-duplication strategy.
 
     This enumerates, counts and schedules exactly as
     :func:`generate_disk_outputs_from_transcript` would, but creates no scratch
@@ -716,7 +722,7 @@ def estimate_disk_generation(
     from ._rcsfs import estimate_disk_generation as native_estimate
 
     return native_estimate(
-        transcript=transcript,
+        transcript=transcript if isinstance(transcript, str) else list(transcript),
         threads=threads,
         memory_budget_mib=memory_budget_mib,
         scratch_dir=None if scratch_dir is None else str(scratch_dir),

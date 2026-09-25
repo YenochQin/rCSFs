@@ -28,6 +28,7 @@ _GENERATION_KEYS = frozenset(
     }
 )
 _REQUIRED_GENERATION_KEYS = _GENERATION_KEYS - {"orbital_order", "continue_lists"}
+_LIST_KEYS = _REQUIRED_GENERATION_KEYS - {"inactive_core"}
 _GENERATION_ALIASES = {
     "order": "orbital_order",
     "core": "inactive_core",
@@ -153,6 +154,44 @@ def _generation(table: dict[str, object]) -> dict[str, object]:
     return result
 
 
+def _generation_lists(table: dict[str, object]) -> dict[str, object]:
+    """Keep each continuation list self-contained; only the core is shared."""
+    if "inactive_core" not in table:
+        raise ValueError("csfsgenerate requires inactive_core for multiple lists")
+    lists = table.get("lists")
+    if not isinstance(lists, list):
+        raise ValueError("lists must contain at least two tables")
+    items = cast(list[object], lists)
+    if len(items) < 2:
+        raise ValueError("lists must contain at least two tables")
+    forbidden = (table.keys() & _GENERATION_KEYS) - {"inactive_core", "orbital_order"}
+    if forbidden:
+        raise ValueError(
+            "list-specific keys must be inside [[csfsgenerate.lists]]: "
+            + ", ".join(sorted(forbidden))
+        )
+    result: list[dict[str, object]] = []
+    for index, raw in enumerate(items, 1):
+        item = _canonicalize(
+            _table(raw, f"csfsgenerate.lists[{index}]"),
+            _GENERATION_ALIASES,
+            f"csfsgenerate.lists[{index}]",
+        )
+        unexpected = item.keys() - _LIST_KEYS
+        if unexpected:
+            raise ValueError(
+                f"csfsgenerate.lists[{index}] has unsupported keys: "
+                + ", ".join(sorted(unexpected))
+            )
+        merged = {
+            "inactive_core": table["inactive_core"],
+            "orbital_order": table.get("orbital_order", "*"),
+            **item,
+        }
+        result.append(_generation(merged))
+    return {"lists": result}
+
+
 def _table(value: object, label: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a TOML table")
@@ -246,13 +285,21 @@ def _load_config(
         generation = None
         if section == "csfsgenerate":
             values = _canonicalize(values, _GENERATOR_ALIASES, section)
-            generation = _generation(
-                {key: value for key, value in values.items() if key in _GENERATION_KEYS}
+            generation = (
+                _generation_lists(values)
+                if "lists" in values
+                else _generation(
+                    {
+                        key: value
+                        for key, value in values.items()
+                        if key in _GENERATION_KEYS
+                    }
+                )
             )
             values = {
                 key: value
                 for key, value in values.items()
-                if key not in _GENERATION_KEYS
+                if key not in _GENERATION_KEYS and key != "lists"
             }
         elif section == "csfs-split":
             values = _canonicalize(values, _SPLIT_ALIASES, actual_section)

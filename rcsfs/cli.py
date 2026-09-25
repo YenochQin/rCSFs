@@ -8,7 +8,6 @@ import re
 import shutil
 import sys
 import tempfile
-import tomllib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol, TextIO, cast
@@ -27,6 +26,7 @@ from . import (
 )
 from ._types import InteractionHamiltonian, InteractionMethod
 from ._publication import PartialPublicationError, publish_outputs
+from ._cli_config import parse_cli_args
 
 #: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
 _MAX_REFERENCE_CONFIGURATIONS = 100
@@ -71,13 +71,13 @@ class ZeroFirstArgs(Protocol):
     json: bool
 
 
-class SplitActiveArgs(Protocol):
-    """Parsed arguments for ``split-active``."""
+class CsfsSplitArgs(Protocol):
+    """Parsed arguments for the active-space CSF split command."""
 
-    command: Literal["split-active", "rcsfsplit"]
-    input_parquet: Path
-    header: Path
-    space: list[str]
+    command: Literal["csfs-split", "split-active", "rcsfsplit"]
+    split_csfs_parquet: Path
+    csfs_header: Path
+    active_spaces: list[str]
     output_dir: Path
     prefix: str | None
     json: bool
@@ -87,11 +87,12 @@ class CsfsGenerateArgs(Protocol):
     """Parsed arguments for the ``csfsgenerate`` subcommand."""
 
     command: Literal["csfsgenerate"]
-    output: Path
+    rcsfs_out: Path
     config: Path | None
+    generation: Mapping[str, object] | None
     generate_descriptors: bool
-    parquet: Path | None
-    descriptor_parquet: Path | None
+    rcsfs_parquet: Path | None
+    descriptor: Path | None
 
     normalize: bool
     threads: int | None
@@ -123,7 +124,7 @@ type CliArgs = (
     | CsfsGenerateArgs
     | InteractingArgs
     | RestoreCsfsArgs
-    | SplitActiveArgs
+    | CsfsSplitArgs
 )
 
 
@@ -176,10 +177,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    def add_config_argument(command_parser: argparse.ArgumentParser) -> None:
+        _ = command_parser.add_argument(
+            "-c",
+            "--config",
+            type=Path,
+            help="CLI TOML file (default: ./rcsfs.toml when present).",
+        )
+
     gen_descriptors = subparsers.add_parser(
         "gen-descriptors",
         help="Generate descriptor Parquet data from a CSF Parquet file.",
     )
+    add_config_argument(gen_descriptors)
     _ = gen_descriptors.add_argument("input_parquet", type=Path)
     _ = gen_descriptors.add_argument("output_parquet", type=Path)
     _ = gen_descriptors.add_argument(
@@ -238,6 +248,7 @@ def build_parser() -> argparse.ArgumentParser:
             "layer produced by convert_csfs."
         ),
     )
+    add_config_argument(zero_first)
     _ = zero_first.add_argument(
         "zero_csf", type=Path, help="Zero-order reference CSF file."
     )
@@ -280,28 +291,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     split_active = subparsers.add_parser(
-        "split-active",
-        aliases=["rcsfsplit"],
+        "csfs-split",
+        aliases=["split-active", "rcsfsplit"],
         help="Split one CSF Parquet file into GRASP-style active-space CSF lists.",
         description=(
             "Read CSF Parquet once and independently select each active space. "
             "Outputs may overlap; no output is overwritten."
         ),
     )
-    _ = split_active.add_argument("input_parquet", type=Path)
+    add_config_argument(split_active)
+    _ = split_active.add_argument("split_csfs_parquet", type=Path)
     _ = split_active.add_argument(
-        "--header", required=True, type=Path, help="Matching CSF *_header.toml file."
+        "--header",
+        dest="csfs_header",
+        required=True,
+        type=Path,
+        help="Matching CSF *_header.toml file.",
     )
     _ = split_active.add_argument(
-        "--space", required=True, action="append", metavar="LABEL=5s,4p,3d",
+        "--space",
+        "--active-space",
+        dest="active_spaces",
+        required=True,
+        action="append",
+        metavar="LABEL=5s,4p,3d",
         help="Output label and maximum orbitals; repeat for each active space.",
     )
     _ = split_active.add_argument(
-        "--output-dir", required=True, type=Path,
+        "--output-dir",
+        required=True,
+        type=Path,
         help="Existing directory for output CSF text files.",
     )
     _ = split_active.add_argument(
-        "--prefix", default=None,
+        "--prefix",
+        default=None,
         help="Output filename prefix (default: input Parquet stem).",
     )
     _ = split_active.add_argument("--json", action="store_true")
@@ -318,18 +342,13 @@ def build_parser() -> argparse.ArgumentParser:
             "thread count) are plain CLI flags."
         ),
     )
+    add_config_argument(csfsgenerate)
     _ = csfsgenerate.add_argument(
-        "output",
+        "rcsfs_out",
         nargs="?",
         type=Path,
         default=Path("rcsf.out"),
         help="Destination CSF text file (default: rcsf.out; must not already exist).",
-    )
-    _ = csfsgenerate.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="TOML generation configuration; replaces the interactive dialog.",
     )
     _ = csfsgenerate.add_argument(
         "--generate-descriptors",
@@ -338,12 +357,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _ = csfsgenerate.add_argument(
         "--parquet",
+        "--rcsfs-parquet",
+        dest="rcsfs_parquet",
         type=Path,
         default=None,
         help="CSF Parquet output (default: same stem as the CSF file).",
     )
     _ = csfsgenerate.add_argument(
         "--descriptor-parquet",
+        "--descriptor",
+        dest="descriptor",
         type=Path,
         default=None,
         help="Descriptor Parquet output (default: <stem>_descriptors.parquet).",
@@ -409,6 +432,7 @@ def build_parser() -> argparse.ArgumentParser:
             "rcsfinteract90 angular-algebra calculation."
         ),
     )
+    add_config_argument(interacting)
     _ = interacting.add_argument(
         "reference", type=Path, help="Reference (MR) CSF file."
     )
@@ -470,6 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
             "verified against this file before anything is written."
         ),
     )
+    add_config_argument(restore_csfs)
     _ = restore_csfs.add_argument(
         "--descriptors", required=True, type=Path, help="V2 descriptor Parquet file."
     )
@@ -493,15 +518,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     return parser
-
-
-def _parse_args(
-    parser: argparse.ArgumentParser,
-    argv: Sequence[str] | None,
-) -> CliArgs:
-    """Parse the CLI's discriminated argument union at one dynamic boundary."""
-    namespace = cast(object, parser.parse_args(argv))
-    return cast(CliArgs, namespace)
 
 
 def _print_gen_descriptors_summary(
@@ -692,16 +708,18 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
             shutil.rmtree(root, ignore_errors=True)
 
 
-def _run_split_active(args: SplitActiveArgs) -> int:
+def _run_csfs_split(args: CsfsSplitArgs) -> int:
     try:
         if not args.output_dir.is_dir():
             raise ValueError(f"output directory does not exist: {args.output_dir}")
-        prefix = args.prefix if args.prefix is not None else args.input_parquet.stem
+        prefix = (
+            args.prefix if args.prefix is not None else args.split_csfs_parquet.stem
+        )
         if not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
             raise ValueError("output prefix must contain only letters, digits, _ or -")
         targets: dict[str | Path, str] = {}
         labels: set[str] = set()
-        for item in args.space:
+        for item in args.active_spaces:
             label, separator, orbitals = item.partition("=")
             if not separator or not re.fullmatch(r"[A-Za-z0-9_-]+", label):
                 raise ValueError(f"invalid --space {item!r}; expected LABEL=5s,4p,3d")
@@ -709,9 +727,11 @@ def _run_split_active(args: SplitActiveArgs) -> int:
                 raise ValueError(f"duplicate active-space label: {label}")
             labels.add(label)
             targets[args.output_dir / f"{prefix}{label}.c"] = orbitals
-        if len(targets) != len(args.space):
+        if len(targets) != len(args.active_spaces):
             raise ValueError("active-space labels produce duplicate output paths")
-        stats = split_csfs_by_active_spaces(args.input_parquet, args.header, targets)
+        stats = split_csfs_by_active_spaces(
+            args.split_csfs_parquet, args.csfs_header, targets
+        )
     except (OSError, ValueError, RuntimeError) as exc:
         if args.json:
             json.dump({"success": False, "error": str(exc)}, sys.stdout, indent=2)
@@ -947,7 +967,9 @@ def _print_estimate_summary(
     stream: TextIO = sys.stdout if file is None else file
     plan_stats = stats.get("plan_stats")
     plan: Mapping[str, object] = (
-        cast(Mapping[str, object], plan_stats) if isinstance(plan_stats, Mapping) else {}
+        cast(Mapping[str, object], plan_stats)
+        if isinstance(plan_stats, Mapping)
+        else {}
     )
     print(f"unique_occupations: {stats.get('unique_occupations')}", file=stream)
     print(
@@ -961,8 +983,13 @@ def _print_estimate_summary(
         f"deduplication: {stats.get('deduplication', 'verified_unique')}",
         file=stream,
     )
-    for key in ("task_count", "target_records_per_task", "zero_record_configurations",
-                "unsplittable_tasks", "unsplittable_records"):
+    for key in (
+        "task_count",
+        "target_records_per_task",
+        "zero_record_configurations",
+        "unsplittable_tasks",
+        "unsplittable_records",
+    ):
         value = plan.get(key)
         if value is not None:
             print(f"plan_{key}: {value}", file=stream)
@@ -989,15 +1016,15 @@ def _print_estimate_summary(
 
 
 def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, object]:
-    csf_parquet = args.parquet or args.output.with_suffix(".parquet")
-    descriptor_parquet = args.descriptor_parquet or args.output.with_name(
-        f"{args.output.stem}_descriptors.parquet"
+    rcsfs_parquet = args.rcsfs_parquet or args.rcsfs_out.with_suffix(".parquet")
+    descriptor_output = args.descriptor or args.rcsfs_out.with_name(
+        f"{args.rcsfs_out.stem}_descriptors.parquet"
     )
-    header = csf_parquet.parent / f"{args.output.stem}_header.toml"
-    metadata = descriptor_parquet.with_suffix(".toml")
-    destinations = [args.output]
+    csfs_header = rcsfs_parquet.parent / f"{args.rcsfs_out.stem}_header.toml"
+    metadata = descriptor_output.with_suffix(".toml")
+    destinations = [args.rcsfs_out]
     if args.generate_descriptors:
-        destinations.extend([csf_parquet, header, descriptor_parquet, metadata])
+        destinations.extend([rcsfs_parquet, csfs_header, descriptor_output, metadata])
     resolved = [path.resolve() for path in destinations]
     if len(set(resolved)) != len(resolved):
         raise ValueError("Generation output paths must be distinct")
@@ -1015,7 +1042,10 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
     if not args.generate_descriptors:
         return dict(
             generate_csfs_from_transcript(
-                transcript, args.output, normalize=args.normalize, threads=args.threads
+                transcript,
+                args.rcsfs_out,
+                normalize=args.normalize,
+                threads=args.threads,
             )
         )
     if args.generation_storage == "disk" and args.normalize:
@@ -1040,12 +1070,12 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
                 scratch_dir=scratch_base,
                 staging_dir=Path.cwd(),
                 destinations={
-                    "csf_text": args.output,
-                    "csf_parquet": csf_parquet,
-                    "descriptor": descriptor_parquet,
+                    "csf_text": args.rcsfs_out,
+                    "csf_parquet": rcsfs_parquet,
+                    "descriptor": descriptor_output,
                     # The header and the descriptor sidecar can land on different
                     # volumes, so each is charged to its own destination.
-                    "header": header,
+                    "header": csfs_header,
                     "descriptor_metadata": metadata,
                 },
             )
@@ -1071,7 +1101,7 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
         root = Path(directory)
         csf_dir = root / "text"
         csf_dir.mkdir()
-        csf = csf_dir / args.output.name
+        csf = csf_dir / args.rcsfs_out.name
         parquet_dir = root / "parquet"
         parquet_dir.mkdir()
         parquet = parquet_dir / "csfs.parquet"
@@ -1151,18 +1181,12 @@ def _generate_outputs(transcript: str, args: CsfsGenerateArgs) -> dict[str, obje
         sources = [csf, parquet, staged_header, descriptors, sidecar]
         publish_outputs(sources, destinations)
         stats.update(
-            output_file=str(args.output),
-            parquet_file=str(csf_parquet),
-            descriptor_parquet_file=str(descriptor_parquet),
+            output_file=str(args.rcsfs_out),
+            parquet_file=str(rcsfs_parquet),
+            descriptor_parquet_file=str(descriptor_output),
             descriptor_metadata_file=str(metadata),
         )
         return stats
-
-
-def _config_table(value: object) -> dict[str, object]:
-    if not isinstance(value, dict):
-        raise TypeError("Expected a TOML table")
-    return cast(dict[str, object], value)
 
 
 def _config_int(value: object) -> int:
@@ -1183,71 +1207,38 @@ def _config_string(value: object) -> str:
     return value
 
 
-def _config_references(value: object) -> list[str]:
+def _config_reference_configuration(value: object) -> list[str]:
     if not isinstance(value, list):
-        raise TypeError("references must be an array of strings")
+        raise TypeError("reference_configuration must be an array of strings")
     return [_config_string(item) for item in cast(list[object], value)]
 
 
 def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
-    if args.config is not None:
+    if args.generation is not None:
         try:
-            config = _config_table(
-                tomllib.loads(args.config.read_text(encoding="utf-8"))
+            generate = args.generation
+            orbital_order = _config_string(generate.get("orbital_order", "*"))
+            inactive_core = _config_int(generate["inactive_core"])
+            reference_configuration = _config_reference_configuration(
+                generate["reference_configuration"]
             )
-            generate = _config_table(config["generate"])
-            order = _config_string(generate.get("order", "*"))
-            core = _config_int(generate["core"])
-            references = _config_references(generate["references"])
-            active_orbitals = _config_string(generate["active_orbitals"])
+            active_space = _config_string(generate["active_space"])
             j_min = _config_int(generate["j_min"])
             j_max = _config_int(generate["j_max"])
             excitations = _config_int(generate["excitations"])
-            output = _config_table(config.get("output", {}))
-            if args.output == Path("rcsf.out") and output.get("csf") is not None:
-                args.output = Path(_config_string(output["csf"]))
-            if not args.generate_descriptors:
-                args.generate_descriptors = _config_bool(
-                    output.get("generate_descriptors", False)
-                )
-            if args.parquet is None and output.get("parquet") is not None:
-                args.parquet = Path(_config_string(output["parquet"]))
-            if (
-                args.descriptor_parquet is None
-                and output.get("descriptor_parquet") is not None
-            ):
-                args.descriptor_parquet = Path(
-                    _config_string(output["descriptor_parquet"])
-                )
-            if not args.normalize:
-                args.normalize = _config_bool(output.get("normalize", False))
-            if args.generation_storage is None and generate.get("storage") is not None:
-                args.generation_storage = cast(
-                    Literal["memory", "disk"],
-                    _config_string(generate["storage"]),
-                )
-            if args.scratch_dir is None and generate.get("scratch_dir") is not None:
-                args.scratch_dir = Path(_config_string(generate["scratch_dir"]))
-            if (
-                args.memory_budget_mib is None
-                and generate.get("memory_budget_mib") is not None
-            ):
-                args.memory_budget_mib = _config_int(generate["memory_budget_mib"])
-                if args.memory_budget_mib <= 0:
-                    raise ValueError("memory_budget_mib must be greater than 0")
             if _config_bool(generate.get("continue_lists", False)):
                 raise ValueError("continue_lists is not supported yet; use false")
         except (OSError, KeyError, TypeError, ValueError) as exc:
             print(f"Invalid generation config: {exc}", file=sys.stderr)
             return 2
     else:
-        order = _read_order()
-        core = _read_core()
-        references = _read_references()
-        active_orbitals = _read_active_orbitals()
+        orbital_order = _read_order()
+        inactive_core = _read_core()
+        reference_configuration = _read_references()
+        active_space = _read_active_orbitals()
         j_min, j_max = _read_j_range()
         excitations = _read_excitations()
-    if args.config is None and _read_continue():
+    if args.generation is None and _read_continue():
         print(
             "Multiple lists are not supported yet; only the first list "
             "would be generated. Aborting.",
@@ -1267,11 +1258,11 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
 
     transcript = "\n".join(
         [
-            f"{order} ! Orbital order",
-            str(core),
-            *references,
+            f"{orbital_order} ! Orbital order",
+            str(inactive_core),
+            *reference_configuration,
             "",
-            active_orbitals,
+            active_space,
             f"{j_min},{j_max}",
             str(excitations),
             "n",
@@ -1334,7 +1325,7 @@ def _run_restore_csfs(args: RestoreCsfsArgs) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = _parse_args(parser, argv)
+    args = cast(CliArgs, cast(object, parse_cli_args(parser, argv)))
 
     if args.command == "gen-descriptors":
         try:
@@ -1388,10 +1379,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "restore-csfs":
         return _run_restore_csfs(args)
 
+    if args.command == "csfs-split":
+        return _run_csfs_split(args)
     if args.command == "split-active":
-        return _run_split_active(args)
+        return _run_csfs_split(args)
     if args.command == "rcsfsplit":
-        return _run_split_active(args)
+        return _run_csfs_split(args)
 
     if args.command == "zero-first":
         return _run_zero_first(args)

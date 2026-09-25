@@ -399,7 +399,73 @@ below for generating a full CSF list from Python.
 ## Command Line Interface
 
 Installing `rcsfs` also installs an `rcsfs` console script (`uv run rcsfs ...`)
-with five subcommands.
+with six subcommands (`csfs-split` also accepts the older `split-active` and
+`rcsfsplit` spellings).
+
+### Shared CLI configuration
+
+All six commands accept `-c/--config PATH`. If that option is omitted and
+`rcsfs.toml` exists in the **current working directory**, the selected command
+reads its own table from that file automatically. A command with no matching
+table continues to use its ordinary CLI arguments (and `csfsgenerate` remains
+interactive). Explicit CLI arguments override values in the table. TOML path
+values are resolved relative to the current working directory, just like CLI
+paths; changing to another directory changes which default file is found.
+Malformed TOML, unknown keys in the selected table, and missing required
+parameters fail before the command starts writing outputs. Generated header
+and descriptor metadata TOML files are separate outputs and are not changed or
+used as CLI configuration.
+
+For example, save this as `rcsfs.toml` in the directory where you run `rcsfs`:
+
+```toml
+[csfsgenerate]
+orbital_order = "*"
+inactive_core = 2
+reference_configuration = ["3s(2,i)3p(6,5)3d(6,5)4s(2,i)"]
+active_space = "4s,4p,3d"
+j_min = 0
+j_max = 12
+excitations = 2
+rcsfs_out = "calculation.c"
+generate_descriptors = true
+rcsfs_parquet = "calculation.parquet"
+descriptor = "calculation_descriptors.parquet"
+threads = 8
+generation_storage = "disk"
+
+[gen-descriptors]
+input_parquet = "calculation.parquet"
+output_parquet = "calculation_descriptors_rebuilt.parquet"
+header = "calculation_header.toml"
+
+[zero-first]
+zero_csf = "zero.c"
+full_csf = "calculation.c"
+output_csf = "calculation_zf.c"
+
+[csfs-split]
+split_csfs_parquet = "calculation.parquet"
+csfs_header = "calculation_header.toml"
+active_spaces = ["as1=5s,4p,3d", "as2=6s,5p,4d"]
+output_dir = "split"
+
+[interacting]
+reference = "reference.c"
+candidates = "calculation.c"
+output = "interacting.c"
+
+[restore-csfs]
+descriptors = "calculation_descriptors.parquet"
+header = "calculation_header.toml"
+output = "restored.c"
+```
+
+Then run, for example, `rcsfs csfsgenerate` or `rcsfs csfs-split` without
+`--config`. `active_spaces` and `indices` are arrays. The existing
+`[generate]`/`[output]` format, the earlier flat `[csfsgenerate]` keys, and
+the earlier `[split-active]` keys remain readable; do not mix an old and new
+name for the same field in one table.
 
 ### `rcsfs csfsgenerate` — interactively generate a new CSF list
 
@@ -440,7 +506,9 @@ Flags: `--generate-descriptors`, `--normalize`, `--threads N`,
 `--memory-budget-mib MiB`, `--json`.
 
 For reproducible batch runs, use a TOML configuration instead of the interactive
-dialog. `generate_descriptors` defaults to `false`; when enabled, generation
+dialog. The following is the older, still supported `[generate]`/`[output]`
+format; new configurations should use `[csfsgenerate]` as shown above.
+`generate_descriptors` defaults to `false`; when enabled, generation
 writes the CSF text, the CSF Parquet plus its header TOML, and descriptor
 Parquet plus its metadata sidecar:
 
@@ -470,7 +538,8 @@ uv run rcsfs csfsgenerate --config calculation.toml
 ```
 
 
-For reproducible scripted runs, use a TOML configuration. This avoids
+For reproducible scripted runs, use a TOML configuration. The following is
+another older-format example. This avoids
 transcript files and keeps generation settings with the output names:
 
 ```toml
@@ -615,13 +684,14 @@ disk generation. For example, from a large source space, request two nested
 spaces in one pass:
 
 ```bash
-rcsfs split-active source.parquet --header source_header.toml \
+rcsfs csfs-split source.parquet --header source_header.toml \
   --output-dir results --space '_small=5s,4p,3d' \
   --space '_large=7s,6p,5d,4f'
 ```
 
 This writes `results/source_small.c` and `results/source_large.c`.
-`rcsfs rcsfsplit` is an alias for `rcsfs split-active`. Each output is filtered
+`rcsfs split-active` and `rcsfs rcsfsplit` are older aliases for
+`rcsfs csfs-split`. Each output is filtered
 independently, so a CSF belonging to both spaces appears in both.
 The five-line header is retained with its peel list filtered to the target;
 CSF order and symmetry-block separators are preserved. Occupation lines are

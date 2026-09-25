@@ -41,20 +41,23 @@ def test_public_api_selects_independent_overlapping_spaces(tmp_path: Path) -> No
     assert "15g ( 1)" in large.read_text(encoding="ascii")
 
 
-@pytest.mark.parametrize("command", ["split-active", "rcsfsplit"])
-def test_split_active_cli_uses_grasp_style_labels(
-    tmp_path: Path, command: str
-) -> None:
+@pytest.mark.parametrize("command", ["csfs-split", "split-active", "rcsfsplit"])
+def test_split_active_cli_uses_grasp_style_labels(tmp_path: Path, command: str) -> None:
     parquet, header = _source(tmp_path)
+    active_space_flag = "--active-space" if command == "csfs-split" else "--space"
     assert (
         main(
             [
                 command,
                 str(parquet),
-                "--header", str(header),
-                "--output-dir", str(tmp_path),
-                "--space", "_small=5s,5g",
-                "--space", "_large=5s,15g",
+                "--header",
+                str(header),
+                "--output-dir",
+                str(tmp_path),
+                active_space_flag,
+                "_small=5s,5g",
+                active_space_flag,
+                "_large=5s,15g",
             ]
         )
         == 0
@@ -68,12 +71,33 @@ def test_split_active_cli_rejects_bad_labels_before_writing(tmp_path: Path) -> N
     assert (
         main(
             [
-                "split-active", str(parquet),
-                "--header", str(header),
-                "--output-dir", str(tmp_path),
-                "--space", "../outside=5s,5g",
+                "split-active",
+                str(parquet),
+                "--header",
+                str(header),
+                "--output-dir",
+                str(tmp_path),
+                "--space",
+                "../outside=5s,5g",
             ]
         )
         == 1
     )
     assert not (tmp_path / "sourceoutside.c").exists()
+
+
+def test_csfs_split_reads_new_default_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parquet, header = _source(tmp_path)
+    (tmp_path / "rcsfs.toml").write_text(
+        "[csfs-split]\n"
+        f'split_csfs_parquet = "{parquet.name}"\n'
+        f'csfs_header = "{header.name}"\n'
+        'active_spaces = ["_small=5s,5g", "_large=5s,15g"]\n'
+        'output_dir = "."\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    assert main(["csfs-split"]) == 0
+    assert (tmp_path / "source_small.c").exists()
+    assert (tmp_path / "source_large.c").exists()

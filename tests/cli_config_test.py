@@ -38,6 +38,8 @@ def test_init_config_creates_only_selected_command_template(
     contents = generated.read_text(encoding="utf-8")
     assert tomllib.loads(contents) == {}
     assert f"# [{section}]" in contents
+    if command == "csfsgenerate":
+        assert "# json = false" not in contents
     for other in (
         "csfsgenerate",
         "gen-descriptors",

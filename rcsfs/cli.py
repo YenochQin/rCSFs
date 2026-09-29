@@ -1268,8 +1268,9 @@ def _write_interactive_generation_config(
         "normalize": args.normalize,
         "estimate_only": args.estimate_only,
         "allow_unchecked_space": args.allow_unchecked_space,
-        "json": args.json,
     }
+    if args.json:
+        values["json"] = True
     for key, value in (
         ("rcsfs_parquet", args.rcsfs_parquet),
         ("descriptor", args.descriptor),

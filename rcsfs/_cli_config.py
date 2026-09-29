@@ -52,7 +52,6 @@ _CONFIG_TEMPLATES = {
 # allow_unchecked_space = false
 # generation_storage = "disk"
 # continue_lists = false
-# json = false
 """.lstrip(),
     "gen-descriptors": """
 

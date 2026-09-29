@@ -770,7 +770,6 @@ def test_csfsgenerate_builds_transcript_and_reports_summary(
             "normalize": False,
             "estimate_only": False,
             "allow_unchecked_space": False,
-            "json": False,
             "generation_storage": "memory",
         }
     }

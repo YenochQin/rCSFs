@@ -293,7 +293,7 @@ def test_top_level_config_runs_generation_then_split(
     assert (tmp_path / "split/generatedAS1.c").is_file()
 
 
-def test_top_level_config_rejects_missing_generation_inputs_before_running(
+def test_top_level_config_builds_parquet_for_split_without_descriptors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "rcsfs.toml").write_text(
@@ -307,9 +307,109 @@ def test_top_level_config_rejects_missing_generation_inputs_before_running(
     )
     monkeypatch.chdir(tmp_path)
 
+    assert cli.main(["-c", "rcsfs.toml"]) == 0
+    assert (tmp_path / "generated.c").is_file()
+    assert (tmp_path / "generated.parquet").is_file()
+    assert (tmp_path / "generated_header.toml").is_file()
+    assert (tmp_path / "split/generatedAS1.c").is_file()
+    assert not (tmp_path / "generated_descriptors.parquet").exists()
+
+
+def test_top_level_config_runs_repeated_generators_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "rcsfs.toml").write_text(
+        '[[csfsgenerate]]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        'rcsfs_out = "first.c"\n'
+        "\n[[csfsgenerate]]\ninactive_core = 0\n"
+        'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
+        'j_min = 0\nj_max = 0\nexcitations = 0\nrcsfs_out = "second.c"\n'
+        '\n[csfs-split]\nsplit_csfs_parquet = "second.parquet"\n'
+        'csfs_header = "second_header.toml"\nactive_spaces = ["AS1=1s"]\n'
+        'output_dir = "split"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["-c", "rcsfs.toml"]) == 0
+    assert (tmp_path / "first.c").is_file()
+    assert not (tmp_path / "first.parquet").exists()
+    assert (tmp_path / "second.c").is_file()
+    assert (tmp_path / "second.parquet").is_file()
+    assert (tmp_path / "split/secondAS1.c").is_file()
+    assert not (tmp_path / "second_descriptors.parquet").exists()
+
+
+def test_top_level_config_rejects_repeated_generator_output_before_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = (
+        '[[csfsgenerate]]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        'rcsfs_out = "same.c"\n'
+    )
+    (tmp_path / "rcsfs.toml").write_text(entry + "\n" + entry, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
     with pytest.raises(SystemExit) as exc:
         cli.main(["-c", "rcsfs.toml"])
     assert exc.value.code == 2
+    assert not (tmp_path / "same.c").exists()
+
+
+def test_top_level_config_rejects_unmatched_split_inputs_before_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "rcsfs.toml").write_text(
+        '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        'rcsfs_out = "generated.c"\n'
+        '\n[csfs-split]\nsplit_csfs_parquet = "other.parquet"\n'
+        'csfs_header = "other_header.toml"\nactive_spaces = ["AS1=1s"]\n'
+        'output_dir = "split"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["-c", "rcsfs.toml"])
+    assert exc.value.code == 2
+    assert not (tmp_path / "generated.c").exists()
+
+
+def test_csfsgenerate_can_write_parquet_without_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "rcsfs.toml").write_text(
+        '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        'rcsfs_out = "generated.c"\ngenerate_parquet = true\n'
+        'generation_storage = "memory"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["csfsgenerate", "-c"]) == 0
+    assert (tmp_path / "generated.c").is_file()
+    assert (tmp_path / "generated.parquet").is_file()
+    assert (tmp_path / "generated_header.toml").is_file()
+    assert not (tmp_path / "generated_descriptors.parquet").exists()
+
+
+def test_estimate_only_without_parquet_does_not_generate_csf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "rcsfs.toml").write_text(
+        '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        'rcsfs_out = "generated.c"\nestimate_only = true\n'
+        'generation_storage = "disk"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["csfsgenerate", "-c"]) == 1
     assert not (tmp_path / "generated.c").exists()
 
 

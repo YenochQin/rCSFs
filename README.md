@@ -419,7 +419,10 @@ Run `rcsfs -c rcsfs.toml` to execute every active command table in file order.
 All tables are validated before the first command runs; execution stops on the
 first failure. Each table must name the actual files produced by earlier steps.
 In particular, `[csfs-split]` requires a CSF Parquet file and its header;
-`[csfsgenerate]` produces them only when `generate_descriptors = true`.
+the batch runner generates these automatically from a matching earlier
+`[csfsgenerate]` entry, without requesting descriptor output. For a standalone
+generation, set `generate_parquet = true` or pass `--generate-parquet` to write
+only the CSF Parquet and header alongside the CSF text.
 `csfs-split` creates its `output_dir` when needed. Existing output files are
 still protected from overwrite.
 Run `rcsfs <command> init-config` to add that command's commented reference
@@ -492,6 +495,40 @@ ensure every later table names files produced earlier or already present.
 the earlier `[split-active]` keys remain readable; do not mix an old and new
 name for the same field in one table.
 
+To run several independent CSF generations, use TOML array tables. Repeating
+`[csfsgenerate]` literally is invalid TOML; each `[[csfsgenerate]]` entry has
+its own output filename and runs in order under `rcsfs -c rcsfs.toml`:
+
+```toml
+[[csfsgenerate]]
+inactive_core = 0
+reference_configuration = ["1s(2,*)"]
+active_space = "1s"
+j_min = 0
+j_max = 0
+excitations = 0
+rcsfs_out = "first.c"
+
+[[csfsgenerate]]
+inactive_core = 0
+reference_configuration = ["1s(2,*)"]
+active_space = "1s"
+j_min = 0
+j_max = 0
+excitations = 0
+rcsfs_out = "second.c"
+
+[csfs-split]
+split_csfs_parquet = "second.parquet"
+csfs_header = "second_header.toml"
+active_spaces = ["AS1=1s"]
+output_dir = "split"
+```
+
+Here the split step causes `second.parquet` and its header to be generated;
+`first.c` remains a text-only output. `[[csfsgenerate]]` runs are separate from
+`[[csfsgenerate.lists]]`, which merges multiple reference lists into one output.
+
 ### `rcsfs csfsgenerate` — interactively generate a new CSF list
 
 Replicates GRASP2018's `rcsfgenerate` interactive dialog (orbital order, core,
@@ -527,7 +564,7 @@ record_count: 452373
 block_count: 7
 ```
 
-Flags: `--generate-descriptors`, `--normalize`, `--threads N`,
+Flags: `--generate-parquet`, `--generate-descriptors`, `--normalize`, `--threads N`,
 `--memory-budget-mib MiB`, `--json`.
 
 For reproducible batch runs, use a TOML configuration instead of the interactive
@@ -590,9 +627,10 @@ normalize = false
 ```
 
 Run it with `uv run rcsfs csfsgenerate --config generation.toml`. By default
-only the CSF text is written. With `generate_descriptors = true`, the command
-also writes the CSF Parquet and header TOML, followed by descriptor Parquet and
-its TOML sidecar. Descriptor CSV output is not supported. TOML/config
+only the CSF text is written. With `generate_parquet = true`, it also writes
+the CSF Parquet and header TOML without descriptor output. With
+`generate_descriptors = true`, it writes both of those plus descriptor Parquet
+and its TOML sidecar. Descriptor CSV output is not supported. TOML/config
 descriptor runs select the disk backend by default and write reversible **V2**
 descriptors. Add
 `memory_budget_mib = <MiB>` under `[generate]`, or pass

@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### 多次 CSF 生成与独立 Parquet 输出（2026-09-29）
+
+- 批量配置接受多个 `[[csfsgenerate]]` 表，按顺序生成各自的输出；重复的输出路径在
+  运行前报错。它们与合并参考列表的 `[[csfsgenerate.lists]]` 含义不同。
+- `generate_parquet = true` / `--generate-parquet` 单独导出 CSF Parquet 和 header，
+  无需发布描述符。批量运行中的 `[csfs-split]` 引用前面生成的路径时自动启用该输出。
+
 ### 按配置表顺序运行多个命令（2026-09-29）
 
 - `rcsfs -c rcsfs.toml` 按文件中的表顺序运行所有已配置命令；先验证配置，

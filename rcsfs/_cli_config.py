@@ -15,6 +15,63 @@ from pathlib import Path
 from typing import Protocol, cast
 
 DEFAULT_CONFIG = Path("rcsfs.toml")
+DEFAULT_CONFIG_TEMPLATE = """# rCSFs CLI configuration template.
+# Uncomment and edit the table for a command before using its values.
+# Paths are relative to the directory where you run rcsfs.
+# Command-line arguments override values in this file.
+
+# [csfsgenerate]
+# orbital_order = "*"
+# inactive_core = 0
+# reference_configuration = ["1s(2,*)"]
+# active_space = "2s"
+# j_min = 0
+# j_max = 0
+# excitations = 0
+# rcsfs_out = "generated.c"
+# generate_descriptors = false
+# rcsfs_parquet = "generated.parquet"
+# descriptor = "generated_descriptors.parquet"
+# generation_storage = "disk"
+
+# [gen-descriptors]
+# input_parquet = "generated.parquet"
+# output_parquet = "generated_descriptors.parquet"
+# header = "generated_header.toml"
+
+# [zero-first]
+# zero_csf = "zero.c"
+# full_csf = "generated.c"
+# output_csf = "zero_first.c"
+
+# [csfs-split]
+# split_csfs_parquet = "generated.parquet"
+# csfs_header = "generated_header.toml"
+# active_spaces = ["AS1=2s", "AS2=3s"]
+# output_dir = "split"
+
+# [interacting]
+# reference = "reference.c"
+# candidates = "generated.c"
+# output = "interacting.c"
+
+# [restore-csfs]
+# descriptors = "generated_descriptors.parquet"
+# header = "generated_header.toml"
+# output = "restored.c"
+"""
+
+
+def create_default_config() -> None:
+    """Create an editable template in the current directory without replacing a file."""
+    try:
+        with DEFAULT_CONFIG.open("x", encoding="utf-8") as config_file:
+            _ = config_file.write(DEFAULT_CONFIG_TEMPLATE)
+    except FileExistsError:
+        if not DEFAULT_CONFIG.is_file():
+            raise
+
+
 _GENERATION_KEYS = frozenset(
     {
         "orbital_order",

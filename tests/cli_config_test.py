@@ -1,11 +1,75 @@
 """The single CLI configuration boundary, including all command surfaces."""
 
+import tomllib
 from pathlib import Path
 
 import pytest
 
 from rcsfs import cli
 from rcsfs._cli_config import parse_cli_args
+
+
+def test_cli_creates_editable_default_config_in_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_run_interacting", lambda args: 0)
+
+    assert cli.main(["interacting", "reference.c", "candidates.c"]) == 0
+
+    generated = tmp_path / "rcsfs.toml"
+    contents = generated.read_text(encoding="utf-8")
+    assert tomllib.loads(contents) == {}
+    for command in (
+        "csfsgenerate",
+        "gen-descriptors",
+        "zero-first",
+        "csfs-split",
+        "interacting",
+        "restore-csfs",
+    ):
+        assert f"# [{command}]" in contents
+    assert cli.main(["interacting", "reference.c", "candidates.c"]) == 0
+    assert generated.read_text(encoding="utf-8") == contents
+
+
+def test_cli_does_not_replace_existing_default_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = "# user's settings\n[interacting]\nreference = 'reference.c'\ncandidates = 'candidates.c'\n"
+    default = tmp_path / "rcsfs.toml"
+    default.write_text(original, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_run_interacting", lambda args: 0)
+
+    assert cli.main(["interacting"]) == 0
+    assert default.read_text(encoding="utf-8") == original
+
+
+def test_cli_with_explicit_config_does_not_create_default_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "custom.toml").write_text(
+        "[interacting]\nreference = 'reference.c'\ncandidates = 'candidates.c'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_run_interacting", lambda args: 0)
+
+    assert cli.main(["interacting", "--config", "custom.toml"]) == 0
+    assert not (tmp_path / "rcsfs.toml").exists()
+
+
+def test_cli_help_does_not_create_default_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["interacting", "--help"])
+
+    assert exc.value.code == 0
+    assert not (tmp_path / "rcsfs.toml").exists()
 
 
 @pytest.mark.parametrize(

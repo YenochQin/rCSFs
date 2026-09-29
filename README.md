@@ -411,9 +411,13 @@ table continues to use its ordinary CLI arguments (and `csfsgenerate` remains
 interactive). Explicit CLI arguments override values in the table. TOML path
 values are resolved relative to the current working directory, just like CLI
 paths; changing to another directory changes which default file is found.
-Run `rcsfs csfsgenerate init-config` to create a commented reference template at
-`./rcsfs.toml` without running a processing command. It does not overwrite an
-existing file. Uncomment and edit a command table to use it on later runs.
+Run `rcsfs <command> init-config` to add that command's commented reference
+table to `./rcsfs.toml` without running a processing command. For example,
+`rcsfs csfsgenerate init-config` writes only the `[csfsgenerate]` example.
+Running `rcsfs gen-descriptors init-config` later adds `[gen-descriptors]` while
+preserving existing content. Split aliases write the canonical `[csfs-split]`
+table. Repeating the same init command does not duplicate its table. Uncomment
+and edit a table to use it on later runs.
 Running `rcsfs csfsgenerate` without a configuration file still starts the
 interactive dialog.
 Malformed TOML, unknown keys in the selected table, and missing required

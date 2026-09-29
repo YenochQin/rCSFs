@@ -9,20 +9,36 @@ from rcsfs import cli
 from rcsfs._cli_config import parse_cli_args
 
 
-def test_init_config_creates_editable_default_config_in_working_directory(
+@pytest.mark.parametrize(
+    ("command", "section"),
+    [
+        ("csfsgenerate", "csfsgenerate"),
+        ("gen-descriptors", "gen-descriptors"),
+        ("zero-first", "zero-first"),
+        ("csfs-split", "csfs-split"),
+        ("split-active", "csfs-split"),
+        ("rcsfsplit", "csfs-split"),
+        ("interacting", "interacting"),
+        ("restore-csfs", "restore-csfs"),
+    ],
+)
+def test_init_config_creates_only_selected_command_template(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    command: str,
+    section: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    assert cli.main(["csfsgenerate", "init-config"]) == 0
+    assert cli.main([command, "init-config"]) == 0
     assert capsys.readouterr().out == "Created rcsfs.toml\n"
 
     generated = tmp_path / "rcsfs.toml"
     contents = generated.read_text(encoding="utf-8")
     assert tomllib.loads(contents) == {}
-    for command in (
+    assert f"# [{section}]" in contents
+    for other in (
         "csfsgenerate",
         "gen-descriptors",
         "zero-first",
@@ -30,13 +46,41 @@ def test_init_config_creates_editable_default_config_in_working_directory(
         "interacting",
         "restore-csfs",
     ):
-        assert f"# [{command}]" in contents
-    assert cli.main(["csfsgenerate", "init-config"]) == 0
-    assert capsys.readouterr().out == "rcsfs.toml already exists\n"
+        if other != section:
+            assert f"# [{other}]" not in contents
+    assert cli.main([command, "init-config"]) == 0
+    assert capsys.readouterr().out == f"[{section}] template already exists\n"
     assert generated.read_text(encoding="utf-8") == contents
 
 
-def test_init_config_does_not_replace_existing_default_config(
+def test_init_config_adds_another_command_without_changing_existing_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = "[csfsgenerate]\ninactive_core = 0\n"
+    default = tmp_path / "rcsfs.toml"
+    default.write_text(original, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["gen-descriptors", "init-config"]) == 0
+    updated = default.read_text(encoding="utf-8")
+    assert updated.startswith(original)
+    assert "# [gen-descriptors]" in updated
+    assert tomllib.loads(updated) == {"csfsgenerate": {"inactive_core": 0}}
+
+
+def test_init_config_preserves_existing_command_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = "[interacting]\nreference = 'reference.c'\ncandidates = 'all.c'\n"
+    default = tmp_path / "rcsfs.toml"
+    default.write_text(original, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["interacting", "init-config"]) == 0
+    assert default.read_text(encoding="utf-8") == original
+
+
+def test_init_config_rejects_invalid_existing_file_without_modifying_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original = "invalid = [\n"
@@ -44,7 +88,7 @@ def test_init_config_does_not_replace_existing_default_config(
     default.write_text(original, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
-    assert cli.main(["csfsgenerate", "init-config"]) == 0
+    assert cli.main(["gen-descriptors", "init-config"]) == 1
     assert default.read_text(encoding="utf-8") == original
 
 
@@ -82,6 +126,32 @@ def test_init_config_help_does_not_create_file(
 
     assert exc.value.code == 0
     assert not (tmp_path / "rcsfs.toml").exists()
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "csfsgenerate",
+        "gen-descriptors",
+        "zero-first",
+        "csfs-split",
+        "interacting",
+        "restore-csfs",
+    ],
+)
+def test_init_config_example_values_are_accepted_by_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert cli.main([command, "init-config"]) == 0
+    config = tmp_path / "rcsfs.toml"
+    lines = config.read_text(encoding="utf-8").splitlines()
+    section_start = lines.index(f"# [{command}]")
+    active = "\n".join(line.removeprefix("# ") for line in lines[section_start:]) + "\n"
+    config.write_text(active, encoding="utf-8")
+
+    args = parse_cli_args(cli.build_parser(), [command])
+    assert args.config == Path("rcsfs.toml")
 
 
 def test_regular_command_does_not_create_default_config(

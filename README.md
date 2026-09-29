@@ -423,8 +423,10 @@ the batch runner generates these automatically from a matching earlier
 `[csfsgenerate]` entry, without requesting descriptor output. For a standalone
 generation, set `generate_parquet = true` or pass `--generate-parquet` to write
 only the CSF Parquet and header alongside the CSF text.
-`csfs-split` creates its `output_dir` when needed. Existing output files are
-still protected from overwrite.
+`csfs-split` creates its `output_dir` when needed. Processing commands replace
+existing output files on rerun, including files produced by `rcsfs -c`.
+Each completed file is published atomically; a set of files is not a single
+transaction. Input files cannot be used as output paths.
 Run `rcsfs <command> init-config` to add that command's commented reference
 table to `./rcsfs.toml` without running a processing command. For example,
 `rcsfs csfsgenerate init-config` writes only the `[csfsgenerate]` example.

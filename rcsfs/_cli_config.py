@@ -97,7 +97,6 @@ _CONFIG_TEMPLATES = {
 # hamiltonian = "dc"
 # method = "structural-upper-bound"
 # num_workers = 8
-# overwrite = false
 # json = false
 """.lstrip(),
     "restore-csfs": """

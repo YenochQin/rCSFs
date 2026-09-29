@@ -1,4 +1,4 @@
-"""No-overwrite publication of completed CLI generation artifacts.
+"""Atomic publication of completed CLI artifacts.
 
 Each destination becomes visible atomically, but several destinations are not
 one transaction. On failure, successful publications stay in place and are
@@ -19,7 +19,9 @@ from pathlib import Path
 class PartialPublicationError(OSError):
     """A publication failed after zero or more destinations became visible."""
 
-    def __init__(self, destination: Path, published: list[Path], cause: OSError) -> None:
+    def __init__(
+        self, destination: Path, published: list[Path], cause: OSError
+    ) -> None:
         self.destination = destination
         self.published = published
         names = ", ".join(str(path) for path in published) or "none"
@@ -29,23 +31,61 @@ class PartialPublicationError(OSError):
         )
 
 
-def publish_outputs(sources: Sequence[Path], destinations: Sequence[Path]) -> None:
-    """Publish complete files with an atomic create-if-absent per destination.
+def publish_outputs(
+    sources: Sequence[Path], destinations: Sequence[Path], *, overwrite: bool = False
+) -> None:
+    """Publish complete files atomically at each destination.
 
     Same-filesystem sources are hard-linked directly. For a cross-filesystem
-    source, copy to a private file beside the destination, flush it, and then
-    hard-link that complete file to the final name. Neither path ever exposes
-    a partially copied final file or replaces a competitor's destination.
+    source, copy to a private file beside the destination and flush it first.
+    The default refuses an existing destination; overwrite atomically replaces
+    it after the new file is complete.
     """
     if len(sources) != len(destinations):
         raise ValueError("Publication source and destination counts differ")
     published: list[Path] = []
     for source, destination in zip(sources, destinations, strict=True):
         try:
-            _publish_one(source, destination)
+            if overwrite:
+                _replace_one(source, destination)
+            else:
+                _publish_one(source, destination)
         except OSError as error:
-            raise PartialPublicationError(destination, published.copy(), error) from error
+            raise PartialPublicationError(
+                destination, published.copy(), error
+            ) from error
         published.append(destination)
+
+
+def _replace_one(source: Path, destination: Path) -> None:
+    try:
+        os.replace(source, destination)
+        return
+    except OSError as error:
+        if error.errno != errno.EXDEV:
+            raise
+
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=f".{destination.name}.rcsfs-",
+            suffix=".tmp",
+            dir=destination.parent,
+            delete=False,
+        ) as writer:
+            temporary = Path(writer.name)
+            with source.open("rb") as reader:
+                shutil.copyfileobj(reader, writer)
+            writer.flush()
+            os.fsync(writer.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _publish_one(source: Path, destination: Path) -> None:

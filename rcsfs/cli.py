@@ -321,7 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Split one CSF Parquet file into GRASP-style active-space CSF lists.",
         description=(
             "Read CSF Parquet once and independently select each active space. "
-            "Outputs may overlap; no output is overwritten."
+            "Outputs may overlap; existing output files are replaced."
         ),
     )
     add_config_argument(split_active)
@@ -373,7 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         type=Path,
         default=Path("rcsf.out"),
-        help="Destination CSF text file (default: rcsf.out; must not already exist).",
+        help="Destination CSF text file (default: rcsf.out; replaces an existing file).",
     )
     _ = csfsgenerate.add_argument(
         "--generate-descriptors",
@@ -500,7 +500,7 @@ def build_parser() -> argparse.ArgumentParser:
     _ = interacting.add_argument(
         "--overwrite",
         action="store_true",
-        help="Replace an existing output file.",
+        help="Accepted for compatibility; output files are replaced by default.",
     )
     _ = interacting.add_argument(
         "--json",
@@ -640,7 +640,7 @@ def _run_interacting(args: InteractingArgs) -> int:
             hamiltonian=args.hamiltonian,
             method=args.method,
             num_workers=args.num_workers,
-            overwrite=args.overwrite,
+            overwrite=True,
         )
     except (OSError, ValueError, RuntimeError) as exc:
         if args.json:
@@ -691,6 +691,10 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
         else full_path.with_name(f"{full_path.stem}_zf.csf")
     )
 
+    if output_path.resolve() in {zero_path.resolve(), full_path.resolve()}:
+        print("Partition output must not overwrite an input file", file=sys.stderr)
+        return 1
+
     base_dir = (
         args.work_dir if args.work_dir is not None else Path(tempfile.gettempdir())
     )
@@ -709,7 +713,17 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
         zero_header = _convert_to_parquet(zero_path, zero_pq, args, "Zero-order")
         full_header = _convert_to_parquet(full_path, full_pq, args, "Full-list")
 
-        stats = partition_csfs(zero_pq, zero_header, full_pq, full_header, output_path)
+        staged_output = (
+            root / "partitioned.csf"
+            if output_path.exists() or output_path.is_symlink()
+            else output_path
+        )
+        stats = partition_csfs(
+            zero_pq, zero_header, full_pq, full_header, staged_output
+        )
+        if stats.get("success") is True and staged_output != output_path:
+            publish_outputs([staged_output], [output_path], overwrite=True)
+            stats["output_file"] = str(output_path)
 
         if args.keep_parquet:
             print(f"Intermediate Parquet kept under: {root}")
@@ -724,7 +738,7 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
             print(f"Partition failed: {error}", file=sys.stderr)
 
         return 0 if stats.get("success") is True else 1
-    except RuntimeError as exc:
+    except (OSError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     finally:
@@ -741,7 +755,7 @@ def _run_csfs_split(args: CsfsSplitArgs) -> int:
         )
         if not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
             raise ValueError("output prefix must contain only letters, digits, _ or -")
-        targets: dict[str | Path, str] = {}
+        targets: dict[Path, str] = {}
         labels: set[str] = set()
         for item in args.active_spaces:
             label, separator, orbitals = item.partition("=")
@@ -759,10 +773,32 @@ def _run_csfs_split(args: CsfsSplitArgs) -> int:
             )
         if not args.csfs_header.is_file():
             raise FileNotFoundError(f"CSF header does not exist: {args.csfs_header}")
+        inputs = {args.split_csfs_parquet.resolve(), args.csfs_header.resolve()}
+        if any(path.resolve() in inputs for path in targets):
+            raise ValueError("split output must not overwrite an input file")
         args.output_dir.mkdir(parents=True, exist_ok=True)
-        stats = split_csfs_by_active_spaces(
-            args.split_csfs_parquet, args.csfs_header, targets
-        )
+        with tempfile.TemporaryDirectory(
+            prefix="rcsfs-split-", dir=str(args.output_dir)
+        ) as directory:
+            staged_targets: dict[str | Path, str] = {
+                Path(directory) / Path(path).name: orbitals
+                for path, orbitals in targets.items()
+            }
+            stats = split_csfs_by_active_spaces(
+                args.split_csfs_parquet, args.csfs_header, staged_targets
+            )
+            if stats.get("success") is True:
+                publish_outputs(
+                    [Path(path) for path in staged_targets],
+                    list(targets),
+                    overwrite=True,
+                )
+                final_by_staged = {
+                    str(staged): str(final)
+                    for staged, final in zip(staged_targets, targets, strict=True)
+                }
+                for output in stats["outputs"]:
+                    output["output_file"] = final_by_staged[output["output_file"]]
     except (OSError, ValueError, RuntimeError) as exc:
         if args.json:
             json.dump({"success": False, "error": str(exc)}, sys.stdout, indent=2)
@@ -1071,8 +1107,8 @@ def _generate_outputs(
     if args.config is None and DEFAULT_CONFIG.resolve() in resolved:
         raise ValueError("Generation output must not overwrite rcsfs.toml")
     for path in destinations:
-        if path.exists() or path.is_symlink():
-            raise FileExistsError(f"Output already exists: {path}")
+        if path.is_dir():
+            raise IsADirectoryError(f"Generation output is a directory: {path}")
         if not path.parent.is_dir():
             raise FileNotFoundError(f"Output directory does not exist: {path.parent}")
     if args.memory_budget_mib is not None and not (write_parquet or multiple_lists):
@@ -1083,14 +1119,22 @@ def _generate_outputs(
         if not write_parquet and not multiple_lists:
             raise ValueError("estimate_only requires Parquet-producing generation")
     if not write_parquet and not multiple_lists:
-        return dict(
-            generate_csfs_from_transcript(
-                transcript,
-                args.rcsfs_out,
-                normalize=args.normalize,
-                threads=args.threads,
+        with tempfile.TemporaryDirectory(
+            prefix="rcsfs-generation-", dir=str(working_dir)
+        ) as directory:
+            staged = Path(directory) / args.rcsfs_out.name
+            stats = dict(
+                generate_csfs_from_transcript(
+                    transcript,
+                    staged,
+                    normalize=args.normalize,
+                    threads=args.threads,
+                )
             )
-        )
+            if stats.get("success") is True:
+                publish_outputs([staged], [args.rcsfs_out], overwrite=True)
+                stats["output_file"] = str(args.rcsfs_out)
+            return stats
     if args.generation_storage == "disk" and args.normalize:
         raise ValueError("normalize is not supported by reversible V2 descriptors")
     if args.memory_budget_mib is not None and args.generation_storage != "disk":
@@ -1142,8 +1186,7 @@ def _generate_outputs(
         _print_estimate_summary(estimate, file=sys.stderr)
 
     # The existing converters truncate their destinations. Run them only in a
-    # private staging directory, then publish each complete file under a new
-    # final name without replacing another process's file.
+    # private staging directory, then atomically replace each final file.
     # Staged under the current working directory rather than the system temp
     # dir: disk-mode generation can write far more Arrow/Parquet data than a
     # tmpfs-backed /tmp has room for, so the caller's own filesystem is the
@@ -1205,7 +1248,7 @@ def _generate_outputs(
                 }
         if not args.generate_descriptors:
             sources = [csf, parquet, staged_header] if write_parquet else [csf]
-            publish_outputs(sources, destinations)
+            publish_outputs(sources, destinations, overwrite=True)
             for key in (
                 "parquet_file",
                 "descriptor_file",
@@ -1245,7 +1288,7 @@ def _generate_outputs(
             encoding="utf-8",
         )
         sources = [csf, parquet, staged_header, descriptors, sidecar]
-        publish_outputs(sources, destinations)
+        publish_outputs(sources, destinations, overwrite=True)
         stats.update(
             output_file=str(args.rcsfs_out),
             parquet_file=str(rcsfs_parquet),
@@ -1444,12 +1487,23 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
 
 def _run_restore_csfs(args: RestoreCsfsArgs) -> int:
     try:
-        stats = restore_csfs_from_descriptors(
-            args.descriptors,
-            args.header,
-            args.output,
-            indices=args.indices,
-        )
+        if args.output.resolve() in {args.descriptors.resolve(), args.header.resolve()}:
+            raise ValueError("restored output must not overwrite an input file")
+        if args.output.exists() or args.output.is_symlink():
+            with tempfile.TemporaryDirectory(
+                prefix="rcsfs-restore-", dir=str(args.output.parent)
+            ) as directory:
+                staged = Path(directory) / args.output.name
+                stats = restore_csfs_from_descriptors(
+                    args.descriptors, args.header, staged, indices=args.indices
+                )
+                if stats.get("success") is True:
+                    publish_outputs([staged], [args.output], overwrite=True)
+                    stats["output_file"] = str(args.output)
+        else:
+            stats = restore_csfs_from_descriptors(
+                args.descriptors, args.header, args.output, indices=args.indices
+            )
     except (OSError, ValueError, RuntimeError) as exc:
         if args.json:
             json.dump(
@@ -1515,13 +1569,6 @@ def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
         if command != "csfs-split":
             continue
         split = cast(CsfsSplitArgs, args)
-        if split.split_csfs_parquet.is_file() and split.csfs_header.is_file():
-            continue
-        if split.split_csfs_parquet.exists() or split.csfs_header.exists():
-            parser.error(
-                "[csfs-split] needs both its CSF Parquet and header inputs; "
-                "only one of the configured paths exists"
-            )
         for earlier_command, _, earlier_args in reversed(steps[:index]):
             if earlier_command != "csfsgenerate":
                 continue
@@ -1542,6 +1589,13 @@ def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
                 generate.generate_parquet = True
                 break
         else:
+            if split.split_csfs_parquet.is_file() and split.csfs_header.is_file():
+                continue
+            if split.split_csfs_parquet.exists() or split.csfs_header.exists():
+                parser.error(
+                    "[csfs-split] needs both its CSF Parquet and header inputs; "
+                    "only one of the configured paths exists"
+                )
             parser.error(
                 "[csfs-split] inputs are missing and do not match outputs "
                 "from an earlier [csfsgenerate] entry"
@@ -1571,6 +1625,36 @@ def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
             if resolved in claimed:
                 parser.error(f"multiple [csfsgenerate] entries write {output}")
             claimed.add(resolved)
+    config_path = path.resolve()
+    for command, _, args in steps:
+        other_outputs: list[Path] = []
+        if command == "gen-descriptors":
+            descriptors = cast(GenDescriptorsArgs, args)
+            other_outputs = [
+                descriptors.output_parquet,
+                descriptors.output_parquet.with_suffix(".toml"),
+            ]
+        elif command == "zero-first":
+            partition = cast(ZeroFirstArgs, args)
+            other_outputs = [
+                partition.output_csf
+                or partition.full_csf.with_name(f"{partition.full_csf.stem}_zf.csf")
+            ]
+        elif command == "interacting":
+            other_outputs = [cast(InteractingArgs, args).output]
+        elif command == "restore-csfs":
+            other_outputs = [cast(RestoreCsfsArgs, args).output]
+        elif command == "csfs-split":
+            split = cast(CsfsSplitArgs, args)
+            prefix = split.prefix or split.split_csfs_parquet.stem
+            other_outputs = [
+                split.output_dir / f"{prefix}{space.partition('=')[0]}.c"
+                for space in split.active_spaces
+            ]
+        if any(output.resolve() == config_path for output in other_outputs):
+            parser.error(
+                f"[{CONFIG_SECTIONS[command]}] output must not overwrite {path}"
+            )
     for command, config_index, args in steps:
         label = (
             f"{command} #{config_index + 1}"
@@ -1609,14 +1693,34 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _run_parsed_command(args: CliArgs) -> int:
     if args.command == "gen-descriptors":
+        staging: Path | None = None
         try:
             _validate_gen_descriptors_sidecar_path(
                 args.input_parquet, args.output_parquet, args.header
             )
+            if args.output_parquet.resolve() in {
+                args.input_parquet.resolve(),
+                args.header.resolve(),
+            }:
+                raise ValueError("descriptor output must not overwrite an input file")
             peel_subshells = read_peel_subshells(args.header)
+            output_parquet = args.output_parquet
+            sidecar = output_parquet.with_suffix(".toml")
+            if (
+                output_parquet.exists()
+                or output_parquet.is_symlink()
+                or sidecar.exists()
+                or sidecar.is_symlink()
+            ):
+                staging = Path(
+                    tempfile.mkdtemp(
+                        prefix="rcsfs-descriptors-", dir=str(output_parquet.parent)
+                    )
+                )
+                output_parquet = staging / output_parquet.name
             stats = generate_descriptors_from_parquet(
                 args.input_parquet,
-                args.output_parquet,
+                output_parquet,
                 peel_subshells=peel_subshells,
                 num_workers=args.num_workers,
                 normalize=args.normalize,
@@ -1624,6 +1728,17 @@ def _run_parsed_command(args: CliArgs) -> int:
                 header_path=args.header,
                 compression=args.compression,
             )
+            if stats.get("success") is True:
+                _write_gen_descriptors_sidecar(
+                    output_parquet, stats, peel_subshells, normalize=args.normalize
+                )
+                if staging is not None:
+                    publish_outputs(
+                        [output_parquet, output_parquet.with_suffix(".toml")],
+                        [args.output_parquet, sidecar],
+                        overwrite=True,
+                    )
+                    stats["output_file"] = str(args.output_parquet)
         except (OSError, ValueError) as exc:
             if args.json:
                 json.dump(
@@ -1636,10 +1751,9 @@ def _run_parsed_command(args: CliArgs) -> int:
             else:
                 print(f"Descriptor generation failed: {exc}", file=sys.stderr)
             return 1
-        if stats.get("success") is True:
-            _write_gen_descriptors_sidecar(
-                args.output_parquet, stats, peel_subshells, normalize=args.normalize
-            )
+        finally:
+            if staging is not None:
+                shutil.rmtree(staging, ignore_errors=True)
         if args.json:
             json.dump(stats, sys.stdout, indent=2, sort_keys=True)
             _ = sys.stdout.write("\n")

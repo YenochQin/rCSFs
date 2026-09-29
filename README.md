@@ -411,7 +411,7 @@ table continues to use its ordinary CLI arguments (and `csfsgenerate` remains
 interactive). Explicit CLI arguments override values in the table. TOML path
 values are resolved relative to the current working directory, just like CLI
 paths; changing to another directory changes which default file is found.
-Run `rcsfs init-config` to create a commented reference template at
+Run `rcsfs csfsgenerate init-config` to create a commented reference template at
 `./rcsfs.toml` without running a processing command. It does not overwrite an
 existing file. Uncomment and edit a command table to use it on later runs.
 Running `rcsfs csfsgenerate` without a configuration file still starts the

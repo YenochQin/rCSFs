@@ -176,10 +176,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="Command line tools for rCSFs data processing.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    _ = subparsers.add_parser(
-        "init-config",
-        help="Create a reference rcsfs.toml in the current directory.",
-    )
 
     def add_config_argument(command_parser: argparse.ArgumentParser) -> None:
         _ = command_parser.add_argument(
@@ -343,7 +339,8 @@ def build_parser() -> argparse.ArgumentParser:
             "2J range, excitation count) and generate the resulting CSF list "
             "with the Rust generator. Options with no equivalent question in "
             "the original dialog (output path, descriptor export, "
-            "thread count) are plain CLI flags."
+            "thread count) are plain CLI flags. Run 'rcsfs csfsgenerate "
+            "init-config' to create a reference rcsfs.toml."
         ),
     )
     add_config_argument(csfsgenerate)
@@ -1370,17 +1367,27 @@ def _run_restore_csfs(args: RestoreCsfsArgs) -> int:
     return 0
 
 
+def _run_init_config() -> int:
+    try:
+        created = create_default_config()
+    except OSError as exc:
+        print(f"Cannot create rcsfs.toml: {exc}", file=sys.stderr)
+        return 1
+    print("Created rcsfs.toml" if created else "rcsfs.toml already exists")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    tokens = list(argv) if argv is not None else sys.argv[1:]
+    if tokens[:2] == ["csfsgenerate", "init-config"]:
+        init_parser = argparse.ArgumentParser(
+            prog="rcsfs csfsgenerate init-config",
+            description="Create a reference rcsfs.toml in the current directory.",
+        )
+        _ = init_parser.parse_args(tokens[2:])
+        return _run_init_config()
     parser = build_parser()
-    parsed_args = parse_cli_args(parser, argv)
-    if cast(str, vars(parsed_args)["command"]) == "init-config":
-        try:
-            created = create_default_config()
-        except OSError as exc:
-            print(f"Cannot create rcsfs.toml: {exc}", file=sys.stderr)
-            return 1
-        print("Created rcsfs.toml" if created else "rcsfs.toml already exists")
-        return 0
+    parsed_args = parse_cli_args(parser, tokens)
     args = cast(CliArgs, cast(object, parsed_args))
 
     if args.command == "gen-descriptors":

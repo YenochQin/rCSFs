@@ -415,6 +415,13 @@ matching table uses its ordinary CLI arguments. Explicit CLI arguments override
 values in the table. TOML path
 values are resolved relative to the current working directory, just like CLI
 paths; changing to another directory changes which default file is found.
+Run `rcsfs -c rcsfs.toml` to execute every active command table in file order.
+All tables are validated before the first command runs; execution stops on the
+first failure. Each table must name the actual files produced by earlier steps.
+In particular, `[csfs-split]` requires a CSF Parquet file and its header;
+`[csfsgenerate]` produces them only when `generate_descriptors = true`.
+`csfs-split` creates its `output_dir` when needed. Existing output files are
+still protected from overwrite.
 Run `rcsfs <command> init-config` to add that command's commented reference
 table to `./rcsfs.toml` without running a processing command. For example,
 `rcsfs csfsgenerate init-config` writes only the `[csfsgenerate]` example.
@@ -477,7 +484,9 @@ header = "calculation_header.toml"
 output = "restored.c"
 ```
 
-Then run, for example, `rcsfs csfsgenerate -c` or `rcsfs csfs-split`.
+Then run one table with `rcsfs csfsgenerate -c` or `rcsfs csfs-split`.
+For `rcsfs -c rcsfs.toml`, include only the tables you intend to run and
+ensure every later table names files produced earlier or already present.
 `active_spaces` and `indices` are arrays. The existing
 `[generate]`/`[output]` format, the earlier flat `[csfsgenerate]` keys, and
 the earlier `[split-active]` keys remain readable; do not mix an old and new

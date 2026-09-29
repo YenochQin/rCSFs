@@ -101,3 +101,21 @@ def test_csfs_split_reads_new_default_toml(
     assert main(["csfs-split"]) == 0
     assert (tmp_path / "source_small.c").exists()
     assert (tmp_path / "source_large.c").exists()
+
+
+def test_csfs_split_creates_output_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parquet, header = _source(tmp_path)
+    (tmp_path / "rcsfs.toml").write_text(
+        "[csfs-split]\n"
+        f'split_csfs_parquet = "{parquet.name}"\n'
+        f'csfs_header = "{header.name}"\n'
+        'active_spaces = ["AS1=5s,5g"]\n'
+        'output_dir = "split/nested"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["csfs-split"]) == 0
+    assert (tmp_path / "split/nested/sourceAS1.c").is_file()

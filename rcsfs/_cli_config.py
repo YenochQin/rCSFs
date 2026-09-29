@@ -145,6 +145,31 @@ def create_default_config(
     return "added"
 
 
+def configured_commands(path: Path) -> list[str]:
+    """Return active command tables in TOML order for a batch invocation."""
+    try:
+        root = _table(tomllib.loads(path.read_text(encoding="utf-8")), "config")
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+    commands: list[str] = []
+    seen: set[str] = set()
+    for section in root:
+        if section == "output" and "generate" in root:
+            continue
+        command = (
+            "csfsgenerate" if section == "generate" else CONFIG_SECTIONS.get(section)
+        )
+        if command is None:
+            raise ValueError(f"unsupported configuration table: [{section}]")
+        if command in seen:
+            raise ValueError(f"configuration selects [{command}] more than once")
+        seen.add(command)
+        commands.append(command)
+    if not commands:
+        raise ValueError(f"{path} has no active command tables")
+    return commands
+
+
 _GENERATION_KEYS = frozenset(
     {
         "orbital_order",

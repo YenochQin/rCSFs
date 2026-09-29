@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### CSF 生成命令配置模式（2026-09-29）
+
+- `rcsfs csfsgenerate` 始终进入交互流程；成功后将本次输入与命令选项写入当前目录的
+  `rcsfs.toml`，直接替换已有文件，不读取旧内容。
+- `rcsfs csfsgenerate -c` 或 `--config` 读取当前目录的 `rcsfs.toml`；
+  在选项后提供路径时读取指定文件。其他子命令仍按原规则自动读取当前目录配置。
+
 ### TOML 多列表 CSF 生成（2026-09-25）
 
 - `[csfsgenerate]` 可用有序的 `[[csfsgenerate.lists]]` 提交多个独立参考列表；

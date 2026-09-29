@@ -1,4 +1,5 @@
 import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -697,10 +698,14 @@ def test_zero_first_propagates_partition_failure(
 
 
 def test_csfsgenerate_builds_transcript_and_reports_summary(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     from rcsfs import cli
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "rcsfs.toml").write_text("invalid = [", encoding="utf-8")
 
     answers = iter(
         [
@@ -725,6 +730,7 @@ def test_csfsgenerate_builds_transcript_and_reports_summary(
         normalize: bool = False,
         threads: int | None = None,
     ) -> dict[str, object]:
+        assert (tmp_path / "rcsfs.toml").read_text(encoding="utf-8") == "invalid = ["
         calls["transcript"] = transcript
         calls["output_path"] = output_path
         calls["normalize"] = normalize
@@ -746,6 +752,44 @@ def test_csfsgenerate_builds_transcript_and_reports_summary(
     assert calls["output_path"] == Path("out.c")
     assert calls["normalize"] is False
     assert calls["threads"] is None
+    config = tomllib.loads((tmp_path / "rcsfs.toml").read_text(encoding="utf-8"))
+    assert config == {
+        "csfsgenerate": {
+            "orbital_order": "*",
+            "inactive_core": 3,
+            "reference_configuration": [
+                "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
+                "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",
+            ],
+            "active_space": "5s,5p,5d,4f",
+            "j_min": 0,
+            "j_max": 12,
+            "excitations": 2,
+            "rcsfs_out": "out.c",
+            "generate_descriptors": False,
+            "normalize": False,
+            "estimate_only": False,
+            "allow_unchecked_space": False,
+            "json": False,
+            "generation_storage": "memory",
+        }
+    }
+    replay = cli.parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c"])
+    assert replay.generation == {
+        key: value
+        for key, value in config["csfsgenerate"].items()
+        if key
+        in {
+            "orbital_order",
+            "inactive_core",
+            "reference_configuration",
+            "active_space",
+            "j_min",
+            "j_max",
+            "excitations",
+        }
+    }
+    assert replay.rcsfs_out == Path("out.c")
 
     transcript = calls["transcript"]
     assert isinstance(transcript, str)

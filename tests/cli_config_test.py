@@ -152,7 +152,9 @@ def test_init_config_example_values_are_accepted_by_command(
     active = "\n".join(line.removeprefix("# ") for line in lines[section_start:]) + "\n"
     config.write_text(active, encoding="utf-8")
 
-    args = parse_cli_args(cli.build_parser(), [command])
+    args = parse_cli_args(
+        cli.build_parser(), [command, "-c"] if command == "csfsgenerate" else [command]
+    )
     assert args.config == Path("rcsfs.toml")
 
 
@@ -218,6 +220,68 @@ def test_csfsgenerate_stays_interactive_without_default_config(
     with pytest.raises(PromptReached):
         cli.main(["csfsgenerate"])
     assert not (tmp_path / "rcsfs.toml").exists()
+
+
+def test_csfsgenerate_ignores_existing_config_without_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class PromptReached(Exception):
+        pass
+
+    config = tmp_path / "rcsfs.toml"
+    config.write_text("invalid = [", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli, "_prompt", lambda message: (_ for _ in ()).throw(PromptReached)
+    )
+
+    with pytest.raises(PromptReached):
+        cli.main(["csfsgenerate"])
+    assert config.read_text(encoding="utf-8") == "invalid = ["
+
+
+def test_csfsgenerate_bare_config_flag_requires_default_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["csfsgenerate", "--config"])
+    assert exc.value.code == 2
+    assert not (tmp_path / "rcsfs.toml").exists()
+
+
+def test_csfsgenerate_explicit_config_ignores_default_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    default = tmp_path / "rcsfs.toml"
+    default.write_text("invalid = [", encoding="utf-8")
+    custom = tmp_path / "custom.toml"
+    custom.write_text(
+        '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        'rcsfs_out = "custom.c"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["csfsgenerate", "--config", str(custom)]) == 0
+    assert (tmp_path / "custom.c").is_file()
+    assert default.read_text(encoding="utf-8") == "invalid = ["
+    assert custom.read_text(encoding="utf-8").startswith("[csfsgenerate]")
+
+
+def test_csfsgenerate_interactive_output_cannot_replace_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = "invalid = ["
+    config = tmp_path / "rcsfs.toml"
+    config.write_text(original, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    answers = iter(["*", "0", "1s(2,*)", "", "1s", "0,0", "0", "n"])
+    monkeypatch.setattr(cli, "_prompt", lambda message: next(answers))
+
+    assert cli.main(["csfsgenerate", "rcsfs.toml"]) == 1
+    assert config.read_text(encoding="utf-8") == original
 
 
 def test_cli_with_explicit_config_does_not_create_default_config(
@@ -295,7 +359,9 @@ def test_default_config_supplies_each_command(
 ) -> None:
     (tmp_path / "rcsfs.toml").write_text(table)
     monkeypatch.chdir(tmp_path)
-    args = parse_cli_args(cli.build_parser(), [command])
+    args = parse_cli_args(
+        cli.build_parser(), [command, "-c"] if command == "csfsgenerate" else [command]
+    )
     for key, value in expected.items():
         assert getattr(args, key) == value
     assert args.config == Path("rcsfs.toml")
@@ -359,7 +425,7 @@ def test_legacy_generation_config_remains_supported(tmp_path: Path) -> None:
     assert args.generation["inactive_core"] == 0
 
 
-def test_default_config_runs_generator_without_config_flag(
+def test_default_config_runs_generator_with_config_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "rcsfs.toml").write_text(
@@ -368,7 +434,7 @@ def test_default_config_runs_generator_without_config_flag(
         'rcsfs_out = "generated.c"\n'
     )
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["csfsgenerate"]) == 0
+    assert cli.main(["csfsgenerate", "-c"]) == 0
     assert (tmp_path / "generated.c").is_file()
     assert (tmp_path / "rcsfs.toml").is_file()
 
@@ -390,7 +456,7 @@ def test_user_named_generation_and_split_sections_share_one_file(
         'output_dir = "split"\n'
     )
     monkeypatch.chdir(tmp_path)
-    generation = parse_cli_args(cli.build_parser(), ["csfsgenerate"])
+    generation = parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c"])
     assert generation.generation == {
         "orbital_order": "*",
         "inactive_core": 1,

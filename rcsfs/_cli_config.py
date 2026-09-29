@@ -454,7 +454,7 @@ def parse_cli_args(
     supplied = vars(parsed)
     selected_path = supplied.get("config")
     explicit = selected_path is not None
-    if selected_path is None and DEFAULT_CONFIG.is_file():
+    if command != "csfsgenerate" and selected_path is None and DEFAULT_CONFIG.is_file():
         selected_path = DEFAULT_CONFIG
     config: dict[str, object] = {}
     generation: dict[str, object] | None = None

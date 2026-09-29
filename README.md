@@ -404,11 +404,15 @@ with six processing subcommands (`csfs-split` also accepts the older `split-acti
 
 ### Shared CLI configuration
 
-All six commands accept `-c/--config PATH`. If that option is omitted and
-`rcsfs.toml` exists in the **current working directory**, the selected command
-reads its own table from that file automatically. A command with no matching
-table continues to use its ordinary CLI arguments (and `csfsgenerate` remains
-interactive). Explicit CLI arguments override values in the table. TOML path
+All six commands accept `-c/--config`. For `csfsgenerate`, running without
+that flag always starts the interactive dialog, even when `rcsfs.toml` exists.
+After a successful run, it writes the dialog inputs and CLI options to
+`./rcsfs.toml`, replacing any existing file. Use `rcsfs csfsgenerate -c` or
+`rcsfs csfsgenerate --config` to read `./rcsfs.toml`; add a path after the flag
+to read a different file. Other commands continue to read the selected table
+from `./rcsfs.toml` automatically when the flag is omitted. A command with no
+matching table uses its ordinary CLI arguments. Explicit CLI arguments override
+values in the table. TOML path
 values are resolved relative to the current working directory, just like CLI
 paths; changing to another directory changes which default file is found.
 Run `rcsfs <command> init-config` to add that command's commented reference
@@ -418,8 +422,8 @@ Running `rcsfs gen-descriptors init-config` later adds `[gen-descriptors]` while
 preserving existing content. Split aliases write the canonical `[csfs-split]`
 table. Repeating the same init command does not duplicate its table. Uncomment
 and edit a table to use it on later runs.
-Running `rcsfs csfsgenerate` without a configuration file still starts the
-interactive dialog.
+`init-config` creates a commented reference file; an interactive
+`csfsgenerate` run replaces it with the completed inputs.
 The `csfsgenerate` command always places its staging and disk scratch
 directories under the directory where it was launched. `scratch_dir` in TOML
 and `--scratch-dir` are no longer accepted.
@@ -473,8 +477,8 @@ header = "calculation_header.toml"
 output = "restored.c"
 ```
 
-Then run, for example, `rcsfs csfsgenerate` or `rcsfs csfs-split` without
-`--config`. `active_spaces` and `indices` are arrays. The existing
+Then run, for example, `rcsfs csfsgenerate -c` or `rcsfs csfs-split`.
+`active_spaces` and `indices` are arrays. The existing
 `[generate]`/`[output]` format, the earlier flat `[csfsgenerate]` keys, and
 the earlier `[split-active]` keys remain readable; do not mix an old and new
 name for the same field in one table.

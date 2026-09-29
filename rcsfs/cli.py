@@ -26,7 +26,12 @@ from . import (
 )
 from ._types import InteractionHamiltonian, InteractionMethod
 from ._publication import PartialPublicationError, publish_outputs
-from ._cli_config import CONFIG_SECTIONS, create_default_config, parse_cli_args
+from ._cli_config import (
+    CONFIG_SECTIONS,
+    DEFAULT_CONFIG,
+    create_default_config,
+    parse_cli_args,
+)
 
 #: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
 _MAX_REFERENCE_CONFIGURATIONS = 100
@@ -176,7 +181,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    def add_config_argument(command_parser: argparse.ArgumentParser) -> None:
+    def add_config_argument(
+        command_parser: argparse.ArgumentParser, *, optional_path: bool = False
+    ) -> None:
         command_parser.epilog = (
             f"Run '{command_parser.prog} init-config' to add this command's "
             "reference table to rcsfs.toml."
@@ -185,7 +192,13 @@ def build_parser() -> argparse.ArgumentParser:
             "-c",
             "--config",
             type=Path,
-            help="CLI TOML file (default: ./rcsfs.toml when present).",
+            nargs="?" if optional_path else None,
+            const=DEFAULT_CONFIG if optional_path else None,
+            help=(
+                "Read a TOML file (default: ./rcsfs.toml when this flag has no path)."
+                if optional_path
+                else "CLI TOML file (default: ./rcsfs.toml when present)."
+            ),
         )
 
     gen_descriptors = subparsers.add_parser(
@@ -345,7 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
             "thread count) are plain CLI flags."
         ),
     )
-    add_config_argument(csfsgenerate)
+    add_config_argument(csfsgenerate, optional_path=True)
     _ = csfsgenerate.add_argument(
         "rcsfs_out",
         nargs="?",
@@ -1031,6 +1044,8 @@ def _generate_outputs(
         raise ValueError("Generation output paths must be distinct")
     if args.config is not None and args.config.resolve() in resolved:
         raise ValueError("Generation output must not overwrite the configuration input")
+    if args.config is None and DEFAULT_CONFIG.resolve() in resolved:
+        raise ValueError("Generation output must not overwrite rcsfs.toml")
     for path in destinations:
         if path.exists() or path.is_symlink():
             raise FileExistsError(f"Output already exists: {path}")
@@ -1242,7 +1257,52 @@ def _generation_transcript(generate: Mapping[str, object]) -> str:
     )
 
 
+def _write_interactive_generation_config(
+    generation: Mapping[str, object], args: CsfsGenerateArgs
+) -> None:
+    """Replace the current directory's config with the completed dialog's inputs."""
+    values: dict[str, object] = {
+        **generation,
+        "rcsfs_out": str(args.rcsfs_out),
+        "generate_descriptors": args.generate_descriptors,
+        "normalize": args.normalize,
+        "estimate_only": args.estimate_only,
+        "allow_unchecked_space": args.allow_unchecked_space,
+        "json": args.json,
+    }
+    for key, value in (
+        ("rcsfs_parquet", args.rcsfs_parquet),
+        ("descriptor", args.descriptor),
+        ("threads", args.threads),
+        ("memory_budget_mib", args.memory_budget_mib),
+        ("generation_storage", args.generation_storage),
+    ):
+        if value is not None:
+            values[key] = str(value) if isinstance(value, Path) else value
+    contents = "[csfsgenerate]\n" + "".join(
+        f"{key} = {json.dumps(value, ensure_ascii=False)}\n"
+        for key, value in values.items()
+    )
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=".rcsfs-config-",
+            suffix=".tmp",
+            dir=Path.cwd(),
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            _ = temporary.write(contents)
+        _ = temporary_path.replace(DEFAULT_CONFIG)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
+    interactive_generation: dict[str, object] | None = None
     if args.generation is not None:
         try:
             generate = args.generation
@@ -1271,17 +1331,16 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
         active_space = _read_active_orbitals()
         j_min, j_max = _read_j_range()
         excitations = _read_excitations()
-        transcripts = _generation_transcript(
-            {
-                "orbital_order": orbital_order,
-                "inactive_core": inactive_core,
-                "reference_configuration": reference_configuration,
-                "active_space": active_space,
-                "j_min": j_min,
-                "j_max": j_max,
-                "excitations": excitations,
-            }
-        )
+        interactive_generation = {
+            "orbital_order": orbital_order,
+            "inactive_core": inactive_core,
+            "reference_configuration": reference_configuration,
+            "active_space": active_space,
+            "j_min": j_min,
+            "j_max": j_max,
+            "excitations": excitations,
+        }
+        transcripts = _generation_transcript(interactive_generation)
     if args.generation is None and _read_continue():
         print(
             "Multiple lists are not supported yet; only the first list "
@@ -1315,6 +1374,16 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
         }
     except (OSError, ValueError, RuntimeError) as exc:
         stats = {"success": False, "error": str(exc)}
+
+    if stats.get("success") is True and interactive_generation is not None:
+        try:
+            _write_interactive_generation_config(interactive_generation, args)
+        except OSError as exc:
+            print(
+                f"CSF generation succeeded, but cannot write rcsfs.toml: {exc}",
+                file=sys.stderr,
+            )
+            return 1
 
     if args.json:
         json.dump(stats, sys.stdout, indent=2, sort_keys=True)

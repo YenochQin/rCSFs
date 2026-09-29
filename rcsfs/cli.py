@@ -746,27 +746,40 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
             shutil.rmtree(root, ignore_errors=True)
 
 
+def _split_targets(args: CsfsSplitArgs) -> dict[Path, str]:
+    prefix = args.prefix if args.prefix is not None else args.split_csfs_parquet.stem
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
+        raise ValueError("output prefix must contain only letters, digits, _ or -")
+    conf = cast(str | None, getattr(args, "conf", None))
+    targets: dict[Path, str] = {}
+    labels: set[str] = set()
+    for item in args.active_spaces:
+        label, separator, orbitals = item.partition("=")
+        if not separator or not re.fullmatch(r"[A-Za-z0-9_-]+", label):
+            raise ValueError(f"invalid --space {item!r}; expected LABEL=5s,4p,3d")
+        if label in labels:
+            raise ValueError(f"duplicate active-space label: {label}")
+        labels.add(label)
+        if conf is not None and args.prefix is None:
+            match = re.fullmatch(r"AS([1-9][0-9]*)", label, re.IGNORECASE)
+            if match is None:
+                raise ValueError(
+                    f"active-space label {label!r} must be AS1, AS2, ... when conf names outputs"
+                )
+            name = f"{conf}as{int(match.group(1))}raw.c"
+        else:
+            name = f"{prefix}{label}.c"
+        targets[args.output_dir / name] = orbitals
+    if len(targets) != len(args.active_spaces):
+        raise ValueError("active-space labels produce duplicate output paths")
+    return targets
+
+
 def _run_csfs_split(args: CsfsSplitArgs) -> int:
     try:
         if args.output_dir.exists() and not args.output_dir.is_dir():
             raise ValueError(f"output path is not a directory: {args.output_dir}")
-        prefix = (
-            args.prefix if args.prefix is not None else args.split_csfs_parquet.stem
-        )
-        if not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
-            raise ValueError("output prefix must contain only letters, digits, _ or -")
-        targets: dict[Path, str] = {}
-        labels: set[str] = set()
-        for item in args.active_spaces:
-            label, separator, orbitals = item.partition("=")
-            if not separator or not re.fullmatch(r"[A-Za-z0-9_-]+", label):
-                raise ValueError(f"invalid --space {item!r}; expected LABEL=5s,4p,3d")
-            if label in labels:
-                raise ValueError(f"duplicate active-space label: {label}")
-            labels.add(label)
-            targets[args.output_dir / f"{prefix}{label}.c"] = orbitals
-        if len(targets) != len(args.active_spaces):
-            raise ValueError("active-space labels produce duplicate output paths")
+        targets = _split_targets(args)
         if not args.split_csfs_parquet.is_file():
             raise FileNotFoundError(
                 f"CSF Parquet input does not exist: {args.split_csfs_parquet}"
@@ -1646,11 +1659,10 @@ def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
             other_outputs = [cast(RestoreCsfsArgs, args).output]
         elif command == "csfs-split":
             split = cast(CsfsSplitArgs, args)
-            prefix = split.prefix or split.split_csfs_parquet.stem
-            other_outputs = [
-                split.output_dir / f"{prefix}{space.partition('=')[0]}.c"
-                for space in split.active_spaces
-            ]
+            try:
+                other_outputs = list(_split_targets(split))
+            except ValueError as exc:
+                parser.error(str(exc))
         if any(output.resolve() == config_path for output in other_outputs):
             parser.error(
                 f"[{CONFIG_SECTIONS[command]}] output must not overwrite {path}"

@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### 共享 `conf` 与 AS 层号命名（2026-09-30）
+
+- 顶层 `conf` 与 `[csfsgenerate]` / `[[csfsgenerate]]` 中的 `as` 自动推导
+  `{conf}as{as}raw.c` 及对应 Parquet/header；显式文件路径继续优先。
+- `[csfs-split]` 自动读取最后一个生成表的 Parquet/header，并把 `AS1`、`AS2` 等
+  输出命名为 `{conf}as1raw.c`、`{conf}as2raw.c`，默认放在 `split/`，避免覆盖生成的
+  原始 CSF 文本；仍可用显式输入、目录和前缀覆盖默认值。
+
 ### 重复运行时覆盖输出（2026-09-29）
 
 - CLI 的生成、拆分、描述符、恢复、零阶拆分与相互作用筛选命令重复运行时替换已有输出；

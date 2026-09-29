@@ -39,6 +39,8 @@ def test_init_config_creates_only_selected_command_template(
     assert tomllib.loads(contents) == {}
     assert f"# [{section}]" in contents
     if command == "csfsgenerate":
+        assert '# conf = "e1_vv1_"' in contents
+        assert "# as = 6" in contents
         assert "# json = false" not in contents
     for other in (
         "csfsgenerate",
@@ -327,6 +329,145 @@ def test_top_level_config_builds_parquet_for_split_without_descriptors(
         output.write_bytes(b"old result")
     assert cli.main(["-c", "rcsfs.toml"]) == 0
     assert all(output.read_bytes() != b"old result" for output in outputs)
+
+
+def test_conf_and_as_name_raw_generation_and_split_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "rcsfs.toml"
+    config.write_text(
+        'conf = "e1_vv1_"\n'
+        "[csfsgenerate]\nas = 2\ninactive_core = 0\n"
+        'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
+        "j_min = 0\nj_max = 0\nexcitations = 0\n"
+        '[csfs-split]\nactive_spaces = ["AS1=1s", "AS2=1s"]\n'
+        'output_dir = "split"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["-c", "rcsfs.toml"]) == 0
+    outputs = [
+        tmp_path / name
+        for name in (
+            "e1_vv1_as2raw.c",
+            "e1_vv1_as2raw.parquet",
+            "e1_vv1_as2raw_header.toml",
+            "split/e1_vv1_as1raw.c",
+            "split/e1_vv1_as2raw.c",
+        )
+    ]
+    assert all(path.is_file() for path in outputs)
+    for path in outputs:
+        path.write_bytes(b"old")
+    assert cli.main(["-c", "rcsfs.toml"]) == 0
+    assert all(path.read_bytes() != b"old" for path in outputs)
+    assert config.read_text(encoding="utf-8").startswith('conf = "e1_vv1_"')
+
+
+def test_conf_and_as_use_last_generator_for_implicit_split_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "rcsfs.toml").write_text(
+        'conf = "calc_"\n'
+        "[[csfsgenerate]]\nas = 1\ninactive_core = 0\n"
+        'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
+        "j_min = 0\nj_max = 0\nexcitations = 0\n"
+        "[[csfsgenerate]]\nas = 2\ninactive_core = 0\n"
+        'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
+        "j_min = 0\nj_max = 0\nexcitations = 0\n"
+        '[csfs-split]\nactive_spaces = ["AS1=1s"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["-c", "rcsfs.toml"]) == 0
+    assert (tmp_path / "calc_as1raw.c").is_file()
+    assert (tmp_path / "calc_as2raw.parquet").is_file()
+    assert (tmp_path / "split/calc_as1raw.c").is_file()
+    assert not (tmp_path / "calc_as1raw.parquet").exists()
+
+
+def test_conf_naming_works_with_separate_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "rcsfs.toml").write_text(
+        'conf = "calc_"\n[csfsgenerate]\nas = 2\ninactive_core = 0\n'
+        'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
+        "j_min = 0\nj_max = 0\nexcitations = 0\ngenerate_parquet = true\n"
+        '[csfs-split]\nactive_spaces = ["AS1=1s", "AS2=1s"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["csfsgenerate", "-c"]) == 0
+    assert cli.main(["csfs-split"]) == 0
+    assert (tmp_path / "calc_as2raw.parquet").is_file()
+    assert (tmp_path / "split/calc_as1raw.c").is_file()
+    assert (tmp_path / "split/calc_as2raw.c").is_file()
+    assert (tmp_path / "calc_as2raw.c").is_file()
+
+
+def test_conf_naming_respects_explicit_paths_and_prefix(tmp_path: Path) -> None:
+    config = tmp_path / "rcsfs.toml"
+    config.write_text(
+        'conf = "calc_"\n[csfsgenerate]\nas = 6\ninactive_core = 0\n'
+        'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
+        'j_min = 0\nj_max = 0\nexcitations = 0\nrcsfs_out = "custom.c"\n'
+        '[csfs-split]\nactive_spaces = ["AS1=1s"]\n'
+        'output_dir = "split"\nprefix = "custom"\n',
+        encoding="utf-8",
+    )
+    generated = parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c", str(config)])
+    split = parse_cli_args(cli.build_parser(), ["csfs-split", "-c", str(config)])
+
+    assert generated.rcsfs_out == Path("custom.c")
+    assert split.split_csfs_parquet == Path("custom.parquet")
+    assert split.csfs_header == Path("custom_header.toml")
+    assert list(cli._split_targets(split)) == [Path("split/customAS1.c")]
+
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "[csfs-split]\n",
+            '[csfs-split]\nsplit_csfs_parquet = "other.parquet"\n'
+            'csfs_header = "other_header.toml"\n',
+        ),
+        encoding="utf-8",
+    )
+    split = parse_cli_args(cli.build_parser(), ["csfs-split", "-c", str(config)])
+    assert split.split_csfs_parquet == Path("other.parquet")
+    assert split.csfs_header == Path("other_header.toml")
+
+
+@pytest.mark.parametrize(
+    "conf, level", [('"../escape"', "6"), ('"calc_"', "0"), ('"calc_"', "true")]
+)
+def test_conf_and_as_reject_invalid_values(
+    tmp_path: Path, conf: str, level: str
+) -> None:
+    config = tmp_path / "rcsfs.toml"
+    config.write_text(
+        f"conf = {conf}\n[csfsgenerate]\nas = {level}\ninactive_core = 0\n"
+        'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
+        "j_min = 0\nj_max = 0\nexcitations = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as exc:
+        parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c", str(config)])
+    assert exc.value.code == 2
+
+
+def test_as_without_conf_or_output_is_rejected(tmp_path: Path) -> None:
+    config = tmp_path / "rcsfs.toml"
+    config.write_text(
+        "[csfsgenerate]\nas = 6\ninactive_core = 0\n"
+        'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
+        "j_min = 0\nj_max = 0\nexcitations = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as exc:
+        parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c", str(config)])
+    assert exc.value.code == 2
 
 
 def test_top_level_config_runs_repeated_generators_in_order(

@@ -100,7 +100,6 @@ class CsfsGenerateArgs(Protocol):
     estimate_only: bool
     allow_unchecked_space: bool
     generation_storage: Literal["memory", "disk"] | None
-    scratch_dir: Path | None
     json: bool
 
 
@@ -397,12 +396,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["memory", "disk"],
         default=None,
         help="Generation backend. disk streams reversible V2 records through scratch storage.",
-    )
-    _ = csfsgenerate.add_argument(
-        "--scratch-dir",
-        type=Path,
-        default=None,
-        help="Existing directory for disk-generation scratch data.",
     )
     _ = csfsgenerate.add_argument(
         "--allow-unchecked-space",
@@ -1022,6 +1015,7 @@ def _print_estimate_summary(
 def _generate_outputs(
     transcript: str | list[str], args: CsfsGenerateArgs
 ) -> dict[str, object]:
+    working_dir = Path.cwd()
     multiple_lists = isinstance(transcript, list)
     rcsfs_parquet = args.rcsfs_parquet or args.rcsfs_out.with_suffix(".parquet")
     descriptor_output = args.descriptor or args.rcsfs_out.with_name(
@@ -1066,7 +1060,6 @@ def _generate_outputs(
             "estimate_only covers the disk descriptor path; add --generate-descriptors"
         )
     if args.generation_storage == "disk":
-        scratch_base = args.scratch_dir if args.scratch_dir is not None else Path.cwd()
         estimate_destinations = {"csf_text": args.rcsfs_out}
         if args.generate_descriptors:
             estimate_destinations.update(
@@ -1086,8 +1079,8 @@ def _generate_outputs(
                 transcript,
                 args.threads,
                 memory_budget_mib=args.memory_budget_mib,
-                scratch_dir=scratch_base,
-                staging_dir=Path.cwd(),
+                scratch_dir=working_dir,
+                staging_dir=working_dir,
                 destinations=estimate_destinations,
             )
         )
@@ -1107,7 +1100,7 @@ def _generate_outputs(
     # tmpfs-backed /tmp has room for, so the caller's own filesystem is the
     # safer default. Removed automatically on exit either way.
     with tempfile.TemporaryDirectory(
-        prefix="rcsfs-generation-", dir=str(Path.cwd())
+        prefix="rcsfs-generation-", dir=str(working_dir)
     ) as directory:
         root = Path(directory)
         csf_dir = root / "text"
@@ -1119,12 +1112,7 @@ def _generate_outputs(
         descriptors = root / "features.parquet"
         staged_header = parquet_dir / f"{csf.stem}_header.toml"
         if args.generation_storage == "disk":
-            scratch_base = args.scratch_dir if args.scratch_dir is not None else root
-            if not scratch_base.is_dir():
-                raise FileNotFoundError(
-                    f"Scratch directory does not exist: {scratch_base}"
-                )
-            scratch = scratch_base / f"rcsfs-disk-{csf.stem}"
+            scratch = working_dir / f"rcsfs-disk-{csf.stem}"
             if scratch.exists():
                 raise FileExistsError(
                     f"Disk-generation scratch already exists: {scratch}"

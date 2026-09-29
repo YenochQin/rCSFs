@@ -146,12 +146,51 @@ def test_init_config_example_values_are_accepted_by_command(
     assert cli.main([command, "init-config"]) == 0
     config = tmp_path / "rcsfs.toml"
     lines = config.read_text(encoding="utf-8").splitlines()
+    if command == "csfsgenerate":
+        assert not any("scratch_dir" in line for line in lines)
     section_start = lines.index(f"# [{command}]")
     active = "\n".join(line.removeprefix("# ") for line in lines[section_start:]) + "\n"
     config.write_text(active, encoding="utf-8")
 
     args = parse_cli_args(cli.build_parser(), [command])
     assert args.config == Path("rcsfs.toml")
+
+
+def test_csfsgenerate_rejects_scratch_dir_in_toml(tmp_path: Path) -> None:
+    config = tmp_path / "generation.toml"
+    config.write_text(
+        '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        'scratch_dir = "elsewhere"\n'
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c", str(config)])
+
+    assert exc.value.code == 2
+
+
+def test_legacy_generation_rejects_scratch_dir_in_toml(tmp_path: Path) -> None:
+    config = tmp_path / "legacy.toml"
+    config.write_text(
+        '[generate]\ncore = 0\nreferences = ["1s(2,*)"]\n'
+        'active_orbitals = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        'scratch_dir = "elsewhere"\n[output]\ncsf = "out.c"\n'
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c", str(config)])
+
+    assert exc.value.code == 2
+
+
+def test_csfsgenerate_rejects_scratch_dir_flag() -> None:
+    with pytest.raises(SystemExit) as exc:
+        parse_cli_args(
+            cli.build_parser(), ["csfsgenerate", "--scratch-dir", "elsewhere"]
+        )
+
+    assert exc.value.code == 2
 
 
 def test_regular_command_does_not_create_default_config(
@@ -344,7 +383,7 @@ def test_user_named_generation_and_split_sections_share_one_file(
         'rcsfs_out = "rcsfs_3exc.c"\ngenerate_descriptors = true\n'
         'rcsfs_parquet = "rcsfs_3exc.parquet"\n'
         'descriptor = "rcsfs_3exc_descriptors.parquet"\n'
-        'generation_storage = "disk"\nscratch_dir = "."\nthreads = 8\n'
+        'generation_storage = "disk"\nthreads = 8\n'
         '[csfs-split]\nsplit_csfs_parquet = "rcsfs_3exc.parquet"\n'
         'csfs_header = "rcsfs_3exc_header.toml"\n'
         'active_spaces = ["AS5=5s,5p,5d,5f,5g", "AS6=6s,6p,6d,6f,6g"]\n'

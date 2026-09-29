@@ -88,7 +88,6 @@ _CONFIG_TEMPLATES = {
 # csfs_header = "generated_header.toml"
 # active_spaces = ["AS1=2s", "AS2=3s"]
 # output_dir = "split"
-# prefix = "split"
 # json = false
 """.lstrip(),
     "interacting": """
@@ -379,8 +378,8 @@ def _conf_prefix(root: Mapping[str, object]) -> str | None:
 
 
 def _as_level(value: object) -> int:
-    if type(value) is not int or value < 1:
-        raise ValueError("as must be a positive integer")
+    if type(value) is not int or value < 0:
+        raise ValueError("as must be a non-negative integer")
     return value
 
 

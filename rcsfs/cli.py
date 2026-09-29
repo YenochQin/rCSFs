@@ -747,10 +747,10 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
 
 
 def _split_targets(args: CsfsSplitArgs) -> dict[Path, str]:
-    prefix = args.prefix if args.prefix is not None else args.split_csfs_parquet.stem
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
-        raise ValueError("output prefix must contain only letters, digits, _ or -")
     conf = cast(str | None, getattr(args, "conf", None))
+    prefix = args.prefix if args.prefix is not None else args.split_csfs_parquet.stem
+    if conf is None and not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
+        raise ValueError("output prefix must contain only letters, digits, _ or -")
     targets: dict[Path, str] = {}
     labels: set[str] = set()
     for item in args.active_spaces:
@@ -760,11 +760,11 @@ def _split_targets(args: CsfsSplitArgs) -> dict[Path, str]:
         if label in labels:
             raise ValueError(f"duplicate active-space label: {label}")
         labels.add(label)
-        if conf is not None and args.prefix is None:
-            match = re.fullmatch(r"AS([1-9][0-9]*)", label, re.IGNORECASE)
+        if conf is not None:
+            match = re.fullmatch(r"AS(0|[1-9][0-9]*)", label, re.IGNORECASE)
             if match is None:
                 raise ValueError(
-                    f"active-space label {label!r} must be AS1, AS2, ... when conf names outputs"
+                    f"active-space label {label!r} must be AS0, AS1, ... when conf names outputs"
                 )
             name = f"{conf}as{int(match.group(1))}raw.c"
         else:

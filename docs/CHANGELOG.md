@@ -8,11 +8,15 @@
 
 ### 共享 `conf` 与 AS 层号命名（2026-09-30）
 
+- `as = 0` 和拆分标签 `AS0` 表示未激发的 MR 空间，可生成和拆分
+  `{conf}as0raw.c`；负数仍被拒绝。
+- 配置含顶层 `conf` 时，拆分文件始终按 `{conf}asNraw.c` 命名，旧的 `prefix = "split"`
+  不再产生 `splitASN.c`；无 `conf` 的旧配置仍可使用 `prefix`。
 - 顶层 `conf` 与 `[csfsgenerate]` / `[[csfsgenerate]]` 中的 `as` 自动推导
   `{conf}as{as}raw.c` 及对应 Parquet/header；显式文件路径继续优先。
 - `[csfs-split]` 自动读取最后一个生成表的 Parquet/header，并把 `AS1`、`AS2` 等
   输出命名为 `{conf}as1raw.c`、`{conf}as2raw.c`，默认放在 `split/`，避免覆盖生成的
-  原始 CSF 文本；仍可用显式输入、目录和前缀覆盖默认值。
+  原始 CSF 文本；仍可用显式输入和目录覆盖默认值。
 
 ### 重复运行时覆盖输出（2026-09-29）
 

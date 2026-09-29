@@ -358,11 +358,35 @@ def test_conf_and_as_name_raw_generation_and_split_outputs(
         )
     ]
     assert all(path.is_file() for path in outputs)
+    assert not list((tmp_path / "split").glob("rcsfs-split-*"))
     for path in outputs:
         path.write_bytes(b"old")
     assert cli.main(["-c", "rcsfs.toml"]) == 0
     assert all(path.read_bytes() != b"old" for path in outputs)
     assert config.read_text(encoding="utf-8").startswith('conf = "e1_vv1_"')
+
+
+def test_as_zero_names_mr_generation_and_split_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "rcsfs.toml").write_text(
+        'conf = "mr_"\n'
+        "[csfsgenerate]\nas = 0\ninactive_core = 0\n"
+        'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
+        "j_min = 0\nj_max = 0\nexcitations = 0\n"
+        '[csfs-split]\nactive_spaces = ["AS0=1s"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["-c", "rcsfs.toml"]) == 0
+    for name in (
+        "mr_as0raw.c",
+        "mr_as0raw.parquet",
+        "mr_as0raw_header.toml",
+        "split/mr_as0raw.c",
+    ):
+        assert (tmp_path / name).is_file()
 
 
 def test_conf_and_as_use_last_generator_for_implicit_split_input(
@@ -408,7 +432,7 @@ def test_conf_naming_works_with_separate_commands(
     assert (tmp_path / "calc_as2raw.c").is_file()
 
 
-def test_conf_naming_respects_explicit_paths_and_prefix(tmp_path: Path) -> None:
+def test_conf_naming_respects_explicit_input_paths(tmp_path: Path) -> None:
     config = tmp_path / "rcsfs.toml"
     config.write_text(
         'conf = "calc_"\n[csfsgenerate]\nas = 6\ninactive_core = 0\n'
@@ -424,7 +448,7 @@ def test_conf_naming_respects_explicit_paths_and_prefix(tmp_path: Path) -> None:
     assert generated.rcsfs_out == Path("custom.c")
     assert split.split_csfs_parquet == Path("custom.parquet")
     assert split.csfs_header == Path("custom_header.toml")
-    assert list(cli._split_targets(split)) == [Path("split/customAS1.c")]
+    assert list(cli._split_targets(split)) == [Path("split/calc_as1raw.c")]
 
     config.write_text(
         config.read_text(encoding="utf-8").replace(
@@ -439,8 +463,23 @@ def test_conf_naming_respects_explicit_paths_and_prefix(tmp_path: Path) -> None:
     assert split.csfs_header == Path("other_header.toml")
 
 
+def test_conf_naming_is_not_replaced_by_legacy_split_prefix(tmp_path: Path) -> None:
+    config = tmp_path / "rcsfs.toml"
+    config.write_text(
+        'conf = "calc_"\n[csfsgenerate]\nas = 3\ninactive_core = 0\n'
+        'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
+        "j_min = 0\nj_max = 0\nexcitations = 0\n"
+        '[csfs-split]\nactive_spaces = ["AS1=1s"]\n'
+        'output_dir = "split"\nprefix = "split"\n',
+        encoding="utf-8",
+    )
+
+    args = parse_cli_args(cli.build_parser(), ["csfs-split", "-c", str(config)])
+    assert list(cli._split_targets(args)) == [Path("split/calc_as1raw.c")]
+
+
 @pytest.mark.parametrize(
-    "conf, level", [('"../escape"', "6"), ('"calc_"', "0"), ('"calc_"', "true")]
+    "conf, level", [('"../escape"', "6"), ('"calc_"', "-1"), ('"calc_"', "true")]
 )
 def test_conf_and_as_reject_invalid_values(
     tmp_path: Path, conf: str, level: str

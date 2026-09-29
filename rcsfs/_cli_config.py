@@ -1,13 +1,14 @@
 """One configuration boundary for every rcsfs CLI subcommand.
 
-Only the selected command table is applied.  CLI values are parsed sparsely so
-an explicit argument always wins over the TOML value, even for false/zero-like
-values.  Paths retain the CLI's current-working-directory semantics.
+The selected command table and optional shared naming stem are applied. CLI
+values are parsed sparsely so an explicit argument always wins over the TOML
+value, even for false/zero-like values. Paths retain current-directory semantics.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
@@ -29,11 +30,13 @@ _TEMPLATE_HEADER = """# rCSFs CLI configuration template.
 # Uncomment the table and edit its values before using this command.
 # Paths are relative to the directory where you run rcsfs.
 # Command-line arguments override values in this file.
+# conf = "e1_vv1_"  # Shared filename stem, before as{number}raw.
 
 """
 _CONFIG_TEMPLATES = {
     "csfsgenerate": """
 # [csfsgenerate]
+# as = 6
 # orbital_order = "*"
 # inactive_core = 0
 # reference_configuration = ["1s(2,*)"]
@@ -151,9 +154,12 @@ def configured_commands(path: Path) -> list[tuple[str, int | None]]:
         root = _table(tomllib.loads(path.read_text(encoding="utf-8")), "config")
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"cannot read {path}: {exc}") from exc
+    _ = _conf_prefix(root)
     commands: list[tuple[str, int | None]] = []
     seen: set[str] = set()
     for section in root:
+        if section == "conf":
+            continue
         if section == "output" and "generate" in root:
             continue
         command = (
@@ -361,6 +367,55 @@ def _table(value: object, label: str) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
+def _conf_prefix(root: Mapping[str, object]) -> str | None:
+    value = root.get("conf")
+    if value is None:
+        return None
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
+        raise ValueError(
+            "top-level conf must be a nonempty filename stem (letters, digits, _ or -)"
+        )
+    return value
+
+
+def _as_level(value: object) -> int:
+    if type(value) is not int or value < 1:
+        raise ValueError("as must be a positive integer")
+    return value
+
+
+def _split_source_paths(
+    root: Mapping[str, object], conf: str
+) -> tuple[Path, Path] | None:
+    generation = root.get("csfsgenerate")
+    if isinstance(generation, list):
+        entries = cast(list[object], generation)
+        generation = entries[-1] if entries else None
+    if not isinstance(generation, dict):
+        return None
+    values = _canonicalize(
+        cast(dict[str, object], generation), _GENERATOR_ALIASES, "csfsgenerate"
+    )
+    raw_output = values.get("rcsfs_out")
+    if raw_output is not None:
+        if not isinstance(raw_output, str):
+            raise ValueError("rcsfs_out must be a path string")
+        csf = Path(raw_output)
+    elif "as" in values:
+        csf = Path(f"{conf}as{_as_level(values['as'])}raw.c")
+    else:
+        return None
+    raw_parquet = values.get("rcsfs_parquet")
+    if raw_parquet is not None and not isinstance(raw_parquet, str):
+        raise ValueError("rcsfs_parquet must be a path string")
+    parquet = (
+        Path(raw_parquet)
+        if isinstance(raw_parquet, str)
+        else csf.with_suffix(".parquet")
+    )
+    return parquet, parquet.parent / f"{csf.stem}_header.toml"
+
+
 def _canonicalize(
     values: dict[str, object], aliases: Mapping[str, str], label: str
 ) -> dict[str, object]:
@@ -386,7 +441,9 @@ def _load_config(
         root = _table(tomllib.loads(path.read_text(encoding="utf-8")), "config")
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"cannot read {path}: {exc}") from exc
+    conf = _conf_prefix(root)
     section = CONFIG_SECTIONS[command]
+    as_level: int | None = None
     is_legacy = section == "csfsgenerate" and "generate" in root
     if is_legacy:
         if section in root:
@@ -456,6 +513,7 @@ def _load_config(
         generation = None
         if section == "csfsgenerate":
             values = _canonicalize(values, _GENERATOR_ALIASES, section)
+            as_level = _as_level(values.pop("as")) if "as" in values else None
             generation = (
                 _generation_lists(values)
                 if "lists" in values
@@ -482,6 +540,22 @@ def _load_config(
         if action is None:
             raise ValueError(f"unknown [{section}] key: {key}")
         converted[key] = _value(key, value, action)
+    if section == "csfsgenerate" and as_level is not None:
+        if conf is not None:
+            _ = converted.setdefault("rcsfs_out", Path(f"{conf}as{as_level}raw.c"))
+        elif "rcsfs_out" not in converted:
+            raise ValueError("as requires top-level conf or an explicit rcsfs_out")
+    elif section == "csfs-split" and conf is not None:
+        source_paths = (
+            _split_source_paths(root, conf)
+            if "split_csfs_parquet" not in converted or "csfs_header" not in converted
+            else None
+        )
+        if source_paths is not None:
+            _ = converted.setdefault("split_csfs_parquet", source_paths[0])
+            _ = converted.setdefault("csfs_header", source_paths[1])
+        _ = converted.setdefault("output_dir", Path("split"))
+        converted["conf"] = conf
     return converted, generation, True
 
 

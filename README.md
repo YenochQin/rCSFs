@@ -444,7 +444,44 @@ parameters fail before the command starts writing outputs. Generated header
 and descriptor metadata TOML files are separate outputs and are not changed or
 used as CLI configuration.
 
-For example, save this as `rcsfs.toml` in the directory where you run `rcsfs`:
+The shared top-level `conf` stem and the `as` number can derive the raw CSF
+filenames. For example, this complete configuration writes
+`e1_vv1_as6raw.c`, `e1_vv1_as6raw.parquet`, and
+`e1_vv1_as6raw_header.toml`. The split step reads that Parquet/header pair and
+writes `split/e1_vv1_as1raw.c` and `split/e1_vv1_as2raw.c`:
+
+```toml
+conf = "e1_vv1_"
+
+[csfsgenerate]
+as = 6
+inactive_core = 0
+reference_configuration = ["1s(2,*)"]
+active_space = "1s"
+j_min = 0
+j_max = 0
+excitations = 0
+
+[csfs-split]
+active_spaces = ["AS1=1s", "AS2=1s"]
+output_dir = "split"
+```
+
+`as` identifies the generated raw space in the filename; `active_space`
+remains the orbital list used for generation. `conf` is a filename stem and
+must be at the top level, before any table. It may include a trailing
+underscore, as shown. For split outputs, labels must be `AS1`, `AS2`, etc.
+when `conf` supplies the names. If `output_dir` is omitted, split files go in
+`split/`, keeping the source raw CSF file separate. Explicit `rcsfs_out`, `rcsfs_parquet`,
+`split_csfs_parquet`, `csfs_header`, `output_dir`, and `prefix` still take
+precedence. With multiple `[[csfsgenerate]]` entries, an implicit split input
+comes from the last entry.
+Run the complete example with `rcsfs -c rcsfs.toml`. To run generation and
+splitting as separate commands, set `generate_parquet = true` in
+`[csfsgenerate]`, then run `rcsfs csfsgenerate -c` followed by
+`rcsfs csfs-split`.
+
+The explicit-path form also remains supported:
 
 ```toml
 [csfsgenerate]

@@ -261,6 +261,37 @@ def test_gen_descriptors_rejects_sidecar_that_aliases_header(
     assert "descriptor sidecar aliases header" in capsys.readouterr().err
 
 
+def test_gen_descriptors_replaces_existing_output_and_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rcsfs import cli
+
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "descriptors.parquet"
+    sidecar = tmp_path / "descriptors.toml"
+    output.write_bytes(b"old parquet")
+    sidecar.write_text("old metadata", encoding="utf-8")
+    monkeypatch.setattr(cli, "read_peel_subshells", lambda header: ["5s"])
+
+    def fake_generate(
+        input_parquet: Path, staged: Path, **kwargs: object
+    ) -> dict[str, object]:
+        assert output.read_bytes() == b"old parquet"
+        staged.write_bytes(b"new parquet")
+        return {"success": True, "output_file": str(staged), "descriptor_count": 1}
+
+    monkeypatch.setattr(cli, "generate_descriptors_from_parquet", fake_generate)
+
+    assert (
+        cli.main(
+            ["gen-descriptors", "input.parquet", str(output), "--header", "header.toml"]
+        )
+        == 0
+    )
+    assert output.read_bytes() == b"new parquet"
+    assert tomllib.loads(sidecar.read_text(encoding="utf-8"))["record_count"] == 1
+
+
 def test_restore_csfs_invokes_restore_and_prints_summary(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -308,6 +339,40 @@ def test_restore_csfs_invokes_restore_and_prints_summary(
     captured = capsys.readouterr()
     assert captured.out == "Restored CSFs: restored.c\nrecord_count: 5\n"
     assert captured.err == ""
+
+
+def test_restore_csfs_replaces_existing_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rcsfs import cli
+
+    output = tmp_path / "restored.c"
+    output.write_text("old", encoding="utf-8")
+
+    def fake_restore(
+        descriptors: Path, header: Path, staged: Path, indices: object = None
+    ) -> dict[str, object]:
+        assert output.read_text(encoding="utf-8") == "old"
+        staged.write_text("new", encoding="utf-8")
+        return {"success": True, "output_file": str(staged), "record_count": 1}
+
+    monkeypatch.setattr(cli, "restore_csfs_from_descriptors", fake_restore)
+
+    assert (
+        cli.main(
+            [
+                "restore-csfs",
+                "--descriptors",
+                "desc.parquet",
+                "--header",
+                "header.toml",
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    assert output.read_text(encoding="utf-8") == "new"
 
 
 def test_restore_csfs_reports_failure(
@@ -396,7 +461,7 @@ def test_interacting_defaults_to_rcsf_out_and_eight_threads(
         "hamiltonian": "dirac_coulomb",
         "method": "structural_upper_bound",
         "num_workers": 8,
-        "overwrite": False,
+        "overwrite": True,
     }
     captured = capsys.readouterr()
     assert "Selected interacting CSFs (structural upper bound): rcsf.out" in (
@@ -629,6 +694,44 @@ def test_zero_first_default_output_name(
     assert partition_outputs[0] == expected
 
 
+def test_zero_first_replaces_existing_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rcsfs import cli
+
+    output = tmp_path / "result.c"
+    output.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(
+        cli,
+        "convert_csfs",
+        lambda source, target, **kwargs: {
+            "success": True,
+            "header_file": str(Path(target).parent / "header.toml"),
+        },
+    )
+
+    def fake_partition(
+        zero_parquet: Path,
+        zero_header: str,
+        full_parquet: Path,
+        full_header: str,
+        staged: Path,
+    ) -> dict[str, object]:
+        assert output.read_text(encoding="utf-8") == "old"
+        staged.write_text("new", encoding="utf-8")
+        return {
+            "success": True,
+            "output_file": str(staged),
+            "first_order_count": 1,
+            "block_count": 1,
+        }
+
+    monkeypatch.setattr(cli, "partition_csfs", fake_partition)
+
+    assert cli.main(["zero-first", "zero.c", "full.c", str(output)]) == 0
+    assert output.read_text(encoding="utf-8") == "new"
+
+
 def test_zero_first_keep_parquet_keeps_temp_dir(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -735,6 +838,7 @@ def test_csfsgenerate_builds_transcript_and_reports_summary(
         calls["output_path"] = output_path
         calls["normalize"] = normalize
         calls["threads"] = threads
+        output_path.write_text("generated", encoding="utf-8")
         return {
             "success": True,
             "output_file": str(output_path),
@@ -749,7 +853,9 @@ def test_csfsgenerate_builds_transcript_and_reports_summary(
     exit_code = cli.main(["csfsgenerate", "out.c"])
 
     assert exit_code == 0
-    assert calls["output_path"] == Path("out.c")
+    assert isinstance(calls["output_path"], Path)
+    assert calls["output_path"].name == "out.c"
+    assert (tmp_path / "out.c").read_text(encoding="utf-8") == "generated"
     assert calls["normalize"] is False
     assert calls["threads"] is None
     config = tomllib.loads((tmp_path / "rcsfs.toml").read_text(encoding="utf-8"))

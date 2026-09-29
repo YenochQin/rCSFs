@@ -25,6 +25,42 @@ def test_same_volume_publish_is_complete_and_will_not_overwrite(tmp_path: Path) 
     assert destination.read_bytes() == b"complete"
 
 
+def test_overwrite_replaces_existing_file_after_source_is_complete(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.write_bytes(b"new complete result")
+    destination = tmp_path / "destination"
+    destination.write_bytes(b"old result")
+
+    _publication.publish_outputs([source], [destination], overwrite=True)
+
+    assert destination.read_bytes() == b"new complete result"
+
+
+def test_cross_volume_overwrite_preserves_old_file_until_copy_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.write_bytes(b"new complete result")
+    destination = tmp_path / "destination"
+    destination.write_bytes(b"old result")
+    original_replace = os.replace
+
+    def cross_volume_once(left: Path, right: Path) -> None:
+        if left == source:
+            raise OSError(errno.EXDEV, "cross-device rename")
+        assert destination.read_bytes() == b"old result"
+        assert left.read_bytes() == b"new complete result"
+        original_replace(left, right)
+
+    monkeypatch.setattr(_publication.os, "replace", cross_volume_once)
+    _publication.publish_outputs([source], [destination], overwrite=True)
+
+    assert destination.read_bytes() == b"new complete result"
+    assert not list(tmp_path.glob(".destination.rcsfs-*.tmp"))
+
+
 def test_cross_volume_copy_is_hidden_until_complete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

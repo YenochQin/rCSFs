@@ -518,13 +518,13 @@ def test_cli_memory_budget_overrides_toml(
         "out_descriptors.toml",
     ],
 )
-def test_existing_output_preserved(tmp_path: Path, name: str) -> None:
+def test_existing_output_replaced(tmp_path: Path, name: str) -> None:
     config = config_file(tmp_path)
     sentinel = tmp_path / name
     sentinel.write_bytes(b"keep me")
-    assert cli.main(["csfsgenerate", "--config", str(config)]) == 1
-    assert sentinel.read_bytes() == b"keep me"
-    assert set(tmp_path.iterdir()) == {config, sentinel}
+    assert cli.main(["csfsgenerate", "--config", str(config)]) == 0
+    assert sentinel.read_bytes() != b"keep me"
+    assert config.is_file()
 
 
 @pytest.mark.parametrize("output", ["out.c", "out_header.toml", "generation.toml"])
@@ -536,16 +536,18 @@ def test_output_aliases_rejected(tmp_path: Path, output: str) -> None:
     assert set(tmp_path.iterdir()) == {config}
 
 
-def test_symlink_output_rejected(tmp_path: Path) -> None:
+def test_symlink_output_replaced_without_touching_target(tmp_path: Path) -> None:
     config = config_file(tmp_path)
     target = tmp_path / "missing"
     (tmp_path / "out.parquet").symlink_to(target)
-    assert cli.main(["csfsgenerate", "--config", str(config)]) == 1
+    assert cli.main(["csfsgenerate", "--config", str(config)]) == 0
     assert not target.exists()
-    assert not (tmp_path / "out.c").exists()
+    assert (tmp_path / "out.c").is_file()
+    assert (tmp_path / "out.parquet").is_file()
+    assert not (tmp_path / "out.parquet").is_symlink()
 
 
-def test_publication_race_preserves_other_writer(
+def test_publication_race_replaces_other_writer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capfd: pytest.CaptureFixture[str],
@@ -560,13 +562,10 @@ def test_publication_race_preserves_other_writer(
         return result
 
     monkeypatch.setattr(cli, "generate_disk_outputs_from_transcript", racing_writer)
-    assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 1
+    assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 0
     result = json.loads(capfd.readouterr().out)
-    assert result["success"] is False
-    assert result["failed_destination"] == str(sentinel)
-    assert result["published_outputs"] == [str(tmp_path / "out.c")]
-    assert "left in place" in result["error"]
-    assert sentinel.read_bytes() == b"another writer"
+    assert result["success"] is True
+    assert sentinel.read_bytes() != b"another writer"
     assert (tmp_path / "out.c").is_file()
 
 

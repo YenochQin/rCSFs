@@ -314,6 +314,20 @@ def test_top_level_config_builds_parquet_for_split_without_descriptors(
     assert (tmp_path / "split/generatedAS1.c").is_file()
     assert not (tmp_path / "generated_descriptors.parquet").exists()
 
+    outputs = [
+        tmp_path / name
+        for name in (
+            "generated.c",
+            "generated.parquet",
+            "generated_header.toml",
+            "split/generatedAS1.c",
+        )
+    ]
+    for output in outputs:
+        output.write_bytes(b"old result")
+    assert cli.main(["-c", "rcsfs.toml"]) == 0
+    assert all(output.read_bytes() != b"old result" for output in outputs)
+
 
 def test_top_level_config_runs_repeated_generators_in_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

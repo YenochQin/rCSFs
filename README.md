@@ -427,6 +427,11 @@ only the CSF Parquet and header alongside the CSF text.
 existing output files on rerun, including files produced by `rcsfs -c`.
 Each completed file is published atomically; a set of files is not a single
 transaction. Input files cannot be used as output paths.
+`split/` is the default permanent output directory when top-level `conf` is
+used. The private `rcsfs-split-*` staging directory inside it is removed after
+the command. Set `output_dir = "."` to write split outputs beside the source;
+if an output has the same AS number as the generated raw CSF, that file is
+replaced.
 Run `rcsfs <command> init-config` to add that command's commented reference
 table to `./rcsfs.toml` without running a processing command. For example,
 `rcsfs csfsgenerate init-config` writes only the `[csfsgenerate]` example.
@@ -470,11 +475,13 @@ output_dir = "split"
 `as` identifies the generated raw space in the filename; `active_space`
 remains the orbital list used for generation. `conf` is a filename stem and
 must be at the top level, before any table. It may include a trailing
-underscore, as shown. For split outputs, labels must be `AS1`, `AS2`, etc.
+underscore, as shown. `as = 0` denotes the unexcited MR space. For split outputs,
+labels must be `AS0`, `AS1`, `AS2`, etc.
 when `conf` supplies the names. If `output_dir` is omitted, split files go in
 `split/`, keeping the source raw CSF file separate. Explicit `rcsfs_out`, `rcsfs_parquet`,
-`split_csfs_parquet`, `csfs_header`, `output_dir`, and `prefix` still take
-precedence. With multiple `[[csfsgenerate]]` entries, an implicit split input
+`split_csfs_parquet`, `csfs_header`, and `output_dir` still take precedence.
+With `conf`, split filenames always use `asNraw.c`; `prefix` applies only when
+`conf` is absent. With multiple `[[csfsgenerate]]` entries, an implicit split input
 comes from the last entry.
 Run the complete example with `rcsfs -c rcsfs.toml`. To run generation and
 splitting as separate commands, set `generate_parquet = true` in

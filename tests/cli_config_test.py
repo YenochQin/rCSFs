@@ -272,6 +272,80 @@ def test_csfsgenerate_explicit_config_ignores_default_file(
     assert custom.read_text(encoding="utf-8").startswith("[csfsgenerate]")
 
 
+def test_top_level_config_runs_generation_then_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "rcsfs.toml").write_text(
+        '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        'rcsfs_out = "generated.c"\ngenerate_descriptors = true\n'
+        'generation_storage = "memory"\n'
+        '\n[csfs-split]\nsplit_csfs_parquet = "generated.parquet"\n'
+        'csfs_header = "generated_header.toml"\nactive_spaces = ["AS1=1s"]\n'
+        'output_dir = "split"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["-c", "rcsfs.toml"]) == 0
+    assert (tmp_path / "generated.c").is_file()
+    assert (tmp_path / "generated.parquet").is_file()
+    assert (tmp_path / "split/generatedAS1.c").is_file()
+
+
+def test_top_level_config_rejects_missing_generation_inputs_before_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "rcsfs.toml").write_text(
+        '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        'rcsfs_out = "generated.c"\ngenerate_descriptors = false\n'
+        '\n[csfs-split]\nsplit_csfs_parquet = "generated.parquet"\n'
+        'csfs_header = "generated_header.toml"\nactive_spaces = ["AS1=1s"]\n'
+        'output_dir = "split"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["-c", "rcsfs.toml"])
+    assert exc.value.code == 2
+    assert not (tmp_path / "generated.c").exists()
+
+
+def test_top_level_config_runs_all_tables_in_order_and_stops_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "rcsfs.toml").write_text(
+        '[interacting]\nreference = "reference.c"\ncandidates = "candidates.c"\n'
+        '\n[restore-csfs]\ndescriptors = "descriptors.parquet"\n'
+        'header = "header.toml"\noutput = "restored.c"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    calls: list[str] = []
+    should_fail = False
+
+    def fail_interacting(args: object) -> int:
+        calls.append("interacting")
+        return 1 if should_fail else 0
+
+    def restore(args: object) -> int:
+        calls.append("restore-csfs")
+        return 0
+
+    monkeypatch.setattr(cli, "_run_interacting", fail_interacting)
+    monkeypatch.setattr(cli, "_run_restore_csfs", restore)
+
+    assert cli.main(["--config", "rcsfs.toml"]) == 0
+    assert calls == ["interacting", "restore-csfs"]
+
+    calls.clear()
+    should_fail = True
+    assert cli.main(["--config", "rcsfs.toml"]) == 1
+    assert calls == ["interacting"]
+
+
 def test_csfsgenerate_interactive_output_cannot_replace_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

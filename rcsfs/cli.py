@@ -29,6 +29,7 @@ from ._publication import PartialPublicationError, publish_outputs
 from ._cli_config import (
     CONFIG_SECTIONS,
     DEFAULT_CONFIG,
+    configured_commands,
     create_default_config,
     parse_cli_args,
 )
@@ -179,7 +180,14 @@ def build_parser() -> argparse.ArgumentParser:
         prog="rcsfs",
         description="Command line tools for rCSFs data processing.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    _ = parser.add_argument(
+        "-c",
+        "--config",
+        dest="batch_config",
+        type=Path,
+        help="Run every active command table in a TOML file, in file order.",
+    )
+    subparsers = parser.add_subparsers(dest="command")
 
     def add_config_argument(
         command_parser: argparse.ArgumentParser, *, optional_path: bool = False
@@ -720,8 +728,8 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
 
 def _run_csfs_split(args: CsfsSplitArgs) -> int:
     try:
-        if not args.output_dir.is_dir():
-            raise ValueError(f"output directory does not exist: {args.output_dir}")
+        if args.output_dir.exists() and not args.output_dir.is_dir():
+            raise ValueError(f"output path is not a directory: {args.output_dir}")
         prefix = (
             args.prefix if args.prefix is not None else args.split_csfs_parquet.stem
         )
@@ -739,6 +747,13 @@ def _run_csfs_split(args: CsfsSplitArgs) -> int:
             targets[args.output_dir / f"{prefix}{label}.c"] = orbitals
         if len(targets) != len(args.active_spaces):
             raise ValueError("active-space labels produce duplicate output paths")
+        if not args.split_csfs_parquet.is_file():
+            raise FileNotFoundError(
+                f"CSF Parquet input does not exist: {args.split_csfs_parquet}"
+            )
+        if not args.csfs_header.is_file():
+            raise FileNotFoundError(f"CSF header does not exist: {args.csfs_header}")
+        args.output_dir.mkdir(parents=True, exist_ok=True)
         stats = split_csfs_by_active_spaces(
             args.split_csfs_parquet, args.csfs_header, targets
         )
@@ -1444,6 +1459,60 @@ def _run_init_config(command: str) -> int:
     return 0
 
 
+def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
+    try:
+        commands = configured_commands(path)
+    except ValueError as exc:
+        parser.error(str(exc))
+    steps = [
+        (
+            command,
+            cast(
+                CliArgs,
+                cast(
+                    object,
+                    parse_cli_args(build_parser(), [command, "-c", str(path)]),
+                ),
+            ),
+        )
+        for command in commands
+    ]
+    for index, (command, args) in enumerate(steps):
+        if command != "csfs-split":
+            continue
+        split = cast(CsfsSplitArgs, args)
+        if split.split_csfs_parquet.is_file() and split.csfs_header.is_file():
+            continue
+        for earlier_command, earlier_args in reversed(steps[:index]):
+            if earlier_command != "csfsgenerate":
+                continue
+            generate = cast(CsfsGenerateArgs, earlier_args)
+            if not generate.generate_descriptors:
+                parser.error(
+                    "[csfs-split] needs CSF Parquet and header inputs; "
+                    "[csfsgenerate] has generate_descriptors = false"
+                )
+            parquet = generate.rcsfs_parquet or generate.rcsfs_out.with_suffix(
+                ".parquet"
+            )
+            header = parquet.parent / f"{generate.rcsfs_out.stem}_header.toml"
+            if (
+                split.split_csfs_parquet.resolve() != parquet.resolve()
+                or split.csfs_header.resolve() != header.resolve()
+            ):
+                parser.error(
+                    "[csfs-split] input paths do not match [csfsgenerate] "
+                    f"outputs: {parquet} and {header}"
+                )
+            break
+    for command, args in steps:
+        print(f"Running [{CONFIG_SECTIONS[command]}]...", file=sys.stderr)
+        result = _run_parsed_command(args)
+        if result != 0:
+            return result
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     tokens = list(argv) if argv is not None else sys.argv[1:]
     if len(tokens) >= 2 and tokens[0] in CONFIG_SECTIONS and tokens[1] == "init-config":
@@ -1455,8 +1524,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_init_config(tokens[0])
     parser = build_parser()
     parsed_args = parse_cli_args(parser, tokens)
+    command = cast(str | None, parsed_args.command)
+    batch_config = cast(Path | None, parsed_args.batch_config)
+    if command is None:
+        if batch_config is None:
+            parser.error("a command or -c/--config is required")
+        return _run_config_file(batch_config, parser)
+    if batch_config is not None:
+        parser.error("top-level -c/--config cannot be combined with a subcommand")
     args = cast(CliArgs, cast(object, parsed_args))
+    return _run_parsed_command(args)
 
+
+def _run_parsed_command(args: CliArgs) -> int:
     if args.command == "gen-descriptors":
         try:
             _validate_gen_descriptors_sidecar_path(

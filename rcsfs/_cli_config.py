@@ -12,14 +12,27 @@ import sys
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 DEFAULT_CONFIG = Path("rcsfs.toml")
-DEFAULT_CONFIG_TEMPLATE = """# rCSFs CLI configuration template.
-# Uncomment and edit the table for a command before using its values.
+CONFIG_SECTIONS = {
+    "csfsgenerate": "csfsgenerate",
+    "gen-descriptors": "gen-descriptors",
+    "zero-first": "zero-first",
+    "csfs-split": "csfs-split",
+    "split-active": "csfs-split",
+    "rcsfsplit": "csfs-split",
+    "interacting": "interacting",
+    "restore-csfs": "restore-csfs",
+}
+_TEMPLATE_HEADER = """# rCSFs CLI configuration template.
+# Uncomment the table and edit its values before using this command.
 # Paths are relative to the directory where you run rcsfs.
 # Command-line arguments override values in this file.
 
+"""
+_CONFIG_TEMPLATES = {
+    "csfsgenerate": """
 # [csfsgenerate]
 # orbital_order = "*"
 # inactive_core = 0
@@ -32,46 +45,106 @@ DEFAULT_CONFIG_TEMPLATE = """# rCSFs CLI configuration template.
 # generate_descriptors = false
 # rcsfs_parquet = "generated.parquet"
 # descriptor = "generated_descriptors.parquet"
+# normalize = false
+# threads = 8
+# memory_budget_mib = 1024
+# estimate_only = false
+# allow_unchecked_space = false
 # generation_storage = "disk"
+# scratch_dir = "."
+# continue_lists = false
+# json = false
+""".lstrip(),
+    "gen-descriptors": """
 
 # [gen-descriptors]
 # input_parquet = "generated.parquet"
 # output_parquet = "generated_descriptors.parquet"
 # header = "generated_header.toml"
+# num_workers = 8
+# normalize = false
+# descriptor_version = 2
+# compression = "zstd"
+# json = false
+""".lstrip(),
+    "zero-first": """
 
 # [zero-first]
 # zero_csf = "zero.c"
 # full_csf = "generated.c"
 # output_csf = "zero_first.c"
+# keep_parquet = false
+# work_dir = "."
+# num_workers = 8
+# max_line_len = 256
+# json = false
+""".lstrip(),
+    "csfs-split": """
 
 # [csfs-split]
 # split_csfs_parquet = "generated.parquet"
 # csfs_header = "generated_header.toml"
 # active_spaces = ["AS1=2s", "AS2=3s"]
 # output_dir = "split"
+# prefix = "split"
+# json = false
+""".lstrip(),
+    "interacting": """
 
 # [interacting]
 # reference = "reference.c"
 # candidates = "generated.c"
 # output = "interacting.c"
+# hamiltonian = "dc"
+# method = "structural-upper-bound"
+# num_workers = 8
+# overwrite = false
+# json = false
+""".lstrip(),
+    "restore-csfs": """
 
 # [restore-csfs]
 # descriptors = "generated_descriptors.parquet"
 # header = "generated_header.toml"
 # output = "restored.c"
-"""
+# indices = [0, 1]
+# json = false
+""".lstrip(),
+}
 
 
-def create_default_config() -> bool:
-    """Create an editable template; return false when it already exists."""
+def create_default_config(
+    command: str,
+) -> Literal["created", "added", "exists"]:
+    """Create or append one command's reference section without replacing data."""
+    section = CONFIG_SECTIONS[command]
+    template = _CONFIG_TEMPLATES[section]
     try:
         with DEFAULT_CONFIG.open("x", encoding="utf-8") as config_file:
-            _ = config_file.write(DEFAULT_CONFIG_TEMPLATE)
+            _ = config_file.write(_TEMPLATE_HEADER + template)
+        return "created"
     except FileExistsError:
         if not DEFAULT_CONFIG.is_file():
             raise
-        return False
-    return True
+
+    contents = DEFAULT_CONFIG.read_text(encoding="utf-8")
+    try:
+        root = tomllib.loads(contents)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"invalid {DEFAULT_CONFIG}: {exc}") from exc
+    active_sections = (
+        {section, "split-active"} if section == "csfs-split" else {section}
+    )
+    if any(
+        name in root or f"# [{name}]" in contents.splitlines()
+        for name in active_sections
+    ):
+        return "exists"
+
+    separator = "\n" if contents.endswith("\n") else "\n\n"
+    with DEFAULT_CONFIG.open("a", encoding="utf-8") as config_file:
+        _ = config_file.write(separator + template)
+    return "added"
 
 
 _GENERATION_KEYS = frozenset(
@@ -281,11 +354,7 @@ def _load_config(
         root = _table(tomllib.loads(path.read_text(encoding="utf-8")), "config")
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"cannot read {path}: {exc}") from exc
-    section = (
-        "csfs-split"
-        if command in {"csfs-split", "split-active", "rcsfsplit"}
-        else command
-    )
+    section = CONFIG_SECTIONS[command]
     is_legacy = section == "csfsgenerate" and "generate" in root
     if is_legacy:
         if section in root:
@@ -377,16 +446,7 @@ def parse_cli_args(
     parser: argparse.ArgumentParser, argv: Sequence[str] | None
 ) -> argparse.Namespace:
     tokens = list(argv) if argv is not None else sys.argv[1:]
-    if not tokens or tokens[0] not in {
-        "gen-descriptors",
-        "zero-first",
-        "csfs-split",
-        "split-active",
-        "rcsfsplit",
-        "csfsgenerate",
-        "interacting",
-        "restore-csfs",
-    }:
+    if not tokens or tokens[0] not in CONFIG_SECTIONS:
         return parser.parse_args(tokens)
     command = tokens[0]
     subparser = _selected_parser(parser, command)

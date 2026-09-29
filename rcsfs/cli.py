@@ -26,7 +26,7 @@ from . import (
 )
 from ._types import InteractionHamiltonian, InteractionMethod
 from ._publication import PartialPublicationError, publish_outputs
-from ._cli_config import create_default_config, parse_cli_args
+from ._cli_config import CONFIG_SECTIONS, create_default_config, parse_cli_args
 
 #: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
 _MAX_REFERENCE_CONFIGURATIONS = 100
@@ -178,6 +178,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_config_argument(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.epilog = (
+            f"Run '{command_parser.prog} init-config' to add this command's "
+            "reference table to rcsfs.toml."
+        )
         _ = command_parser.add_argument(
             "-c",
             "--config",
@@ -339,8 +343,7 @@ def build_parser() -> argparse.ArgumentParser:
             "2J range, excitation count) and generate the resulting CSF list "
             "with the Rust generator. Options with no equivalent question in "
             "the original dialog (output path, descriptor export, "
-            "thread count) are plain CLI flags. Run 'rcsfs csfsgenerate "
-            "init-config' to create a reference rcsfs.toml."
+            "thread count) are plain CLI flags."
         ),
     )
     add_config_argument(csfsgenerate)
@@ -1367,25 +1370,31 @@ def _run_restore_csfs(args: RestoreCsfsArgs) -> int:
     return 0
 
 
-def _run_init_config() -> int:
+def _run_init_config(command: str) -> int:
     try:
-        created = create_default_config()
-    except OSError as exc:
+        result = create_default_config(command)
+    except (OSError, ValueError) as exc:
         print(f"Cannot create rcsfs.toml: {exc}", file=sys.stderr)
         return 1
-    print("Created rcsfs.toml" if created else "rcsfs.toml already exists")
+    section = CONFIG_SECTIONS[command]
+    if result == "created":
+        print("Created rcsfs.toml")
+    elif result == "added":
+        print(f"Added [{section}] template to rcsfs.toml")
+    else:
+        print(f"[{section}] template already exists")
     return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     tokens = list(argv) if argv is not None else sys.argv[1:]
-    if tokens[:2] == ["csfsgenerate", "init-config"]:
+    if len(tokens) >= 2 and tokens[0] in CONFIG_SECTIONS and tokens[1] == "init-config":
         init_parser = argparse.ArgumentParser(
-            prog="rcsfs csfsgenerate init-config",
-            description="Create a reference rcsfs.toml in the current directory.",
+            prog=f"rcsfs {tokens[0]} init-config",
+            description="Add this command's reference table to rcsfs.toml.",
         )
         _ = init_parser.parse_args(tokens[2:])
-        return _run_init_config()
+        return _run_init_config(tokens[0])
     parser = build_parser()
     parsed_args = parse_cli_args(parser, tokens)
     args = cast(CliArgs, cast(object, parsed_args))

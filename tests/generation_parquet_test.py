@@ -110,6 +110,34 @@ def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
     assert restored.read_bytes() == (tmp_path / "out.c").read_bytes()
 
 
+def test_disk_generation_uses_invocation_directory_for_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = config_file(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    observed: dict[str, Path] = {}
+    original_estimate = cli.estimate_disk_generation
+    original_generate = cli.generate_disk_outputs_from_transcript
+
+    def estimate(*args: object, **kwargs: object) -> object:
+        observed["estimate_scratch"] = Path(str(kwargs["scratch_dir"]))
+        observed["staging"] = Path(str(kwargs["staging_dir"]))
+        return original_estimate(*args, **kwargs)
+
+    def generate(*args: object, **kwargs: object) -> object:
+        observed["generation_scratch"] = Path(str(args[5]))
+        return original_generate(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "estimate_disk_generation", estimate)
+    monkeypatch.setattr(cli, "generate_disk_outputs_from_transcript", generate)
+
+    assert cli.main(["csfsgenerate", "--config", str(config)]) == 0
+    assert observed["estimate_scratch"] == tmp_path
+    assert observed["staging"] == tmp_path
+    assert observed["generation_scratch"].parent == tmp_path
+    assert not observed["generation_scratch"].exists()
+
+
 def test_config_multiple_lists_union_and_exact_dedup(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:

@@ -51,7 +51,6 @@ _CONFIG_TEMPLATES = {
 # estimate_only = false
 # allow_unchecked_space = false
 # generation_storage = "disk"
-# scratch_dir = "."
 # continue_lists = false
 # json = false
 """.lstrip(),
@@ -382,13 +381,13 @@ def _load_config(
         unknown_generate = (
             generate.keys()
             - _GENERATION_KEYS
-            - {"scratch_dir", "memory_budget_mib", "generation_storage"}
+            - {"memory_budget_mib", "generation_storage"}
         )
         if unknown_generate:
             raise ValueError(
                 f"unknown generate keys: {', '.join(sorted(unknown_generate))}"
             )
-        for key in ("scratch_dir", "memory_budget_mib", "generation_storage"):
+        for key in ("memory_budget_mib", "generation_storage"):
             if key in generate:
                 values[key] = generate[key]
         # The legacy generation table also contains resource settings.

@@ -420,6 +420,9 @@ table. Repeating the same init command does not duplicate its table. Uncomment
 and edit a table to use it on later runs.
 Running `rcsfs csfsgenerate` without a configuration file still starts the
 interactive dialog.
+The `csfsgenerate` command always places its staging and disk scratch
+directories under the directory where it was launched. `scratch_dir` in TOML
+and `--scratch-dir` are no longer accepted.
 Malformed TOML, unknown keys in the selected table, and missing required
 parameters fail before the command starts writing outputs. Generated header
 and descriptor metadata TOML files are separate outputs and are not changed or

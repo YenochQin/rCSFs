@@ -97,6 +97,7 @@ class CsfsGenerateArgs(Protocol):
     config: Path | None
     generation: Mapping[str, object] | None
     generate_descriptors: bool
+    generate_parquet: bool
     rcsfs_parquet: Path | None
     descriptor: Path | None
 
@@ -362,7 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
             "(orbital order, core, reference configurations, active orbitals, "
             "2J range, excitation count) and generate the resulting CSF list "
             "with the Rust generator. Options with no equivalent question in "
-            "the original dialog (output path, descriptor export, "
+            "the original dialog (output path, Parquet and descriptor export, "
             "thread count) are plain CLI flags."
         ),
     )
@@ -378,6 +379,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--generate-descriptors",
         action="store_true",
         help="Also write CSF Parquet and descriptor Parquet outputs.",
+    )
+    _ = csfsgenerate.add_argument(
+        "--generate-parquet",
+        action="store_true",
+        help="Also write CSF Parquet and its header without exporting descriptors.",
     )
     _ = csfsgenerate.add_argument(
         "--parquet",
@@ -431,7 +437,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Count the workload and report the capacity estimate without generating "
-            "anything (requires --generate-descriptors)."
+            "anything (requires disk generation)."
         ),
     )
     _ = csfsgenerate.add_argument(
@@ -1052,8 +1058,11 @@ def _generate_outputs(
     csfs_header = rcsfs_parquet.parent / f"{args.rcsfs_out.stem}_header.toml"
     metadata = descriptor_output.with_suffix(".toml")
     destinations = [args.rcsfs_out]
+    write_parquet = args.generate_parquet or args.generate_descriptors
+    if write_parquet:
+        destinations.extend([rcsfs_parquet, csfs_header])
     if args.generate_descriptors:
-        destinations.extend([rcsfs_parquet, csfs_header, descriptor_output, metadata])
+        destinations.extend([descriptor_output, metadata])
     resolved = [path.resolve() for path in destinations]
     if len(set(resolved)) != len(resolved):
         raise ValueError("Generation output paths must be distinct")
@@ -1066,13 +1075,14 @@ def _generate_outputs(
             raise FileExistsError(f"Output already exists: {path}")
         if not path.parent.is_dir():
             raise FileNotFoundError(f"Output directory does not exist: {path.parent}")
-    if args.memory_budget_mib is not None and not (
-        args.generate_descriptors or multiple_lists
-    ):
-        raise ValueError(
-            "memory_budget_mib requires descriptor-producing disk generation"
-        )
-    if not args.generate_descriptors and not multiple_lists:
+    if args.memory_budget_mib is not None and not (write_parquet or multiple_lists):
+        raise ValueError("memory_budget_mib requires disk generation")
+    if args.estimate_only:
+        if args.generation_storage != "disk":
+            raise ValueError("estimate_only requires disk generation storage")
+        if not write_parquet and not multiple_lists:
+            raise ValueError("estimate_only requires Parquet-producing generation")
+    if not write_parquet and not multiple_lists:
         return dict(
             generate_csfs_from_transcript(
                 transcript,
@@ -1085,21 +1095,30 @@ def _generate_outputs(
         raise ValueError("normalize is not supported by reversible V2 descriptors")
     if args.memory_budget_mib is not None and args.generation_storage != "disk":
         raise ValueError("memory_budget_mib requires disk generation storage")
-    if args.estimate_only and args.generation_storage != "disk":
-        raise ValueError(
-            "estimate_only covers the disk descriptor path; add --generate-descriptors"
-        )
     if args.generation_storage == "disk":
-        estimate_destinations = {"csf_text": args.rcsfs_out}
+        # The disk backend currently writes all three staged artifacts even
+        # when only CSF text or CSF Parquet will be published. Account for
+        # those private files on the working volume during pre-flight.
+        estimate_destinations = {
+            "csf_text": args.rcsfs_out,
+            "csf_parquet": (
+                rcsfs_parquet
+                if write_parquet
+                else working_dir / ".rcsfs-staged-csfs.parquet"
+            ),
+            "header": (
+                csfs_header
+                if write_parquet
+                else working_dir / ".rcsfs-staged-header.toml"
+            ),
+            "descriptor": (
+                descriptor_output
+                if args.generate_descriptors
+                else working_dir / ".rcsfs-staged-descriptor.parquet"
+            ),
+        }
         if args.generate_descriptors:
-            estimate_destinations.update(
-                {
-                    "csf_parquet": rcsfs_parquet,
-                    "descriptor": descriptor_output,
-                    "header": csfs_header,
-                    "descriptor_metadata": metadata,
-                }
-            )
+            estimate_destinations["descriptor_metadata"] = metadata
         # The estimate run every check itself, from the same model the
         # generation path uses: requirements that share a volume are added and
         # each phase is compared by its maximum. Only the paths are the CLI's
@@ -1184,8 +1203,9 @@ def _generate_outputs(
                     "success": False,
                     "error": conversion.get("error", "CSF conversion failed"),
                 }
-        if multiple_lists and not args.generate_descriptors:
-            publish_outputs([csf], [args.rcsfs_out])
+        if not args.generate_descriptors:
+            sources = [csf, parquet, staged_header] if write_parquet else [csf]
+            publish_outputs(sources, destinations)
             for key in (
                 "parquet_file",
                 "descriptor_file",
@@ -1194,6 +1214,9 @@ def _generate_outputs(
             ):
                 _ = stats.pop(key, None)
             stats["output_file"] = str(args.rcsfs_out)
+            if write_parquet:
+                stats["parquet_file"] = str(rcsfs_parquet)
+                stats["header_file"] = str(csfs_header)
             return stats
         shells = read_peel_subshells(staged_header)
         if args.generation_storage == "disk":
@@ -1286,6 +1309,8 @@ def _write_interactive_generation_config(
     }
     if args.json:
         values["json"] = True
+    if args.generate_parquet:
+        values["generate_parquet"] = True
     for key, value in (
         ("rcsfs_parquet", args.rcsfs_parquet),
         ("descriptor", args.descriptor),
@@ -1372,7 +1397,11 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
     if args.generation_storage is None:
         args.generation_storage = (
             "disk"
-            if multiple_lists or (args.generate_descriptors and args.config is not None)
+            if multiple_lists
+            or (
+                (args.generate_parquet or args.generate_descriptors)
+                and args.config is not None
+            )
             else "memory"
         )
     if args.generation_storage not in ("memory", "disk"):
@@ -1467,46 +1496,88 @@ def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
     steps = [
         (
             command,
+            config_index,
             cast(
                 CliArgs,
                 cast(
                     object,
-                    parse_cli_args(build_parser(), [command, "-c", str(path)]),
+                    parse_cli_args(
+                        build_parser(),
+                        [command, "-c", str(path)],
+                        config_index=config_index,
+                    ),
                 ),
             ),
         )
-        for command in commands
+        for command, config_index in commands
     ]
-    for index, (command, args) in enumerate(steps):
+    for index, (command, _, args) in enumerate(steps):
         if command != "csfs-split":
             continue
         split = cast(CsfsSplitArgs, args)
         if split.split_csfs_parquet.is_file() and split.csfs_header.is_file():
             continue
-        for earlier_command, earlier_args in reversed(steps[:index]):
+        if split.split_csfs_parquet.exists() or split.csfs_header.exists():
+            parser.error(
+                "[csfs-split] needs both its CSF Parquet and header inputs; "
+                "only one of the configured paths exists"
+            )
+        for earlier_command, _, earlier_args in reversed(steps[:index]):
             if earlier_command != "csfsgenerate":
                 continue
             generate = cast(CsfsGenerateArgs, earlier_args)
-            if not generate.generate_descriptors:
-                parser.error(
-                    "[csfs-split] needs CSF Parquet and header inputs; "
-                    "[csfsgenerate] has generate_descriptors = false"
-                )
             parquet = generate.rcsfs_parquet or generate.rcsfs_out.with_suffix(
                 ".parquet"
             )
             header = parquet.parent / f"{generate.rcsfs_out.stem}_header.toml"
             if (
-                split.split_csfs_parquet.resolve() != parquet.resolve()
-                or split.csfs_header.resolve() != header.resolve()
+                split.split_csfs_parquet.resolve() == parquet.resolve()
+                and split.csfs_header.resolve() == header.resolve()
             ):
-                parser.error(
-                    "[csfs-split] input paths do not match [csfsgenerate] "
-                    f"outputs: {parquet} and {header}"
-                )
-            break
-    for command, args in steps:
-        print(f"Running [{CONFIG_SECTIONS[command]}]...", file=sys.stderr)
+                if generate.estimate_only:
+                    parser.error(
+                        "[csfs-split] cannot consume [csfsgenerate] "
+                        "with estimate_only = true"
+                    )
+                generate.generate_parquet = True
+                break
+        else:
+            parser.error(
+                "[csfs-split] inputs are missing and do not match outputs "
+                "from an earlier [csfsgenerate] entry"
+            )
+    claimed: set[Path] = set()
+    for command, _, args in steps:
+        if command != "csfsgenerate":
+            continue
+        generate = cast(CsfsGenerateArgs, args)
+        outputs = [generate.rcsfs_out]
+        if generate.generate_parquet or generate.generate_descriptors:
+            parquet = generate.rcsfs_parquet or generate.rcsfs_out.with_suffix(
+                ".parquet"
+            )
+            outputs.extend(
+                [parquet, parquet.parent / f"{generate.rcsfs_out.stem}_header.toml"]
+            )
+        if generate.generate_descriptors:
+            descriptor = generate.descriptor or generate.rcsfs_out.with_name(
+                f"{generate.rcsfs_out.stem}_descriptors.parquet"
+            )
+            outputs.extend([descriptor, descriptor.with_suffix(".toml")])
+        for output in outputs:
+            resolved = output.resolve()
+            if resolved == path.resolve():
+                parser.error(f"[csfsgenerate] output must not overwrite {path}")
+            if resolved in claimed:
+                parser.error(f"multiple [csfsgenerate] entries write {output}")
+            claimed.add(resolved)
+    for command, config_index, args in steps:
+        label = (
+            f"{command} #{config_index + 1}"
+            if config_index is not None
+            else CONFIG_SECTIONS[command]
+        )
+        print(f"Running [{label}]...", file=sys.stderr)
         result = _run_parsed_command(args)
         if result != 0:
             return result

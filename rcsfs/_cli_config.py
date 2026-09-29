@@ -42,6 +42,7 @@ _CONFIG_TEMPLATES = {
 # j_max = 0
 # excitations = 0
 # rcsfs_out = "generated.c"
+# generate_parquet = false
 # generate_descriptors = false
 # rcsfs_parquet = "generated.parquet"
 # descriptor = "generated_descriptors.parquet"
@@ -145,13 +146,13 @@ def create_default_config(
     return "added"
 
 
-def configured_commands(path: Path) -> list[str]:
+def configured_commands(path: Path) -> list[tuple[str, int | None]]:
     """Return active command tables in TOML order for a batch invocation."""
     try:
         root = _table(tomllib.loads(path.read_text(encoding="utf-8")), "config")
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise ValueError(f"cannot read {path}: {exc}") from exc
-    commands: list[str] = []
+    commands: list[tuple[str, int | None]] = []
     seen: set[str] = set()
     for section in root:
         if section == "output" and "generate" in root:
@@ -164,7 +165,15 @@ def configured_commands(path: Path) -> list[str]:
         if command in seen:
             raise ValueError(f"configuration selects [{command}] more than once")
         seen.add(command)
-        commands.append(command)
+        if section == "csfsgenerate" and isinstance(root[section], list):
+            entries = cast(list[object], root[section])
+            if not entries:
+                raise ValueError("[[csfsgenerate]] must contain at least one entry")
+            for index, item in enumerate(entries):
+                _ = _table(item, f"csfsgenerate[{index + 1}]")
+                commands.append((command, index))
+        else:
+            commands.append((command, None))
     if not commands:
         raise ValueError(f"{path} has no active command tables")
     return commands
@@ -372,6 +381,7 @@ def _load_config(
     actions: dict[str, argparse.Action],
     *,
     explicit: bool,
+    config_index: int | None = None,
 ) -> tuple[dict[str, object], dict[str, object] | None, bool]:
     try:
         root = _table(tomllib.loads(path.read_text(encoding="utf-8")), "config")
@@ -389,6 +399,7 @@ def _load_config(
         )
         unknown = output.keys() - {
             "rcsfs_out",
+            "generate_parquet",
             "generate_descriptors",
             "rcsfs_parquet",
             "descriptor",
@@ -432,7 +443,17 @@ def _load_config(
             if explicit:
                 raise ValueError(f"{path} has no [{section}] table")
             return {}, None, False
-        values = _table(root[actual_section], actual_section)
+        raw_values: object = root[actual_section]
+        if section == "csfsgenerate" and isinstance(raw_values, list):
+            if config_index is None:
+                raise ValueError(
+                    "[[csfsgenerate]] requires the top-level 'rcsfs -c FILE' command"
+                )
+            items = cast(list[object], raw_values)
+            if config_index >= len(items):
+                raise ValueError(f"csfsgenerate entry {config_index + 1} is missing")
+            raw_values = items[config_index]
+        values = _table(raw_values, actual_section)
         generation = None
         if section == "csfsgenerate":
             values = _canonicalize(values, _GENERATOR_ALIASES, section)
@@ -466,7 +487,10 @@ def _load_config(
 
 
 def parse_cli_args(
-    parser: argparse.ArgumentParser, argv: Sequence[str] | None
+    parser: argparse.ArgumentParser,
+    argv: Sequence[str] | None,
+    *,
+    config_index: int | None = None,
 ) -> argparse.Namespace:
     tokens = list(argv) if argv is not None else sys.argv[1:]
     if not tokens or tokens[0] not in CONFIG_SECTIONS:
@@ -486,7 +510,11 @@ def parse_cli_args(
     if selected_path is not None:
         try:
             config, generation, applied = _load_config(
-                selected_path, command, actions, explicit=explicit
+                selected_path,
+                command,
+                actions,
+                explicit=explicit,
+                config_index=config_index,
             )
         except ValueError as exc:
             parser.error(str(exc))

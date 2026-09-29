@@ -643,7 +643,7 @@ def test_estimate_only_rejects_the_in_memory_path(
         == 1
     )
     captured = capfd.readouterr()
-    assert "estimate_only covers the disk descriptor path" in captured.err
+    assert "estimate_only requires disk generation storage" in captured.err
     assert set(tmp_path.iterdir()) == {config}
 
 

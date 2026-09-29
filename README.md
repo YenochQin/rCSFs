@@ -399,7 +399,7 @@ below for generating a full CSF list from Python.
 ## Command Line Interface
 
 Installing `rcsfs` also installs an `rcsfs` console script (`uv run rcsfs ...`)
-with six subcommands (`csfs-split` also accepts the older `split-active` and
+with six processing subcommands (`csfs-split` also accepts the older `split-active` and
 `rcsfsplit` spellings).
 
 ### Shared CLI configuration
@@ -411,10 +411,11 @@ table continues to use its ordinary CLI arguments (and `csfsgenerate` remains
 interactive). Explicit CLI arguments override values in the table. TOML path
 values are resolved relative to the current working directory, just like CLI
 paths; changing to another directory changes which default file is found.
-If the file does not exist, the first command run creates a commented template
-at `./rcsfs.toml`. Uncomment and edit a command table to use it on later runs.
-An explicit `--config PATH` does not create the default file, and an existing
-`rcsfs.toml` is never overwritten.
+Run `rcsfs init-config` to create a commented reference template at
+`./rcsfs.toml` without running a processing command. It does not overwrite an
+existing file. Uncomment and edit a command table to use it on later runs.
+Running `rcsfs csfsgenerate` without a configuration file still starts the
+interactive dialog.
 Malformed TOML, unknown keys in the selected table, and missing required
 parameters fail before the command starts writing outputs. Generated header
 and descriptor metadata TOML files are separate outputs and are not changed or

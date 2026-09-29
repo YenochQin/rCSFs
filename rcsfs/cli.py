@@ -176,13 +176,17 @@ def build_parser() -> argparse.ArgumentParser:
         description="Command line tools for rCSFs data processing.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    _ = subparsers.add_parser(
+        "init-config",
+        help="Create a reference rcsfs.toml in the current directory.",
+    )
 
     def add_config_argument(command_parser: argparse.ArgumentParser) -> None:
         _ = command_parser.add_argument(
             "-c",
             "--config",
             type=Path,
-            help="CLI TOML file (default: ./rcsfs.toml; creates a template if absent).",
+            help="CLI TOML file (default: ./rcsfs.toml when present).",
         )
 
     gen_descriptors = subparsers.add_parser(
@@ -1369,11 +1373,14 @@ def _run_restore_csfs(args: RestoreCsfsArgs) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     parsed_args = parse_cli_args(parser, argv)
-    if vars(parsed_args).get("config") is None:
+    if cast(str, vars(parsed_args)["command"]) == "init-config":
         try:
-            create_default_config()
+            created = create_default_config()
         except OSError as exc:
-            parser.error(f"cannot create rcsfs.toml: {exc}")
+            print(f"Cannot create rcsfs.toml: {exc}", file=sys.stderr)
+            return 1
+        print("Created rcsfs.toml" if created else "rcsfs.toml already exists")
+        return 0
     args = cast(CliArgs, cast(object, parsed_args))
 
     if args.command == "gen-descriptors":

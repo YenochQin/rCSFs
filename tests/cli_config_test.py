@@ -9,13 +9,15 @@ from rcsfs import cli
 from rcsfs._cli_config import parse_cli_args
 
 
-def test_cli_creates_editable_default_config_in_working_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_init_config_creates_editable_default_config_in_working_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli, "_run_interacting", lambda args: 0)
 
-    assert cli.main(["interacting", "reference.c", "candidates.c"]) == 0
+    assert cli.main(["init-config"]) == 0
+    assert capsys.readouterr().out == "Created rcsfs.toml\n"
 
     generated = tmp_path / "rcsfs.toml"
     contents = generated.read_text(encoding="utf-8")
@@ -29,21 +31,60 @@ def test_cli_creates_editable_default_config_in_working_directory(
         "restore-csfs",
     ):
         assert f"# [{command}]" in contents
-    assert cli.main(["interacting", "reference.c", "candidates.c"]) == 0
+    assert cli.main(["init-config"]) == 0
+    assert capsys.readouterr().out == "rcsfs.toml already exists\n"
     assert generated.read_text(encoding="utf-8") == contents
 
 
-def test_cli_does_not_replace_existing_default_config(
+def test_init_config_does_not_replace_existing_default_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     original = "# user's settings\n[interacting]\nreference = 'reference.c'\ncandidates = 'candidates.c'\n"
     default = tmp_path / "rcsfs.toml"
     default.write_text(original, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["init-config"]) == 0
+    assert default.read_text(encoding="utf-8") == original
+
+
+def test_init_config_reports_path_collision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "rcsfs.toml").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["init-config"]) == 1
+    assert "Cannot create rcsfs.toml" in capsys.readouterr().err
+
+
+def test_regular_command_does_not_create_default_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "_run_interacting", lambda args: 0)
 
-    assert cli.main(["interacting"]) == 0
-    assert default.read_text(encoding="utf-8") == original
+    assert cli.main(["interacting", "reference.c", "candidates.c"]) == 0
+    assert not (tmp_path / "rcsfs.toml").exists()
+
+
+def test_csfsgenerate_stays_interactive_without_default_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class PromptReached(Exception):
+        pass
+
+    def stop_at_prompt(message: str) -> str:
+        raise PromptReached
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "_prompt", stop_at_prompt)
+
+    with pytest.raises(PromptReached):
+        cli.main(["csfsgenerate"])
+    assert not (tmp_path / "rcsfs.toml").exists()
 
 
 def test_cli_with_explicit_config_does_not_create_default_config(

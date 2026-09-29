@@ -62,14 +62,16 @@ DEFAULT_CONFIG_TEMPLATE = """# rCSFs CLI configuration template.
 """
 
 
-def create_default_config() -> None:
-    """Create an editable template in the current directory without replacing a file."""
+def create_default_config() -> bool:
+    """Create an editable template; return false when it already exists."""
     try:
         with DEFAULT_CONFIG.open("x", encoding="utf-8") as config_file:
             _ = config_file.write(DEFAULT_CONFIG_TEMPLATE)
     except FileExistsError:
         if not DEFAULT_CONFIG.is_file():
             raise
+        return False
+    return True
 
 
 _GENERATION_KEYS = frozenset(

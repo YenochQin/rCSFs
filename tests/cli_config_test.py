@@ -16,7 +16,7 @@ def test_init_config_creates_editable_default_config_in_working_directory(
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    assert cli.main(["init-config"]) == 0
+    assert cli.main(["csfsgenerate", "init-config"]) == 0
     assert capsys.readouterr().out == "Created rcsfs.toml\n"
 
     generated = tmp_path / "rcsfs.toml"
@@ -31,7 +31,7 @@ def test_init_config_creates_editable_default_config_in_working_directory(
         "restore-csfs",
     ):
         assert f"# [{command}]" in contents
-    assert cli.main(["init-config"]) == 0
+    assert cli.main(["csfsgenerate", "init-config"]) == 0
     assert capsys.readouterr().out == "rcsfs.toml already exists\n"
     assert generated.read_text(encoding="utf-8") == contents
 
@@ -39,12 +39,12 @@ def test_init_config_creates_editable_default_config_in_working_directory(
 def test_init_config_does_not_replace_existing_default_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    original = "# user's settings\n[interacting]\nreference = 'reference.c'\ncandidates = 'candidates.c'\n"
+    original = "invalid = [\n"
     default = tmp_path / "rcsfs.toml"
     default.write_text(original, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
-    assert cli.main(["init-config"]) == 0
+    assert cli.main(["csfsgenerate", "init-config"]) == 0
     assert default.read_text(encoding="utf-8") == original
 
 
@@ -56,8 +56,32 @@ def test_init_config_reports_path_collision(
     (tmp_path / "rcsfs.toml").mkdir()
     monkeypatch.chdir(tmp_path)
 
-    assert cli.main(["init-config"]) == 1
+    assert cli.main(["csfsgenerate", "init-config"]) == 1
     assert "Cannot create rcsfs.toml" in capsys.readouterr().err
+
+
+def test_top_level_init_config_is_not_a_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["init-config"])
+
+    assert exc.value.code == 2
+    assert not (tmp_path / "rcsfs.toml").exists()
+
+
+def test_init_config_help_does_not_create_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["csfsgenerate", "init-config", "--help"])
+
+    assert exc.value.code == 0
+    assert not (tmp_path / "rcsfs.toml").exists()
 
 
 def test_regular_command_does_not_create_default_config(

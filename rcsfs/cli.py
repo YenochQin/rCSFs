@@ -26,7 +26,7 @@ from . import (
 )
 from ._types import InteractionHamiltonian, InteractionMethod
 from ._publication import PartialPublicationError, publish_outputs
-from ._cli_config import parse_cli_args
+from ._cli_config import create_default_config, parse_cli_args
 
 #: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
 _MAX_REFERENCE_CONFIGURATIONS = 100
@@ -182,7 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
             "-c",
             "--config",
             type=Path,
-            help="CLI TOML file (default: ./rcsfs.toml when present).",
+            help="CLI TOML file (default: ./rcsfs.toml; creates a template if absent).",
         )
 
     gen_descriptors = subparsers.add_parser(
@@ -1368,7 +1368,13 @@ def _run_restore_csfs(args: RestoreCsfsArgs) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = cast(CliArgs, cast(object, parse_cli_args(parser, argv)))
+    parsed_args = parse_cli_args(parser, argv)
+    if vars(parsed_args).get("config") is None:
+        try:
+            create_default_config()
+        except OSError as exc:
+            parser.error(f"cannot create rcsfs.toml: {exc}")
+    args = cast(CliArgs, cast(object, parsed_args))
 
     if args.command == "gen-descriptors":
         try:

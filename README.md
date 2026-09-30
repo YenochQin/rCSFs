@@ -423,15 +423,16 @@ the batch runner generates these automatically from a matching earlier
 `[csfsgenerate]` entry, without requesting descriptor output. For a standalone
 generation, set `generate_parquet = true` or pass `--generate-parquet` to write
 only the CSF Parquet and header alongside the CSF text.
-`csfs-split` creates its `output_dir` when needed. Processing commands replace
+Every CLI command writes final outputs in the directory where it is invoked.
+Output arguments specify filenames; paths to other output directories are
+rejected. Input paths may point to other directories. Processing commands replace
 existing output files on rerun, including files produced by `rcsfs -c`.
 Each completed file is published atomically; a set of files is not a single
 transaction. Input files cannot be used as output paths.
-`split/` is the default permanent output directory when top-level `conf` is
-used. The private `rcsfs-split-*` staging directory inside it is removed after
-the command. Set `output_dir = "."` to write split outputs beside the source;
-if an output has the same AS number as the generated raw CSF, that file is
-replaced.
+Private staging and scratch directories are created under the invocation
+directory and removed on success or failure. `output_dir`, `work_dir`,
+`keep_parquet`, and their CLI flags are no longer supported. A split output
+with the same AS number as a generated raw CSF replaces that file.
 Run `rcsfs <command> init-config` to add that command's commented reference
 table to `./rcsfs.toml` without running a processing command. For example,
 `rcsfs csfsgenerate init-config` writes only the `[csfsgenerate]` example.
@@ -453,7 +454,7 @@ The shared top-level `conf` stem and the `as` number can derive the raw CSF
 filenames. For example, this complete configuration writes
 `e1_vv1_as6raw.c`, `e1_vv1_as6raw.parquet`, and
 `e1_vv1_as6raw_header.toml`. The split step reads that Parquet/header pair and
-writes `split/e1_vv1_as1raw.c` and `split/e1_vv1_as2raw.c`:
+writes `e1_vv1_as1raw.c` and `e1_vv1_as2raw.c`:
 
 ```toml
 conf = "e1_vv1_"
@@ -469,7 +470,6 @@ excitations = 0
 
 [csfs-split]
 active_spaces = ["AS1=1s", "AS2=1s"]
-output_dir = "split"
 ```
 
 `as` identifies the generated raw space in the filename; `active_space`
@@ -477,9 +477,9 @@ remains the orbital list used for generation. `conf` is a filename stem and
 must be at the top level, before any table. It may include a trailing
 underscore, as shown. `as = 0` denotes the unexcited MR space. For split outputs,
 labels must be `AS0`, `AS1`, `AS2`, etc.
-when `conf` supplies the names. If `output_dir` is omitted, split files go in
-`split/`, keeping the source raw CSF file separate. Explicit `rcsfs_out`, `rcsfs_parquet`,
-`split_csfs_parquet`, `csfs_header`, and `output_dir` still take precedence.
+when `conf` supplies the names. Generated and split files go in the invocation
+directory. Explicit `rcsfs_out`, `rcsfs_parquet`, `split_csfs_parquet`, and
+`csfs_header` still take precedence for filenames and inputs.
 With `conf`, split filenames always use `asNraw.c`; `prefix` applies only when
 `conf` is absent. With multiple `[[csfsgenerate]]` entries, an implicit split input
 comes from the last entry.
@@ -520,7 +520,6 @@ output_csf = "calculation_zf.c"
 split_csfs_parquet = "calculation.parquet"
 csfs_header = "calculation_header.toml"
 active_spaces = ["as1=5s,4p,3d", "as2=6s,5p,4d"]
-output_dir = "split"
 
 [interacting]
 reference = "reference.c"
@@ -568,7 +567,6 @@ rcsfs_out = "second.c"
 split_csfs_parquet = "second.parquet"
 csfs_header = "second_header.toml"
 active_spaces = ["AS1=1s"]
-output_dir = "split"
 ```
 
 Here the split step causes `second.parquet` and its header to be generated;
@@ -794,11 +792,11 @@ spaces in one pass:
 
 ```bash
 rcsfs csfs-split source.parquet --header source_header.toml \
-  --output-dir results --space '_small=5s,4p,3d' \
+  --space '_small=5s,4p,3d' \
   --space '_large=7s,6p,5d,4f'
 ```
 
-This writes `results/source_small.c` and `results/source_large.c`.
+This writes `source_small.c` and `source_large.c` in the current directory.
 `rcsfs split-active` and `rcsfs rcsfsplit` are older aliases for
 `rcsfs csfs-split`. Each output is filtered
 independently, so a CSF belonging to both spaces appears in both.
@@ -809,7 +807,8 @@ relativistic partners such as `5g-` and `5g` share the `5g` maximum. Even an
 explicitly zero-occupied orbital is checked, matching GRASP's line-based
 filter and keeping every listed orbital within the output header. Input is
 read in bounded Parquet batches; a 77-million-row source is not loaded into
-RAM. Each output needs an existing parent directory and must not already
+RAM. The CLI replaces existing output files. When calling the Python API
+directly, each output needs an existing parent directory and must not already
 exist. A completed output is published atomically, but a group of outputs is
 not an all-or-nothing transaction: on a late publication failure, earlier
 completed outputs remain and are named in the error.

@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### CLI 输出与临时目录统一（2026-09-30）
+
+- 所有 CLI 最终文件固定写入运行命令的当前目录，输出参数只接受当前目录中的文件名；
+  输入文件仍可位于其他目录。`zero-first` 的默认输出也跟随运行目录。
+- 移除 `output_dir` / `--output-dir`、`work_dir` / `--work-dir`、
+  `keep_parquet` / `--keep-parquet`。所有临时目录建在当前目录，成功或失败后自动清理。
+
 ### 共享 `conf` 与 AS 层号命名（2026-09-30）
 
 - `as = 0` 和拆分标签 `AS0` 表示未激发的 MR 空间，可生成和拆分
@@ -15,8 +22,8 @@
 - 顶层 `conf` 与 `[csfsgenerate]` / `[[csfsgenerate]]` 中的 `as` 自动推导
   `{conf}as{as}raw.c` 及对应 Parquet/header；显式文件路径继续优先。
 - `[csfs-split]` 自动读取最后一个生成表的 Parquet/header，并把 `AS1`、`AS2` 等
-  输出命名为 `{conf}as1raw.c`、`{conf}as2raw.c`，默认放在 `split/`，避免覆盖生成的
-  原始 CSF 文本；仍可用显式输入和目录覆盖默认值。
+  输出命名为 `{conf}as1raw.c`、`{conf}as2raw.c`，写入运行命令的当前目录；
+  仍可指定输入文件。
 
 ### 重复运行时覆盖输出（2026-09-29）
 

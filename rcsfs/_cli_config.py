@@ -28,7 +28,8 @@ CONFIG_SECTIONS = {
 }
 _TEMPLATE_HEADER = """# rCSFs CLI configuration template.
 # Uncomment the table and edit its values before using this command.
-# Paths are relative to the directory where you run rcsfs.
+# Input paths are relative to the directory where you run rcsfs.
+# Final output filenames and temporary directories are always in that directory.
 # Command-line arguments override values in this file.
 # conf = "e1_vv1_"  # Shared filename stem, before as{number}raw.
 
@@ -75,8 +76,6 @@ _CONFIG_TEMPLATES = {
 # zero_csf = "zero.c"
 # full_csf = "generated.c"
 # output_csf = "zero_first.c"
-# keep_parquet = false
-# work_dir = "."
 # num_workers = 8
 # max_line_len = 256
 # json = false
@@ -87,7 +86,6 @@ _CONFIG_TEMPLATES = {
 # split_csfs_parquet = "generated.parquet"
 # csfs_header = "generated_header.toml"
 # active_spaces = ["AS1=2s", "AS2=3s"]
-# output_dir = "split"
 # json = false
 """.lstrip(),
     "interacting": """
@@ -553,7 +551,6 @@ def _load_config(
         if source_paths is not None:
             _ = converted.setdefault("split_csfs_parquet", source_paths[0])
             _ = converted.setdefault("csfs_header", source_paths[1])
-        _ = converted.setdefault("output_dir", Path("split"))
         converted["conf"] = conf
     return converted, generation, True
 
@@ -594,6 +591,17 @@ def parse_cli_args(
     missing = sorted(key for key in required if merged.get(key) is None)
     if missing:
         parser.error(f"{command} requires: {', '.join(missing)}")
+    output_keys = {
+        "csfsgenerate": ("rcsfs_out", "rcsfs_parquet", "descriptor"),
+        "gen-descriptors": ("output_parquet",),
+        "zero-first": ("output_csf",),
+        "interacting": ("output",),
+        "restore-csfs": ("output",),
+    }.get(CONFIG_SECTIONS[command], ())
+    for key in output_keys:
+        output = merged.get(key)
+        if isinstance(output, Path) and output.parent.resolve() != Path.cwd():
+            parser.error(f"{key} must name a file in the current directory: {output}")
     merged["config"] = selected_path if applied else None
     if command == "csfsgenerate":
         merged["generation"] = generation

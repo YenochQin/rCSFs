@@ -1,4 +1,3 @@
-import shutil
 import tomllib
 from pathlib import Path
 
@@ -732,42 +731,33 @@ def test_zero_first_replaces_existing_output(
     assert output.read_text(encoding="utf-8") == "new"
 
 
-def test_zero_first_keep_parquet_keeps_temp_dir(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize("failed", [False, True])
+def test_zero_first_cleans_local_scratch_with_external_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
 ) -> None:
     from rcsfs import cli
 
-    monkeypatch.setattr(
-        cli,
-        "convert_csfs",
-        lambda input_path, output_path, max_line_len=None, num_workers=None: {
-            "success": True,
-            "header_file": str(Path(output_path).parent / "fake_header.toml"),
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "partition_csfs",
-        lambda zero_parquet, zero_header, full_parquet, full_header, output_csf: {
-            "success": True,
-            "output_file": str(output_csf),
-        },
-    )
+    roots: list[Path] = []
+    source = tmp_path / "inputs" / "full.csf"
 
-    exit_code = cli.main(
-        ["zero-first", "zero.csf", "full.csf", "out.csf", "--keep-parquet"]
-    )
+    def convert(
+        input_path: Path, output_path: Path, **kwargs: object
+    ) -> dict[str, object]:
+        root = output_path.parent.parent
+        assert root.parent == tmp_path
+        assert root.is_dir()
+        roots.append(root)
+        return {"success": True, "header_file": str(output_path.parent / "header.toml")}
 
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    assert "Intermediate Parquet kept under:" in captured.out
-    kept_line = next(
-        line for line in captured.out.splitlines() if "kept under:" in line
-    )
-    kept_path = Path(kept_line.split("kept under:", 1)[1].strip())
-    assert kept_path.exists(), "kept temp dir should still exist after run"
-    shutil.rmtree(kept_path, ignore_errors=True)
+    def partition(*args: object) -> dict[str, object]:
+        assert args[-1] == Path("full_zf.csf")
+        return {"success": not failed, "output_file": "full_zf.csf", "error": "failed"}
+
+    monkeypatch.setattr(cli, "convert_csfs", convert)
+    monkeypatch.setattr(cli, "partition_csfs", partition)
+    assert cli.main(["zero-first", "inputs/zero.csf", str(source)]) == int(failed)
+    assert roots
+    assert all(not root.exists() for root in roots)
 
 
 def test_zero_first_propagates_partition_failure(
@@ -1034,3 +1024,6 @@ def test_interactive_generation_matches_registered_hash(
         assert result.returncode == 0, result.stdout + result.stderr
         with (work / "rcsf.out").open("rb") as output:
             assert hashlib.file_digest(output, "sha256").hexdigest() == expected_hash
+
+
+pytestmark = pytest.mark.usefixtures("cli_cwd")

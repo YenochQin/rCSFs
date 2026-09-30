@@ -283,8 +283,7 @@ def test_top_level_config_runs_generation_then_split(
         'rcsfs_out = "generated.c"\ngenerate_descriptors = true\n'
         'generation_storage = "memory"\n'
         '\n[csfs-split]\nsplit_csfs_parquet = "generated.parquet"\n'
-        'csfs_header = "generated_header.toml"\nactive_spaces = ["AS1=1s"]\n'
-        'output_dir = "split"\n',
+        'csfs_header = "generated_header.toml"\nactive_spaces = ["AS1=1s"]\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -292,7 +291,7 @@ def test_top_level_config_runs_generation_then_split(
     assert cli.main(["-c", "rcsfs.toml"]) == 0
     assert (tmp_path / "generated.c").is_file()
     assert (tmp_path / "generated.parquet").is_file()
-    assert (tmp_path / "split/generatedAS1.c").is_file()
+    assert (tmp_path / "generatedAS1.c").is_file()
 
 
 def test_top_level_config_builds_parquet_for_split_without_descriptors(
@@ -303,8 +302,7 @@ def test_top_level_config_builds_parquet_for_split_without_descriptors(
         'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
         'rcsfs_out = "generated.c"\ngenerate_descriptors = false\n'
         '\n[csfs-split]\nsplit_csfs_parquet = "generated.parquet"\n'
-        'csfs_header = "generated_header.toml"\nactive_spaces = ["AS1=1s"]\n'
-        'output_dir = "split"\n',
+        'csfs_header = "generated_header.toml"\nactive_spaces = ["AS1=1s"]\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -313,7 +311,7 @@ def test_top_level_config_builds_parquet_for_split_without_descriptors(
     assert (tmp_path / "generated.c").is_file()
     assert (tmp_path / "generated.parquet").is_file()
     assert (tmp_path / "generated_header.toml").is_file()
-    assert (tmp_path / "split/generatedAS1.c").is_file()
+    assert (tmp_path / "generatedAS1.c").is_file()
     assert not (tmp_path / "generated_descriptors.parquet").exists()
 
     outputs = [
@@ -322,7 +320,7 @@ def test_top_level_config_builds_parquet_for_split_without_descriptors(
             "generated.c",
             "generated.parquet",
             "generated_header.toml",
-            "split/generatedAS1.c",
+            "generatedAS1.c",
         )
     ]
     for output in outputs:
@@ -340,8 +338,7 @@ def test_conf_and_as_name_raw_generation_and_split_outputs(
         "[csfsgenerate]\nas = 2\ninactive_core = 0\n"
         'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
         "j_min = 0\nj_max = 0\nexcitations = 0\n"
-        '[csfs-split]\nactive_spaces = ["AS1=1s", "AS2=1s"]\n'
-        'output_dir = "split"\n',
+        '[csfs-split]\nactive_spaces = ["AS1=1s", "AS2=1s"]\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -353,12 +350,11 @@ def test_conf_and_as_name_raw_generation_and_split_outputs(
             "e1_vv1_as2raw.c",
             "e1_vv1_as2raw.parquet",
             "e1_vv1_as2raw_header.toml",
-            "split/e1_vv1_as1raw.c",
-            "split/e1_vv1_as2raw.c",
+            "e1_vv1_as1raw.c",
         )
     ]
     assert all(path.is_file() for path in outputs)
-    assert not list((tmp_path / "split").glob("rcsfs-split-*"))
+    assert not list(tmp_path.glob("rcsfs-split-*"))
     for path in outputs:
         path.write_bytes(b"old")
     assert cli.main(["-c", "rcsfs.toml"]) == 0
@@ -384,7 +380,6 @@ def test_as_zero_names_mr_generation_and_split_outputs(
         "mr_as0raw.c",
         "mr_as0raw.parquet",
         "mr_as0raw_header.toml",
-        "split/mr_as0raw.c",
     ):
         assert (tmp_path / name).is_file()
 
@@ -408,7 +403,7 @@ def test_conf_and_as_use_last_generator_for_implicit_split_input(
     assert cli.main(["-c", "rcsfs.toml"]) == 0
     assert (tmp_path / "calc_as1raw.c").is_file()
     assert (tmp_path / "calc_as2raw.parquet").is_file()
-    assert (tmp_path / "split/calc_as1raw.c").is_file()
+    assert (tmp_path / "calc_as1raw.c").is_file()
     assert not (tmp_path / "calc_as1raw.parquet").exists()
 
 
@@ -427,8 +422,8 @@ def test_conf_naming_works_with_separate_commands(
     assert cli.main(["csfsgenerate", "-c"]) == 0
     assert cli.main(["csfs-split"]) == 0
     assert (tmp_path / "calc_as2raw.parquet").is_file()
-    assert (tmp_path / "split/calc_as1raw.c").is_file()
-    assert (tmp_path / "split/calc_as2raw.c").is_file()
+    assert (tmp_path / "calc_as1raw.c").is_file()
+    assert (tmp_path / "calc_as2raw.c").is_file()
     assert (tmp_path / "calc_as2raw.c").is_file()
 
 
@@ -439,7 +434,7 @@ def test_conf_naming_respects_explicit_input_paths(tmp_path: Path) -> None:
         'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
         'j_min = 0\nj_max = 0\nexcitations = 0\nrcsfs_out = "custom.c"\n'
         '[csfs-split]\nactive_spaces = ["AS1=1s"]\n'
-        'output_dir = "split"\nprefix = "custom"\n',
+        'prefix = "custom"\n',
         encoding="utf-8",
     )
     generated = parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c", str(config)])
@@ -448,7 +443,7 @@ def test_conf_naming_respects_explicit_input_paths(tmp_path: Path) -> None:
     assert generated.rcsfs_out == Path("custom.c")
     assert split.split_csfs_parquet == Path("custom.parquet")
     assert split.csfs_header == Path("custom_header.toml")
-    assert list(cli._split_targets(split)) == [Path("split/calc_as1raw.c")]
+    assert list(cli._split_targets(split)) == [Path("calc_as1raw.c")]
 
     config.write_text(
         config.read_text(encoding="utf-8").replace(
@@ -470,12 +465,12 @@ def test_conf_naming_is_not_replaced_by_legacy_split_prefix(tmp_path: Path) -> N
         'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
         "j_min = 0\nj_max = 0\nexcitations = 0\n"
         '[csfs-split]\nactive_spaces = ["AS1=1s"]\n'
-        'output_dir = "split"\nprefix = "split"\n',
+        'prefix = "split"\n',
         encoding="utf-8",
     )
 
     args = parse_cli_args(cli.build_parser(), ["csfs-split", "-c", str(config)])
-    assert list(cli._split_targets(args)) == [Path("split/calc_as1raw.c")]
+    assert list(cli._split_targets(args)) == [Path("calc_as1raw.c")]
 
 
 @pytest.mark.parametrize(
@@ -520,8 +515,7 @@ def test_top_level_config_runs_repeated_generators_in_order(
         'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
         'j_min = 0\nj_max = 0\nexcitations = 0\nrcsfs_out = "second.c"\n'
         '\n[csfs-split]\nsplit_csfs_parquet = "second.parquet"\n'
-        'csfs_header = "second_header.toml"\nactive_spaces = ["AS1=1s"]\n'
-        'output_dir = "split"\n',
+        'csfs_header = "second_header.toml"\nactive_spaces = ["AS1=1s"]\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -531,7 +525,7 @@ def test_top_level_config_runs_repeated_generators_in_order(
     assert not (tmp_path / "first.parquet").exists()
     assert (tmp_path / "second.c").is_file()
     assert (tmp_path / "second.parquet").is_file()
-    assert (tmp_path / "split/secondAS1.c").is_file()
+    assert (tmp_path / "secondAS1.c").is_file()
     assert not (tmp_path / "second_descriptors.parquet").exists()
 
 
@@ -560,8 +554,7 @@ def test_top_level_config_rejects_unmatched_split_inputs_before_running(
         'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
         'rcsfs_out = "generated.c"\n'
         '\n[csfs-split]\nsplit_csfs_parquet = "other.parquet"\n'
-        'csfs_header = "other_header.toml"\nactive_spaces = ["AS1=1s"]\n'
-        'output_dir = "split"\n',
+        'csfs_header = "other_header.toml"\nactive_spaces = ["AS1=1s"]\n',
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -690,17 +683,16 @@ def test_cli_help_does_not_create_default_config(
         ),
         (
             "zero-first",
-            '[zero-first]\nzero_csf = "zero.c"\nfull_csf = "full.c"\nkeep_parquet = true\n',
-            {"zero_csf": Path("zero.c"), "keep_parquet": True},
+            '[zero-first]\nzero_csf = "zero.c"\nfull_csf = "full.c"\n',
+            {"zero_csf": Path("zero.c")},
         ),
         (
             "csfs-split",
-            '[csfs-split]\nsplit_csfs_parquet = "all.parquet"\ncsfs_header = "all_header.toml"\nactive_spaces = ["as1=5s,4p", "as2=6s,5p"]\noutput_dir = "split"\n',
+            '[csfs-split]\nsplit_csfs_parquet = "all.parquet"\ncsfs_header = "all_header.toml"\nactive_spaces = ["as1=5s,4p", "as2=6s,5p"]\n',
             {
                 "split_csfs_parquet": Path("all.parquet"),
                 "csfs_header": Path("all_header.toml"),
                 "active_spaces": ["as1=5s,4p", "as2=6s,5p"],
-                "output_dir": Path("split"),
             },
         ),
         (
@@ -744,14 +736,13 @@ def test_alias_and_explicit_flags_override_toml(
 ) -> None:
     (tmp_path / "rcsfs.toml").write_text(
         '[csfs-split]\nsplit_csfs_parquet = "all.parquet"\ncsfs_header = "head.toml"\n'
-        'active_spaces = ["as1=5s"]\noutput_dir = "from_toml"\njson = true\n'
+        'active_spaces = ["as1=5s"]\njson = true\n'
     )
     monkeypatch.chdir(tmp_path)
     args = parse_cli_args(
         cli.build_parser(),
-        ["rcsfsplit", "--output-dir", "from_cli", "--space", "as2=6s"],
+        ["rcsfsplit", "--space", "as2=6s"],
     )
-    assert args.output_dir == Path("from_cli")
     assert args.active_spaces == ["as2=6s"]
     assert args.json is True
 
@@ -823,7 +814,7 @@ def test_user_named_generation_and_split_sections_share_one_file(
         '[csfs-split]\nsplit_csfs_parquet = "rcsfs_3exc.parquet"\n'
         'csfs_header = "rcsfs_3exc_header.toml"\n'
         'active_spaces = ["AS5=5s,5p,5d,5f,5g", "AS6=6s,6p,6d,6f,6g"]\n'
-        'output_dir = "split"\n'
+        ""
     )
     monkeypatch.chdir(tmp_path)
     generation = parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c"])
@@ -908,7 +899,7 @@ def test_previous_flat_and_split_tables_still_parse(tmp_path: Path) -> None:
         'output = "old.c"\nparquet = "old.parquet"\n'
         'descriptor_parquet = "old_descriptors.parquet"\n'
         '[split-active]\ninput_parquet = "old.parquet"\nheader = "old_header.toml"\n'
-        'space = ["AS1=1s"]\noutput_dir = "split"\n'
+        'space = ["AS1=1s"]\n'
     )
     generation = parse_cli_args(
         cli.build_parser(), ["csfsgenerate", "-c", str(previous)]
@@ -932,3 +923,6 @@ def test_conflicting_old_and_new_names_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc:
         parse_cli_args(cli.build_parser(), ["csfsgenerate", "-c", str(config)])
     assert exc.value.code == 2
+
+
+pytestmark = pytest.mark.usefixtures("cli_cwd")

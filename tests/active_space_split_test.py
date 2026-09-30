@@ -52,8 +52,6 @@ def test_split_active_cli_uses_grasp_style_labels(tmp_path: Path, command: str) 
                 str(parquet),
                 "--header",
                 str(header),
-                "--output-dir",
-                str(tmp_path),
                 active_space_flag,
                 "_small=5s,5g",
                 active_space_flag,
@@ -75,8 +73,6 @@ def test_split_active_cli_rejects_bad_labels_before_writing(tmp_path: Path) -> N
                 str(parquet),
                 "--header",
                 str(header),
-                "--output-dir",
-                str(tmp_path),
                 "--space",
                 "../outside=5s,5g",
             ]
@@ -95,7 +91,6 @@ def test_csfs_split_reads_new_default_toml(
         f'split_csfs_parquet = "{parquet.name}"\n'
         f'csfs_header = "{header.name}"\n'
         'active_spaces = ["_small=5s,5g", "_large=5s,15g"]\n'
-        'output_dir = "."\n'
     )
     monkeypatch.chdir(tmp_path)
     assert main(["csfs-split"]) == 0
@@ -103,7 +98,7 @@ def test_csfs_split_reads_new_default_toml(
     assert (tmp_path / "source_large.c").exists()
 
 
-def test_csfs_split_creates_output_directory(
+def test_csfs_split_rejects_removed_output_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     parquet, header = _source(tmp_path)
@@ -117,5 +112,9 @@ def test_csfs_split_creates_output_directory(
     )
     monkeypatch.chdir(tmp_path)
 
-    assert main(["csfs-split"]) == 0
-    assert (tmp_path / "split/nested/sourceAS1.c").is_file()
+    with pytest.raises(SystemExit):
+        main(["csfs-split"])
+    assert not (tmp_path / "split").exists()
+
+
+pytestmark = pytest.mark.usefixtures("cli_cwd")

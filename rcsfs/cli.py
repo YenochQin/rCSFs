@@ -70,8 +70,6 @@ class ZeroFirstArgs(Protocol):
     zero_csf: Path
     full_csf: Path
     output_csf: Path | None
-    keep_parquet: bool
-    work_dir: Path | None
     num_workers: int | None
     max_line_len: int
     json: bool
@@ -84,7 +82,6 @@ class CsfsSplitArgs(Protocol):
     split_csfs_parquet: Path
     csfs_header: Path
     active_spaces: list[str]
-    output_dir: Path
     prefix: str | None
     json: bool
 
@@ -179,7 +176,7 @@ def _parse_positive_int(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rcsfs",
-        description="Command line tools for rCSFs data processing.",
+        description="rCSFs data processing. Final outputs and temporary directories are placed in the current directory.",
     )
     _ = parser.add_argument(
         "-c",
@@ -284,18 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
         "output_csf",
         nargs="?",
         type=Path,
-        help="Destination CSF file. Default: {full_stem}_zf.csf beside the full input.",
-    )
-    _ = zero_first.add_argument(
-        "--keep-parquet",
-        action="store_true",
-        help="Keep intermediate Parquet + header TOML files (default: clean up).",
-    )
-    _ = zero_first.add_argument(
-        "--work-dir",
-        type=Path,
-        default=None,
-        help="Directory for intermediate Parquet files. Default: system temp dir.",
+        help="Destination filename in the current directory (default: {full_stem}_zf.csf).",
     )
     _ = zero_first.add_argument(
         "--num-workers",
@@ -341,12 +327,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="LABEL=5s,4p,3d",
         help="Output label and maximum orbitals; repeat for each active space.",
-    )
-    _ = split_active.add_argument(
-        "--output-dir",
-        required=True,
-        type=Path,
-        help="Existing directory for output CSF text files.",
     )
     _ = split_active.add_argument(
         "--prefix",
@@ -688,18 +668,14 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
     output_path = (
         args.output_csf
         if args.output_csf is not None
-        else full_path.with_name(f"{full_path.stem}_zf.csf")
+        else Path(f"{full_path.stem}_zf.csf")
     )
 
     if output_path.resolve() in {zero_path.resolve(), full_path.resolve()}:
         print("Partition output must not overwrite an input file", file=sys.stderr)
         return 1
 
-    base_dir = (
-        args.work_dir if args.work_dir is not None else Path(tempfile.gettempdir())
-    )
-    _ = base_dir.mkdir(parents=True, exist_ok=True)
-    root = Path(tempfile.mkdtemp(prefix="rcsfs-zero-first-", dir=str(base_dir)))
+    root = Path(tempfile.mkdtemp(prefix="rcsfs-zero-first-", dir=str(Path.cwd())))
 
     try:
         zero_dir = root / "zero"
@@ -725,9 +701,6 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
             publish_outputs([staged_output], [output_path], overwrite=True)
             stats["output_file"] = str(output_path)
 
-        if args.keep_parquet:
-            print(f"Intermediate Parquet kept under: {root}")
-
         if args.json:
             json.dump(stats, sys.stdout, indent=2, sort_keys=True)
             _ = sys.stdout.write("\n")
@@ -742,8 +715,7 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     finally:
-        if not args.keep_parquet:
-            shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _split_targets(args: CsfsSplitArgs) -> dict[Path, str]:
@@ -769,7 +741,7 @@ def _split_targets(args: CsfsSplitArgs) -> dict[Path, str]:
             name = f"{conf}as{int(match.group(1))}raw.c"
         else:
             name = f"{prefix}{label}.c"
-        targets[args.output_dir / name] = orbitals
+        targets[Path(name)] = orbitals
     if len(targets) != len(args.active_spaces):
         raise ValueError("active-space labels produce duplicate output paths")
     return targets
@@ -777,8 +749,6 @@ def _split_targets(args: CsfsSplitArgs) -> dict[Path, str]:
 
 def _run_csfs_split(args: CsfsSplitArgs) -> int:
     try:
-        if args.output_dir.exists() and not args.output_dir.is_dir():
-            raise ValueError(f"output path is not a directory: {args.output_dir}")
         targets = _split_targets(args)
         if not args.split_csfs_parquet.is_file():
             raise FileNotFoundError(
@@ -789,9 +759,8 @@ def _run_csfs_split(args: CsfsSplitArgs) -> int:
         inputs = {args.split_csfs_parquet.resolve(), args.csfs_header.resolve()}
         if any(path.resolve() in inputs for path in targets):
             raise ValueError("split output must not overwrite an input file")
-        args.output_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
-            prefix="rcsfs-split-", dir=str(args.output_dir)
+            prefix="rcsfs-split-", dir=str(Path.cwd())
         ) as directory:
             staged_targets: dict[str | Path, str] = {
                 Path(directory) / Path(path).name: orbitals
@@ -1650,8 +1619,7 @@ def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
         elif command == "zero-first":
             partition = cast(ZeroFirstArgs, args)
             other_outputs = [
-                partition.output_csf
-                or partition.full_csf.with_name(f"{partition.full_csf.stem}_zf.csf")
+                partition.output_csf or Path(f"{partition.full_csf.stem}_zf.csf")
             ]
         elif command == "interacting":
             other_outputs = [cast(InteractingArgs, args).output]

@@ -251,7 +251,7 @@ def test_normalize_path_tolerates_normalization_errors(tmp_path: Path) -> None:
     ],
 )
 def test_generated_descriptors_match_text_pipeline(
-    tmp_path: Path, transcript: str
+    tmp_path: Path, transcript: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import tomllib
 
@@ -260,6 +260,7 @@ def test_generated_descriptors_match_text_pipeline(
     for normalize in (False, True):
         work = tmp_path / str(normalize)
         work.mkdir()
+        monkeypatch.chdir(work)
         csf = work / "out.c"
         from rcsfs import cli
 
@@ -317,7 +318,9 @@ def test_generated_descriptors_match_text_pipeline(
         )
 
 
-def test_restore_csfs_cli_roundtrip(tmp_path: Path) -> None:
+def test_restore_csfs_cli_roundtrip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """V2 descriptors round-trip through `rcsfs restore-csfs` byte for byte.
 
     Built from a generator transcript rather than `fixtures/complete.csf`:
@@ -326,6 +329,8 @@ def test_restore_csfs_cli_roundtrip(tmp_path: Path) -> None:
     not a legal V2 record.
     """
     from rcsfs import cli
+
+    monkeypatch.chdir(tmp_path)
 
     transcript = "* ! Orbital order\n0\n2p(2,*)\n\n3s,3p,3d\n0,4\n2\nn\n"
     source = tmp_path / "generated.c"
@@ -470,9 +475,13 @@ def test_disk_generation_rejects_budget_before_unbounded_bucket_buffers(
         )
 
 
-def test_config_generation_uses_disk_v2_pipeline(tmp_path: Path) -> None:
+def test_config_generation_uses_disk_v2_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A descriptor-producing TOML run uses bounded disk generation by default."""
     from rcsfs import cli
+
+    monkeypatch.chdir(tmp_path)
 
     csf = tmp_path / "calculation.c"
     parquet = tmp_path / "calculation.parquet"

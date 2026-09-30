@@ -761,3 +761,6 @@ def test_cli_accepts_the_unchecked_space_opt_out(
     # Space is measurable here, so the checks still ran and still passed.
     assert payload["space_checks"]
     assert all(check["sufficient"] is True for check in payload["space_checks"])
+
+
+pytestmark = pytest.mark.usefixtures("cli_cwd")

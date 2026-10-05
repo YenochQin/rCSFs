@@ -468,8 +468,9 @@ j_min = 0
 j_max = 0
 excitations = 0
 
-[csfs-split]
-active_spaces = ["AS1=1s", "AS2=1s"]
+[csfs-split.active_spaces]
+AS1 = "1s"
+AS2 = "1s"
 ```
 
 `as` identifies the generated raw space in the filename; `active_space`
@@ -483,6 +484,24 @@ directory. Explicit `rcsfs_out`, `rcsfs_parquet`, `split_csfs_parquet`, and
 With `conf`, split filenames always use `asNraw.c`; `prefix` applies only when
 `conf` is absent. With multiple `[[csfsgenerate]]` entries, an implicit split input
 comes from the last entry.
+
+Active spaces can be written as a subtable, with one orbital range per label:
+
+```toml
+[csfs-split]
+# Optional explicit input filenames go here, before the subtable.
+
+[csfs-split.active_spaces]
+AS0 = "3s,3p,3d,4s"
+AS1 = "4s,4p,4d,4f"
+AS2 = "5s,5p,5d,5f,5g"
+AS3 = "6s,6p,6d,6f,6g,6h"
+```
+
+Entries are processed in the order written. The existing array form, such as
+`active_spaces = ["AS1=4s,4p,4d,4f", "AS2=5s,5p,5d,5f,5g"]`, remains supported;
+use either form once per split table. Explicit `--space` arguments replace the
+configured spaces. `init-config` uses the subtable form.
 Run the complete example with `rcsfs -c rcsfs.toml`. To run generation and
 splitting as separate commands, set `generate_parquet = true` in
 `[csfsgenerate]`, then run `rcsfs csfsgenerate -c` followed by

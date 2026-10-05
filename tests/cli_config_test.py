@@ -362,15 +362,21 @@ def test_conf_and_as_name_raw_generation_and_split_outputs(
     assert config.read_text(encoding="utf-8").startswith('conf = "e1_vv1_"')
 
 
+@pytest.mark.parametrize(
+    "spaces",
+    [
+        '[csfs-split]\nactive_spaces = ["AS0=1s"]\n',
+        '[csfs-split.active_spaces]\nAS0 = "1s"\n',
+    ],
+)
 def test_as_zero_names_mr_generation_and_split_outputs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spaces: str
 ) -> None:
     (tmp_path / "rcsfs.toml").write_text(
         'conf = "mr_"\n'
         "[csfsgenerate]\nas = 0\ninactive_core = 0\n"
         'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
-        "j_min = 0\nj_max = 0\nexcitations = 0\n"
-        '[csfs-split]\nactive_spaces = ["AS0=1s"]\n',
+        "j_min = 0\nj_max = 0\nexcitations = 0\n" + spaces,
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -382,6 +388,54 @@ def test_as_zero_names_mr_generation_and_split_outputs(
         "mr_as0raw_header.toml",
     ):
         assert (tmp_path / name).is_file()
+
+
+@pytest.mark.parametrize("section", ["csfs-split", "split-active"])
+@pytest.mark.parametrize("command", ["csfs-split", "split-active", "rcsfsplit"])
+def test_active_space_table_preserves_order_and_cli_override(
+    tmp_path: Path, section: str, command: str
+) -> None:
+    config = tmp_path / "rcsfs.toml"
+    config.write_text(
+        f'[{section}]\nsplit_csfs_parquet = "all.parquet"\n'
+        'csfs_header = "head.toml"\njson = true\n'
+        f'[{section}.active_spaces]\nAS3 = "6s,6p"\nAS0 = "3s,3p"\nAS1 = "4s,4p"\n',
+        encoding="utf-8",
+    )
+    args = parse_cli_args(cli.build_parser(), [command, "-c", str(config)])
+    assert args.active_spaces == ["AS3=6s,6p", "AS0=3s,3p", "AS1=4s,4p"]
+    assert args.json is True
+    args = parse_cli_args(
+        cli.build_parser(), [command, "-c", str(config), "--space", "AS2=5s"]
+    )
+    assert args.active_spaces == ["AS2=5s"]
+
+
+@pytest.mark.parametrize(
+    "entries, error",
+    [
+        ("", "nonempty table"),
+        ('AS0 = ""', "active_spaces.AS0"),
+        ('AS0 = "   "', "active_spaces.AS0"),
+        ("AS0 = 1", "active_spaces.AS0"),
+        ('AS0 = ["1s"]', "active_spaces.AS0"),
+        ('"../AS0" = "1s"', "invalid active_spaces label"),
+    ],
+)
+def test_invalid_active_space_table_fails_before_processing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], entries: str, error: str
+) -> None:
+    config = tmp_path / "rcsfs.toml"
+    config.write_text(
+        '[csfs-split]\nsplit_csfs_parquet = "all.parquet"\n'
+        'csfs_header = "head.toml"\n[csfs-split.active_spaces]\n' + entries + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["-c", str(config)])
+    assert exc.value.code == 2
+    assert error in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == [config]
 
 
 def test_conf_and_as_use_last_generator_for_implicit_split_input(

@@ -85,8 +85,11 @@ _CONFIG_TEMPLATES = {
 # [csfs-split]
 # split_csfs_parquet = "generated.parquet"
 # csfs_header = "generated_header.toml"
-# active_spaces = ["AS1=2s", "AS2=3s"]
 # json = false
+# [csfs-split.active_spaces]
+# AS0 = "1s"
+# AS1 = "2s"
+# AS2 = "3s"
 """.lstrip(),
     "interacting": """
 
@@ -252,6 +255,20 @@ def _sparse_arguments(
 
 
 def _value(key: str, value: object, action: argparse.Action) -> object:
+    if key == "active_spaces" and isinstance(value, dict):
+        spaces = cast(dict[str, object], value)
+        if not spaces:
+            raise ValueError("active_spaces must be a nonempty table or array")
+        entries: list[str] = []
+        for label, orbitals in spaces.items():
+            if re.fullmatch(r"[A-Za-z0-9_-]+", label) is None:
+                raise ValueError(f"invalid active_spaces label: {label!r}")
+            if not isinstance(orbitals, str) or not orbitals.strip():
+                raise ValueError(
+                    f"active_spaces.{label} must be a nonempty orbital string"
+                )
+            entries.append(f"{label}={orbitals}")
+        return entries
     if action.nargs == 0 and cast(object, action.const) is True:
         if type(value) is not bool:
             raise ValueError(f"{key} must be a boolean")

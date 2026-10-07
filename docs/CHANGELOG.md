@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### 磁盘生成描述符绑定源 header（2026-10-07）
+
+- 磁盘生成的最终 V2 描述符自动记录 `source_header_sha256` 与
+  `source_header_filename`，单参考列表和多列表合并均使用已写完的 header。
+- `[csfsgenerate]` 的 `generate_descriptors = true` 可直接生成满足下游 ML
+  哈希校验的描述符，无需再运行 `gen-descriptors`；描述符数值与行序不变。
+- 配置了顶层 `conf` 时，省略 `descriptor` 默认输出 `{conf}_desc.parquet`；
+  显式 TOML 路径或命令行参数仍优先。无需同时设置 `generate_parquet = true`。
+- 补充磁盘/内存 CLI 发布、重复生成更新绑定、直接 API 与 header 改动拒绝的回归测试。
+
 ### J 块拆分（2026-01-21）
 
 - 新增 `rcsfs jsplit` 命令（别名 `split-j`、`rasfsplit`）与 Python API

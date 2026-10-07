@@ -15,6 +15,7 @@ pub(crate) const ROW_GROUP_ROWS: usize = 8_192;
 
 pub(crate) mod descriptor {
     use std::io::Write;
+    use std::path::Path;
 
     use anyhow::{Context, Result};
     use arrow::record_batch::RecordBatch;
@@ -25,9 +26,29 @@ pub(crate) mod descriptor {
     use rayon::prelude::*;
 
     use crate::csf_generation::ResourceBudget;
-    use crate::descriptor_schema::{DescriptorLayout, output_kv_metadata};
+    use crate::descriptor_schema::{DescriptorLayout, hash_header_file, output_kv_metadata};
 
     use super::ROW_GROUP_ROWS;
+
+    /// Bind published descriptors to the completed header's exact bytes.
+    /// Header-less intermediate merges can omit the binding explicitly.
+    pub(crate) fn metadata(
+        layout: DescriptorLayout,
+        peel_subshells: &[String],
+        header_path: Option<&Path>,
+    ) -> Result<Vec<KeyValue>> {
+        let header_sha256 = header_path.map(hash_header_file).transpose()?;
+        let header_filename = header_path
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str());
+        Ok(output_kv_metadata(
+            layout,
+            peel_subshells,
+            false,
+            header_sha256.as_deref(),
+            header_filename,
+        ))
+    }
 
     pub(crate) fn properties(
         layout: DescriptorLayout,
@@ -36,8 +57,9 @@ pub(crate) mod descriptor {
         unique_count: usize,
         duplicate_count: usize,
         block_lengths: &[usize],
+        header_path: Option<&Path>,
     ) -> Result<WriterProperties> {
-        let mut metadata = output_kv_metadata(layout, peel_subshells, false, None, None);
+        let mut metadata = metadata(layout, peel_subshells, header_path)?;
         metadata.extend([
             KeyValue::new(
                 "generated_record_count".to_owned(),

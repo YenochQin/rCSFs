@@ -485,6 +485,13 @@ With `conf`, split filenames always use `asNraw.c`; `prefix` applies only when
 `conf` is absent. With multiple `[[csfsgenerate]]` entries, an implicit split input
 comes from the last entry.
 
+With top-level `conf`, `generate_descriptors = true` also writes the descriptor
+to `{conf}_desc.parquet` by default, with its source header hash. It includes CSF
+Parquet/header output, so `generate_parquet = true` is unnecessary. An explicit
+`descriptor` or `--descriptor` overrides the filename; without `conf`, it remains
+`{csf_stem}_descriptors.parquet`. Multiple generation entries that export
+descriptors need distinct explicit filenames when they share one `conf`.
+
 Active spaces can be written as a subtable, with one orbital range per label:
 
 ```toml
@@ -702,8 +709,7 @@ With `--json`, the result also contains per-stage wall/CPU timing and logical
 byte counters in `stage_stats`, together with managed-memory counters in
 `resource_stats`. The memory budget does not cap RSS, allocator overhead, or
 thread stacks.
-The interactive in-memory compatibility path remains separate and still emits
-legacy V1 descriptors; it is not the bounded disk path described here.
+Both the interactive memory backend and the disk backend emit reversible V2 descriptors.
 
 ### `rcsfs gen-descriptors` — descriptor Parquet from a CSF Parquet file
 

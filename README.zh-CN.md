@@ -358,7 +358,7 @@ uv run cargo run --release --example generate_csfs -- \
 
 ### `rcsfs csfsgenerate` —— 生成新的 CSF 列表
 
-除了交互式问答外，也可以使用 TOML 配置进行可复现的批处理。默认只生成 CSF 文本；将 `generate_descriptors` 设为 `true` 后，还会生成 CSF Parquet、header TOML、描述符 Parquet 和描述符 TOML sidecar。CSV 描述符输出不再支持。TOML/config 描述符运行默认使用 disk backend，直接写出可逆的 **V2 描述符**，不会自动回退到 V1；V2 不支持 `normalize=true`。可在 `[generate]` 中设置 `memory_budget_mib`，或使用 `--memory-budget-mib`，限制受管内存预算。使用 `--json` 时还会返回阶段耗时、逻辑字节数和资源统计。交互式 in-memory 兼容路径仍使用旧 V1，不属于这条受管磁盘路径。
+除了交互式问答外，也可以使用 TOML 配置进行可复现的批处理。默认只生成 CSF 文本；将 `generate_descriptors` 设为 `true` 后，还会生成 CSF Parquet、header TOML、描述符 Parquet 和描述符 TOML sidecar。CSV 描述符输出不再支持。TOML/config 描述符运行默认使用 disk backend，直接写出可逆的 **V2 描述符**，不会自动回退到 V1；V2 不支持 `normalize=true`。可在 `[generate]` 中设置 `memory_budget_mib`，或使用 `--memory-budget-mib`，限制受管内存预算。使用 `--json` 时还会返回阶段耗时、逻辑字节数和资源统计。交互式 memory 路径也生成可逆 V2 描述符。
 
 ```toml
 [generate]
@@ -380,6 +380,12 @@ normalize = false
 ```
 
 运行：`uv run rcsfs csfsgenerate --config generation.toml`。
+
+现代 `[csfsgenerate]` 配置若有顶层 `conf`，只需设置 `generate_descriptors = true`，
+描述符默认输出为 `{conf}_desc.parquet`，并自动生成 CSF Parquet/header 和记录 header 哈希。
+无需填写 `descriptor` 或 `generate_parquet = true`；显式 `descriptor` 或命令行 `--descriptor`
+仍优先。没有 `conf` 时沿用 `{csf_stem}_descriptors.parquet`。多个生成表共用一个 `conf` 时，
+若都导出描述符，须显式指定不同文件名以避免输出冲突。
 
 ### `rcsfs gen-descriptors` —— 从 CSF Parquet 生成描述符 Parquet
 

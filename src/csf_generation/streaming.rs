@@ -39,7 +39,7 @@ use super::{
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
 use crate::complete_csf::OccupiedSubshell;
 use crate::descriptor_schema::{
-    DescriptorLayout, DescriptorVersion, output_kv_metadata, output_schema, validate_record,
+    DescriptorLayout, DescriptorVersion, output_schema, validate_record,
 };
 use crate::descriptor_v2::write_feature_row;
 
@@ -525,6 +525,7 @@ fn generate_disk_outputs_from_requests(
         descriptor_output,
         csf_output,
         csf_parquet_output,
+        header_output,
         options.threads,
     )?;
     let descriptor_bytes = final_stats.descriptor_bytes;
@@ -1213,6 +1214,7 @@ fn generate_v2_descriptor_segments_with_peel(
 pub(crate) fn merge_v2_descriptor_segments(
     generated: &SegmentGeneration,
     output_path: &Path,
+    header_path: Option<&Path>,
 ) -> Result<SegmentMergeStats> {
     ensure!(
         !generated.segments.is_empty(),
@@ -1236,13 +1238,11 @@ pub(crate) fn merge_v2_descriptor_segments(
         )
         .set_dictionary_enabled(true)
         .set_max_row_group_row_count(Some(crate::csf_output::ROW_GROUP_ROWS))
-        .set_key_value_metadata(Some(output_kv_metadata(
+        .set_key_value_metadata(Some(crate::csf_output::descriptor::metadata(
             generated.layout,
             &generated.peel_subshells,
-            false,
-            None,
-            None,
-        )))
+            header_path,
+        )?))
         .build();
     let (temporary, file) = create_temporary_output(output_path)?;
     let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))
@@ -1527,6 +1527,7 @@ fn generated_count(block_lengths: &[usize]) -> usize {
 pub(crate) fn merge_v2_deduplicated_segments(
     deduplicated: &DeduplicatedSegments,
     output_path: &Path,
+    header_path: Option<&Path>,
 ) -> Result<SegmentMergeStats> {
     ensure!(
         !output_path.exists(),
@@ -1546,6 +1547,7 @@ pub(crate) fn merge_v2_deduplicated_segments(
         deduplicated.unique_count,
         deduplicated.duplicate_count,
         &deduplicated.block_lengths,
+        header_path,
     )?;
     let (temporary, file) = create_temporary_output(output_path)?;
     let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))
@@ -3111,7 +3113,7 @@ mod tests {
                 .iter()
                 .filter(|task| matches!(task.span, TaskSpan::StatePrefixes { .. }))
                 .count();
-            let merge = merge_v2_descriptor_segments(&generated, &output).unwrap();
+            let merge = merge_v2_descriptor_segments(&generated, &output, None).unwrap();
             assert_eq!(merge.record_count, generated.record_count);
             results.push((
                 read_rows(&output).unwrap(),
@@ -3219,7 +3221,7 @@ mod tests {
         .unwrap();
         fs::remove_file(&generated.segments[0].path).unwrap();
         let output = root.join("descriptors.parquet");
-        assert!(merge_v2_descriptor_segments(&generated, &output).is_err());
+        assert!(merge_v2_descriptor_segments(&generated, &output, None).is_err());
         assert!(!output.exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -3260,7 +3262,7 @@ mod tests {
         )
         .unwrap();
         let baseline_output = root.join("baseline.parquet");
-        merge_v2_descriptor_segments(&generated, &baseline_output).unwrap();
+        merge_v2_descriptor_segments(&generated, &baseline_output, None).unwrap();
         let baseline_rows = read_rows(&baseline_output).unwrap();
 
         let duplicate = copy_segment_into_later_range(
@@ -3300,7 +3302,7 @@ mod tests {
         assert_eq!(deduplicated.unique_count, baseline_rows.len());
         assert_eq!(deduplicated.duplicate_count, duplicate.record_count);
         let output = root.join("unique.parquet");
-        let merge = merge_v2_deduplicated_segments(&deduplicated, &output).unwrap();
+        let merge = merge_v2_deduplicated_segments(&deduplicated, &output, None).unwrap();
         assert_eq!(merge.record_count, baseline_rows.len());
         assert_eq!(read_rows(&output).unwrap(), baseline_rows);
         fs::remove_dir_all(root).unwrap();
@@ -3507,7 +3509,7 @@ mod tests {
         .unwrap();
         fs::remove_file(&generated.segments[0].path).unwrap();
         let output = root.join("unique.parquet");
-        assert!(merge_v2_deduplicated_segments(&deduplicated, &output).is_err());
+        assert!(merge_v2_deduplicated_segments(&deduplicated, &output, None).is_err());
         assert!(!output.exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -3594,6 +3596,7 @@ mod tests {
                     &descriptors,
                     &csf,
                     &csf_parquet,
+                    &directory.join("header.toml"),
                     Some(2),
                 )
                 .unwrap();
@@ -3617,7 +3620,12 @@ mod tests {
                 let pass: u128 = entries.iter().map(|(_, millis, _)| millis).sum();
                 assert!(pass <= stats.record_count as u128 * 1000);
             } else {
-                merge_v2_deduplicated_segments(&deduplicated, &descriptors).unwrap();
+                merge_v2_deduplicated_segments(
+                    &deduplicated,
+                    &descriptors,
+                    Some(&directory.join("header.toml")),
+                )
+                .unwrap();
                 crate::csfs_descriptor::restore_v2_descriptor_parquet_to_outputs(
                     &descriptors,
                     &directory.join("header.toml"),
@@ -3714,6 +3722,7 @@ mod tests {
                 &descriptors,
                 &csf,
                 &csf_parquet,
+                &directory.join("header.toml"),
                 Some(threads),
             )
             .unwrap();

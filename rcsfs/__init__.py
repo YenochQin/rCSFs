@@ -41,10 +41,21 @@ stats = generate_descriptors_from_parquet(
 )
 ```
 
+### J-Block Split
+
+```python
+from rcsfs import split_csfs_by_j
+
+# Split a multi-block CSF list into one file per 2J (name_8.c, name_5.c, ...);
+# a sibling name.w orbital file is copied beside each output when present.
+stats = split_csfs_by_j("name.c")
+```
+
 For detailed documentation, see function documentation:
 - `convert_csfs()`: CSF file to Parquet conversion
 - `generate_descriptors_from_parquet()`: Batch descriptor generation
 - `read_peel_subshells()`: Extract peel subshells from header file
+- `split_csfs_by_j()`: Split a multi-block CSF list into per-2J files
 """
 
 from __future__ import annotations
@@ -76,6 +87,8 @@ from ._types import (
     InteractionHamiltonian,
     InteractionMethod,
     InteractionStats,
+    JBlockOutputStats,
+    JBlockSplitStats,
     ParquetInfo,
     PartitionStats,
 )
@@ -109,6 +122,7 @@ from ._rcsfs import (
 from ._rcsfs import read_csfs_arrow as _read_csfs_arrow
 from ._rcsfs import select_interacting_csfs as _select_interacting_csfs
 from ._rcsfs import split_csfs_by_active_spaces as _split_csfs_by_active_spaces
+from ._rcsfs import split_csfs_by_j as _split_csfs_by_j
 
 # ///////////////////////////////////////////////////////////////////////////////
 # Python Wrapper Functions (with Path support)
@@ -496,6 +510,63 @@ def split_csfs_by_active_spaces(
     )
 
 
+def split_csfs_by_j(
+    input_csf: str | Path,
+    output_dir: str | Path | None = None,
+    prefix: str | None = None,
+    *,
+    copy_w: bool = True,
+    overwrite: bool = False,
+) -> JBlockSplitStats:
+    """Split a multi-block CSF text file into one file per ``J^P`` block.
+
+    This mirrors GRASP's ``rasfsplit`` for the ``.c`` file: every output
+    holds the input's five header lines plus exactly one symmetry block,
+    named ``<prefix>_<2J>.c`` inside ``output_dir`` — e.g. ``J = 4`` becomes
+    ``name_8.c`` and ``J = 5/2`` becomes ``name_5.c``. ``output_dir``
+    defaults to the input's directory and ``prefix`` to the input's file
+    stem. Outputs are staged beside their destinations and published only
+    after the whole input has been read; existing outputs are refused
+    unless ``overwrite`` is set.
+
+    A sibling ``<input stem>.w`` orbital file is byte-copied beside every
+    output (``<prefix>_<2J>.w``) when it exists and ``copy_w`` is true; a
+    missing ``.w`` is reported as ``w_file: null``, not an error. Mixing
+    files (``.m``/``.cm``) are out of scope.
+
+    Two blocks sharing one ``2J`` cannot both own ``<prefix>_<2J>.c``, so
+    such an input is rejected — split parity groups into separate files
+    first.
+
+    Args:
+        input_csf: Multi-block CSF text file.
+        output_dir: Directory receiving the outputs (default: the input's
+            parent directory).
+        prefix: Output filename prefix (default: the input's file stem).
+        copy_w: Copy a sibling ``<stem>.w`` beside every output when present.
+        overwrite: Replace existing output files when ``True``.
+
+    Returns:
+        Dictionary with ``success``, ``input_file``, ``input_csf_count``,
+        ``block_count`` and per-output ``outputs`` entries carrying
+        ``output_file``, ``w_file``, ``block_index``, ``total_two_j``,
+        ``parity`` and ``csf_count``.
+
+    Raises:
+        ValueError: ``prefix`` is not a usable filename stem.
+        FileExistsError: An output exists and ``overwrite`` is ``False``.
+        OSError: The input is missing or malformed, or an output cannot be
+            written.
+    """
+    return _split_csfs_by_j(
+        input_csf=str(input_csf),
+        output_dir=None if output_dir is None else str(output_dir),
+        prefix=None if prefix is None else str(prefix),
+        copy_w=copy_w,
+        overwrite=overwrite,
+    )
+
+
 # ///////////////////////////////////////////////////////////////////////////////
 # Structural Interaction Selection
 # ///////////////////////////////////////////////////////////////////////////////
@@ -751,6 +822,8 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     # Zero-first partition
     "partition_csfs",
     "split_csfs_by_active_spaces",
+    # J-block split
+    "split_csfs_by_j",
     # Structural interaction selection
     "select_interacting_csfs",
     # CSF generation
@@ -769,6 +842,8 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     "PartitionStats",
     "ActiveSpaceOutputStats",
     "ActiveSpaceSplitStats",
+    "JBlockOutputStats",
+    "JBlockSplitStats",
     "CsfGenerationStats",
     "CsfGenerationEstimate",
     "CsfGenerationEstimateBytes",

@@ -58,8 +58,10 @@ Always activate the Tools venv and use `maturin build --release` for production.
 | `get_parquet_info(input_path)` | Return Parquet file metadata. |
 | `generate_descriptors_from_parquet(input, output, peel_subshells, ...)` | Generate descriptor arrays from Parquet input. |
 | `read_peel_subshells(header_path)` | Extract the subshell list from a `*_header.toml` file. |
+| `split_csfs_by_j(input_csf, output_dir=None, prefix=None, *, copy_w=True, overwrite=False)` | Split a multi-block CSF text file into one single-block file per `2J` (`<prefix>_<2J>.c`, GRASP `rasfsplit` for `.c`); copies a sibling `.w` beside each output when present. |
 | `ConversionStats` | TypedDict for `convert_csfs` results. |
 | `DescriptorGenerationStats` | TypedDict for descriptor-generation results. |
+| `JBlockSplitStats` | TypedDict for `split_csfs_by_j` results. |
 
 `rcsfs` exposes function-based Python APIs only. `CSFProcessor` and `CSFDescriptorGenerator` are internal Rust types and are not importable from `rcsfs._rcsfs`.
 

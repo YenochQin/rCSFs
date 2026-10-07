@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+### J 块拆分（2026-01-21）
+
+- 新增 `rcsfs jsplit` 命令（别名 `split-j`、`rasfsplit`）与 Python API
+  `split_csfs_by_j(input_csf, output_dir=None, prefix=None, *, copy_w=True,
+  overwrite=False)`，复刻 GRASP `rasfsplit.f90` 的 `.c` 文件拆分：把含多个
+  `J^P` 对称块的 CSF 文件流式拆成每块一个单块文件，命名为
+  `<prefix>_<2J>.c`（如 `J=4 → name_8.c`、`J=5/2 → name_5.c`、`J=0 →
+  name_0.c`）。
+- 输入同目录存在 `<stem>.w` 轨道文件时，默认随每个输出字节级复制一份
+  （`name_8.c → name_8.w`）；文件缺失则跳过并在统计中记 `w_file: null`，
+  `copy_w=False` / `--no-copy-w` 可关闭。`.m`/`.cm` 混合系数文件的拆分不在
+  本库范围内。
+- 单遍流式处理（逐行复制到每块的暂存 writer），内存与文件大小无关；所有
+  输出暂存于目标目录并在全部写完后统一发布，默认拒绝覆盖已有文件
+  （`overwrite=True` / `--overwrite` 替换）。块内记录 `2J^P` 必须一致，
+  同一 `2J` 出现两个块时报错（两个块无法同时占用 `<prefix>_<2J>.c`，
+  应先按宇称分文件）。
+- CLI 输出遵循统一输出位置策略：最终文件写入调用目录，输入可在别处；
+  `[jsplit]` TOML 表与 `init-config` 模板可用 `input_csf`、`prefix`、
+  `copy_w`、`overwrite`、`json` 键。
+
 ### 活动空间子表配置（2026-10-06）
 
 - 支持 `[csfs-split.active_spaces]` 中逐行填写 `AS0 = "1s"`、`AS1 = "2s"`

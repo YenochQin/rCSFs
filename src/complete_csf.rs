@@ -31,7 +31,7 @@ const HEADER_LINE_COUNT: usize = 5;
 pub(crate) const FIELD_WIDTH: usize = 9;
 
 /// The only separator `rcsfblock.f90` writes between symmetry blocks.
-const BLOCK_SEPARATOR: &str = " *";
+pub(crate) const BLOCK_SEPARATOR: &str = " *";
 
 /// Fixed header labels written by `fivefirst.f90`, keyed by header line index.
 const HEADER_LABELS: [(usize, &str); 3] = [
@@ -47,7 +47,7 @@ pub enum Parity {
 }
 
 impl Parity {
-    fn parse(value: u8) -> Result<Self> {
+    pub(crate) fn parse(value: u8) -> Result<Self> {
         match value {
             b'+' => Ok(Self::Even),
             b'-' => Ok(Self::Odd),
@@ -672,7 +672,9 @@ fn parse_record(
     Ok(record)
 }
 
-fn validate_header_labels(header_lines: &[String; HEADER_LINE_COUNT]) -> Result<()> {
+pub(crate) fn validate_header_labels(
+    header_lines: &[String; HEADER_LINE_COUNT],
+) -> Result<()> {
     for (index, label) in HEADER_LABELS {
         ensure!(
             header_lines[index].trim_end() == label,
@@ -757,7 +759,7 @@ fn fixed_width_field(line: &str, start: usize, width: usize) -> &str {
 /// half-integer J. Sign prefixes and unreduced forms such as `"8/2"` are
 /// rejected so that parsing and [`format_two_j`] stay mutually inverse — a
 /// silently rewritten field would otherwise break byte-identical round-trips.
-fn parse_two_j(value: &str) -> Result<u16> {
+pub(crate) fn parse_two_j(value: &str) -> Result<u16> {
     if let Some((numerator, denominator)) = value.split_once('/') {
         ensure!(denominator == "2", "unsupported J denominator in {value:?}");
         let two_j = parse_decimal(numerator)

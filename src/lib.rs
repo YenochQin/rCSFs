@@ -1,5 +1,5 @@
 use arrow::record_batch::RecordBatchIterator;
-use pyo3::exceptions::{PyIOError, PyValueError};
+use pyo3::exceptions::{PyFileExistsError, PyIOError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods, PyList, PyListMethods};
 use pyo3_arrow::PyRecordBatchReader;
@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 pub mod atomic_output;
 pub mod complete_csf;
 pub mod csf_active_space_split;
+pub mod csf_block_split;
 pub mod csf_generation;
 mod csf_output;
 pub mod csf_partition;
@@ -29,6 +30,7 @@ fn _rcsfs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
     m.add_function(wrap_pyfunction!(partition_csfs, m)?)?;
     m.add_function(wrap_pyfunction!(split_csfs_by_active_spaces, m)?)?;
+    m.add_function(wrap_pyfunction!(split_csfs_by_j, m)?)?;
     m.add_function(wrap_pyfunction!(generate_csfs_from_transcript, m)?)?;
     m.add_function(wrap_pyfunction!(generate_disk_outputs_from_transcript, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_disk_generation, m)?)?;
@@ -370,6 +372,111 @@ fn split_csfs_by_active_spaces(
     }
     result.set_item("outputs", outputs)?;
     Ok(result.into())
+}
+
+/// Split a multi-block CSF text file into one single-block file per `J^P`.
+///
+/// Mirrors GRASP's `rasfsplit` for the `.c` file: every output holds the
+/// five header lines plus exactly one symmetry block, named
+/// `<prefix>_<2J>.c` inside `output_dir`. `output_dir` defaults to the
+/// input's directory and `prefix` to the input's file stem. A sibling
+/// `<stem>.w` orbital file is byte-copied beside every output when it
+/// exists and `copy_w` is true; a missing `.w` is reported as `w_file:
+/// null`, not an error.
+///
+/// Returns a dictionary with `success`, `input_file`, `input_csf_count`,
+/// `block_count` and per-output `outputs` entries (`output_file`, `w_file`,
+/// `block_index`, `total_two_j`, `parity`, `csf_count`).
+#[pyfunction]
+#[pyo3(signature = (input_csf, output_dir=None, prefix=None, *, copy_w=true, overwrite=false))]
+fn split_csfs_by_j(
+    py: Python<'_>,
+    input_csf: String,
+    output_dir: Option<String>,
+    prefix: Option<String>,
+    copy_w: bool,
+    overwrite: bool,
+) -> PyResult<Py<PyAny>> {
+    let input = Path::new(&input_csf);
+    if !input.is_file() {
+        return Err(PyIOError::new_err(format!(
+            "CSF input does not exist: {input_csf}"
+        )));
+    }
+    let output_dir = output_dir.unwrap_or_else(|| {
+        input
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(|parent| parent.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".".to_owned())
+    });
+    let prefix = prefix.unwrap_or_else(|| {
+        input
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "csfs".to_owned())
+    });
+    ensure_usable_split_prefix(&prefix)?;
+    let stats = py
+        .detach(|| {
+            csf_block_split::split_csfs_by_j(
+                input,
+                Path::new(&output_dir),
+                &prefix,
+                copy_w,
+                overwrite,
+            )
+        })
+        .map_err(|error| split_error(error))?;
+
+    let result = PyDict::new(py);
+    result.set_item("success", true)?;
+    result.set_item("input_file", &input_csf)?;
+    result.set_item("input_csf_count", stats.input_csf_count)?;
+    result.set_item("block_count", stats.block_count)?;
+    let outputs = PyList::empty(py);
+    for output in stats.outputs {
+        let entry = PyDict::new(py);
+        entry.set_item("output_file", output.output_file)?;
+        if let Some(w_file) = output.w_file {
+            entry.set_item("w_file", w_file)?;
+        } else {
+            entry.set_item("w_file", py.None())?;
+        }
+        entry.set_item("block_index", output.block_index)?;
+        entry.set_item("total_two_j", output.total_two_j)?;
+        entry.set_item("parity", output.parity)?;
+        entry.set_item("csf_count", output.csf_count)?;
+        outputs.append(entry)?;
+    }
+    result.set_item("outputs", outputs)?;
+    Ok(result.into())
+}
+
+/// Reject a prefix that would escape `output_dir` or name odd directories.
+fn ensure_usable_split_prefix(prefix: &str) -> PyResult<()> {
+    if prefix.is_empty()
+        || prefix == "."
+        || prefix == ".."
+        || prefix.contains('/')
+        || prefix.contains('\\')
+    {
+        return Err(PyValueError::new_err(
+            "prefix must be a nonempty filename stem without path separators",
+        ));
+    }
+    Ok(())
+}
+
+/// Classify a core-split failure for Python: refused outputs keep their
+/// dedicated exception class, everything else is I/O shaped.
+fn split_error(error: anyhow::Error) -> PyErr {
+    let message = format!("{error:#}");
+    if message.contains("already exists") {
+        PyFileExistsError::new_err(message)
+    } else {
+        PyIOError::new_err(message)
+    }
 }
 
 /// Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript.

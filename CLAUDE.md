@@ -143,9 +143,11 @@ basedpyright rcsfs/
 | `generate_descriptors_from_parquet(input, output, peel_subshells, ..., descriptor_version=2, header_path=None)` | Batch descriptor generation; `descriptor_version=2` is the default, `1` is legacy |
 | `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | Rebuild a CSF text file from a V2 descriptor Parquet file |
 | `read_peel_subshells(header_path)` | Extract subshell list from `*_header.toml` |
+| `split_csfs_by_j(input_csf, output_dir=None, prefix=None, *, copy_w=True, overwrite=False)` | Split a multi-block CSF text file into one single-block file per `2J` (`<prefix>_<2J>.c`, GRASP `rasfsplit` for `.c`), optionally copying a sibling `.w` beside each output |
 | `ConversionStats` | TypedDict for `convert_csfs` return |
 | `DescriptorGenerationStats` | TypedDict for descriptor generation return |
 | `CsfRestoreStats` | TypedDict for `restore_csfs_from_descriptors` return |
+| `JBlockSplitStats` | TypedDict for `split_csfs_by_j` return |
 
 `rcsfs` only exposes function-based Python APIs today. `CSFProcessor` and `CSFDescriptorGenerator` are internal Rust types and are not importable from `rcsfs._rcsfs`.
 

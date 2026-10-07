@@ -53,7 +53,6 @@ _CONFIG_TEMPLATES = {
 # generate_descriptors = false
 # rcsfs_parquet = "generated.parquet"
 # descriptor = "generated_descriptors.parquet"  # Optional: defaults to {conf}_desc.parquet with conf.
-# normalize = false
 # threads = 8
 # memory_budget_mib = 1024
 # estimate_only = false
@@ -68,7 +67,6 @@ _CONFIG_TEMPLATES = {
 # output_parquet = "generated_descriptors.parquet"
 # header = "generated_header.toml"
 # num_workers = 8
-# normalize = false
 # descriptor_version = 2
 # compression = "zstd"
 # json = false
@@ -100,7 +98,7 @@ _CONFIG_TEMPLATES = {
 # input_csf = "generated.c"
 # prefix = "generated"
 # copy_w = true
-# overwrite = false
+# overwrite = true
 # json = false
 """.lstrip(),
     "interacting": """
@@ -488,7 +486,6 @@ def _load_config(
             "generate_descriptors",
             "rcsfs_parquet",
             "descriptor",
-            "normalize",
         }
         if unknown:
             raise ValueError(f"unknown output keys: {', '.join(sorted(unknown))}")

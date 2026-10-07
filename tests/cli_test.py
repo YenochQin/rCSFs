@@ -23,8 +23,7 @@ def test_gen_descriptors_reads_header_and_prints_summary(
         output_parquet: Path,
         peel_subshells: list[str],
         num_workers: int | None = None,
-        normalize: bool = False,
-        descriptor_version: int = 1,
+        descriptor_version: int = 2,
         header_path: Path | None = None,
         compression: str | None = None,
     ) -> dict[str, object]:
@@ -32,7 +31,6 @@ def test_gen_descriptors_reads_header_and_prints_summary(
         calls["output_parquet"] = output_parquet
         calls["peel_subshells"] = peel_subshells
         calls["num_workers"] = num_workers
-        calls["normalize"] = normalize
         calls["descriptor_version"] = descriptor_version
         calls["header_path"] = header_path
         calls["compression"] = compression
@@ -42,7 +40,7 @@ def test_gen_descriptors_reads_header_and_prints_summary(
             "output_file": str(output_parquet),
             "descriptor_count": 12,
             "descriptor_version": descriptor_version,
-            "channels_per_subshell": 3,
+            "channels_per_subshell": 4,
         }
 
     monkeypatch.setattr(cli, "read_peel_subshells", fake_read_peel_subshells)
@@ -61,9 +59,8 @@ def test_gen_descriptors_reads_header_and_prints_summary(
             "csf_header.toml",
             "--num-workers",
             "2",
-            "--normalize",
             "--descriptor-version",
-            "1",
+            "2",
         ]
     )
 
@@ -74,14 +71,13 @@ def test_gen_descriptors_reads_header_and_prints_summary(
         "output_parquet": Path("descriptors.parquet"),
         "peel_subshells": ["5s", "4d-", "4d"],
         "num_workers": 2,
-        "normalize": True,
-        "descriptor_version": 1,
+        "descriptor_version": 2,
         "compression": None,
     }
 
     captured = capsys.readouterr()
     assert captured.out == (
-        "Generated normalized descriptors: descriptors.parquet\ndescriptor_count: 12\n"
+        "Generated V2 descriptors: descriptors.parquet\ndescriptor_count: 12\n"
     )
     assert captured.err == ""
 
@@ -90,9 +86,9 @@ def test_gen_descriptors_reads_header_and_prints_summary(
     import tomllib
 
     assert tomllib.loads(sidecar.read_text()) == {
-        "format_version": 1,
+        "format_version": 2,
         "encoding": "parquet",
-        "normalized": True,
+        "normalized": False,
         "record_count": 12,
         "subshells": ["5s", "4d-", "4d"],
     }
@@ -151,8 +147,8 @@ def test_gen_descriptors_can_print_json(
             "input_file": "csf.parquet",
             "output_file": "descriptors.parquet",
             "descriptor_count": 12,
-            "descriptor_version": 1,
-            "channels_per_subshell": 3,
+            "descriptor_version": 2,
+            "channels_per_subshell": 4,
         },
     )
 
@@ -173,8 +169,8 @@ def test_gen_descriptors_can_print_json(
         "input_file": "csf.parquet",
         "output_file": "descriptors.parquet",
         "descriptor_count": 12,
-        "descriptor_version": 1,
-        "channels_per_subshell": 3,
+        "descriptor_version": 2,
+        "channels_per_subshell": 4,
     }
 
 
@@ -820,13 +816,11 @@ def test_csfsgenerate_builds_transcript_and_reports_summary(
     def fake_generate_csfs_from_transcript(
         transcript: str,
         output_path: Path,
-        normalize: bool = False,
         threads: int | None = None,
     ) -> dict[str, object]:
         assert (tmp_path / "rcsfs.toml").read_text(encoding="utf-8") == "invalid = ["
         calls["transcript"] = transcript
         calls["output_path"] = output_path
-        calls["normalize"] = normalize
         calls["threads"] = threads
         output_path.write_text("generated", encoding="utf-8")
         return {
@@ -846,7 +840,6 @@ def test_csfsgenerate_builds_transcript_and_reports_summary(
     assert isinstance(calls["output_path"], Path)
     assert calls["output_path"].name == "out.c"
     assert (tmp_path / "out.c").read_text(encoding="utf-8") == "generated"
-    assert calls["normalize"] is False
     assert calls["threads"] is None
     config = tomllib.loads((tmp_path / "rcsfs.toml").read_text(encoding="utf-8"))
     assert config == {
@@ -863,7 +856,6 @@ def test_csfsgenerate_builds_transcript_and_reports_summary(
             "excitations": 2,
             "rcsfs_out": "out.c",
             "generate_descriptors": False,
-            "normalize": False,
             "estimate_only": False,
             "allow_unchecked_space": False,
             "generation_storage": "memory",
@@ -1027,3 +1019,38 @@ def test_interactive_generation_matches_registered_hash(
 
 
 pytestmark = pytest.mark.usefixtures("cli_cwd")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [
+            "gen-descriptors",
+            "in.parquet",
+            "out.parquet",
+            "--header",
+            "header.toml",
+            "--descriptor-version",
+            "1",
+        ],
+        [
+            "gen-descriptors",
+            "in.parquet",
+            "out.parquet",
+            "--header",
+            "header.toml",
+            "--normalize",
+        ],
+        ["csfsgenerate", "out.c", "--normalize"],
+    ],
+)
+def test_cli_rejects_retired_descriptor_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv: list[str]
+) -> None:
+    from rcsfs import cli
+
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as error:
+        cli.main(argv)
+    assert error.value.code == 2
+    assert list(tmp_path.iterdir()) == []

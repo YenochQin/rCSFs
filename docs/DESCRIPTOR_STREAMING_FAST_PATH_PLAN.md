@@ -1,5 +1,9 @@
 # Descriptor 流式 fast path 可行性与实现计划
 
+> Historical V1 design or analysis. V1 generation and normalization were removed on
+> 2026-10-07. This document does not describe the current API; see
+> [the V2 descriptor guide](CSF_DESCRIPTOR_GUIDE.md).
+
 ## 0. 当前状态
 
 截至 `1.2.2-beta.1`，本计划中的**结果侧列式 buffer 优化已完成并验证**，但 parser fast path、strict mode 和 RecordBatch work item 尚未实现。

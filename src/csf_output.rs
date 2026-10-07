@@ -44,7 +44,6 @@ pub(crate) mod descriptor {
         Ok(output_kv_metadata(
             layout,
             peel_subshells,
-            false,
             header_sha256.as_deref(),
             header_filename,
         ))

@@ -20,7 +20,12 @@ from typing import Any
 pl: Any = None
 
 
-FIELDS = ("electron_count", "middle_j", "coupling_j")
+FIELDS = {
+    "n": "electron_count",
+    "2j": "printed_two_j",
+    "v": "seniority",
+    "2k": "printed_two_k",
+}
 
 
 def read_peel_subshells(header_path: Path | None) -> list[str] | None:
@@ -36,7 +41,9 @@ def read_peel_subshells(header_path: Path | None) -> list[str] | None:
 
     peel_line = header_lines[3]
     if not isinstance(peel_line, str):
-        raise ValueError(f"header_info.header_lines[3] is not a string in {header_path}")
+        raise ValueError(
+            f"header_info.header_lines[3] is not a string in {header_path}"
+        )
 
     return [
         part
@@ -58,26 +65,21 @@ def range_report(frame: pl.DataFrame) -> dict[str, Any]:
     return {
         "min": frame.select(pl.min_horizontal(pl.all()).min()).item(),
         "max": frame.select(pl.max_horizontal(pl.all()).max()).item(),
-        "cells_gt_1": frame.select(
-            pl.sum_horizontal(
-                [(pl.col(column) > 1.000001).cast(pl.Int64) for column in frame.columns]
-            ).sum()
-        ).item(),
-        "cells_lt_0": frame.select(
-            pl.sum_horizontal(
-                [(pl.col(column) < -0.000001).cast(pl.Int64) for column in frame.columns]
-            ).sum()
-        ).item(),
+        "missing_quantum_cells": sum(
+            int((frame[column] == -1).sum())
+            for column in frame.columns
+            if column.rsplit("_", 1)[-1] in ("2j", "v", "2k")
+        ),
     }
 
 
 def describe_column(column: str, peel_subshells: list[str] | None) -> str:
-    if not column.startswith("col_"):
+    if not column.startswith("sub"):
         return column
 
-    column_idx = int(column.removeprefix("col_"))
-    orbital_idx = column_idx // 3
-    field = FIELDS[column_idx % 3]
+    subshell, channel = column.split("_", 1)
+    orbital_idx = int(subshell.removeprefix("sub"))
+    field = FIELDS[channel]
 
     if peel_subshells is None or orbital_idx >= len(peel_subshells):
         return f"{column} orbital_idx={orbital_idx} field={field}"
@@ -131,10 +133,16 @@ def print_sample_rows(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--old", required=True, type=Path, help="Baseline descriptor parquet")
-    parser.add_argument("--new", required=True, type=Path, help="New descriptor parquet")
+    parser.add_argument(
+        "--old", required=True, type=Path, help="Baseline descriptor parquet"
+    )
+    parser.add_argument(
+        "--new", required=True, type=Path, help="New descriptor parquet"
+    )
     parser.add_argument("--header", type=Path, help="Optional generated header TOML")
-    parser.add_argument("--raw", type=Path, help="Optional raw CSF parquet for row samples")
+    parser.add_argument(
+        "--raw", type=Path, help="Optional raw CSF parquet for row samples"
+    )
     parser.add_argument("--tol", type=float, default=1e-6, help="Absolute tolerance")
     parser.add_argument("--sample-rows", type=int, default=10)
     parser.add_argument("--sample-cols", type=int, default=8)
@@ -191,7 +199,9 @@ def main() -> int:
         print()
         print("Changed columns:")
         for column in changed_columns:
-            print(f"{describe_column(column, peel_subshells)} max_diff={column_max[column]}")
+            print(
+                f"{describe_column(column, peel_subshells)} max_diff={column_max[column]}"
+            )
 
         row_indices = differing_row_indices(old, new, changed_columns, args.tol)
         print(f"different rows: {len(row_indices)}")

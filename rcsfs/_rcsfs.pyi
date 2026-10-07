@@ -59,17 +59,16 @@ def split_csfs_by_j(
     prefix: str | None = None,
     *,
     copy_w: bool = True,
-    overwrite: bool = False,
+    overwrite: bool = True,
 ) -> JBlockSplitStats: ...
 def py_generate_descriptors_from_parquet(
     input_parquet: str,
     output_file: str,
     peel_subshells: list[str],
     num_workers: int | None = None,
-    normalize: bool = False,
     compression: str | None = None,
     *,
-    descriptor_version: int = 1,
+    descriptor_version: int = 2,
     header_path: str | None = None,
 ) -> DescriptorGenerationStats: ...
 def py_restore_csfs_from_descriptors(
@@ -82,7 +81,6 @@ def py_read_peel_subshells(header_path: str) -> list[str]: ...
 def generate_csfs_from_transcript(
     transcript: str,
     output_path: str,
-    normalize: bool = False,
     threads: int | None = None,
 ) -> CsfGenerationStats: ...
 def generate_disk_outputs_from_transcript(

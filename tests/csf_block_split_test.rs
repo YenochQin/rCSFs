@@ -113,7 +113,13 @@ fn splits_multi_j_fixture_with_w_copy() {
     let names: Vec<&str> = stats
         .outputs
         .iter()
-        .map(|output| Path::new(&output.output_file).file_name().unwrap().to_str().unwrap())
+        .map(|output| {
+            Path::new(&output.output_file)
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        })
         .collect();
     assert_eq!(names, ["multi_j_8.c", "multi_j_5.c", "multi_j_0.c"]);
     assert_eq!(stats.outputs[0].csf_count, 2);
@@ -156,7 +162,12 @@ fn missing_or_disabled_w_leaves_w_file_null() {
     assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 4); // input + 3 outputs
 
     let disabled = split_csfs_by_j(&input, &directory.0, "again", false, false).unwrap();
-    assert!(disabled.outputs.iter().all(|output| output.w_file.is_none()));
+    assert!(
+        disabled
+            .outputs
+            .iter()
+            .all(|output| output.w_file.is_none())
+    );
     assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 7);
 }
 
@@ -216,6 +227,79 @@ fn output_aliasing_the_input_is_rejected() {
     assert_eq!(fs::read_to_string(&input).unwrap(), COMPLETE_CSF);
 }
 
+#[cfg(unix)]
+#[test]
+fn orbital_output_aliases_are_rejected_without_publishing_csfs() {
+    for hard_link in [false, true] {
+        let directory = TestDirectory::new();
+        let input = directory.join("multi_j.c");
+        let orbital = directory.join("multi_j.w");
+        let output = directory.join("multi_j_8.w");
+        fs::write(&input, MULTI_J_CSF).unwrap();
+        fs::write(&orbital, MULTI_J_W).unwrap();
+        if hard_link {
+            fs::hard_link(&orbital, &output).unwrap();
+        } else {
+            std::os::unix::fs::symlink(&orbital, &output).unwrap();
+        }
+
+        let error = split_csfs_by_j(&input, &directory.0, "multi_j", true, true)
+            .expect_err("orbital outputs must not alias their source");
+        assert!(format!("{error:#}").contains("orbital input"));
+        assert_eq!(fs::read_to_string(&input).unwrap(), MULTI_J_CSF);
+        assert_eq!(fs::read_to_string(&orbital).unwrap(), MULTI_J_W);
+        assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 3);
+    }
+}
+
+#[test]
+fn noncanonical_second_character_star_lines_are_rejected_before_publication() {
+    // Put the invalid line in a later block so cleanup must also remove a
+    // previously staged output. A second-line marker used to go unparsed.
+    for marker in [" *garbage", " * ", "x*garbage"] {
+        let directory = TestDirectory::new();
+        let input = directory.join("malformed.c");
+        let mut lines: Vec<&str> = COMPLETE_CSF.lines().collect();
+        lines[10] = marker;
+        fs::write(&input, format!("{}\n", lines.join("\n"))).unwrap();
+
+        let error = split_csfs_by_j(&input, &directory.0, "malformed", false, false)
+            .expect_err("second-character star requires a canonical separator");
+        let message = format!("{error:#}");
+        assert!(message.contains("line 11: block separator must be exactly"));
+        assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 1);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn publication_conflicts_preserve_the_io_error_kind_and_published_paths() {
+    let directory = TestDirectory::new();
+    let input = directory.join("complete.c");
+    fs::write(&input, COMPLETE_CSF).unwrap();
+    let conflict = directory.join("complete_5.c");
+    std::os::unix::fs::symlink(directory.join("missing.c"), &conflict).unwrap();
+
+    let error = split_csfs_by_j(&input, &directory.0, "complete", false, false)
+        .expect_err("a dangling output symlink still occupies the destination");
+    let cause = error
+        .downcast_ref::<std::io::Error>()
+        .expect("publication should preserve the underlying I/O error");
+    assert_eq!(cause.kind(), std::io::ErrorKind::AlreadyExists);
+    let message = format!("{error:#}");
+    assert!(message.contains("already published:"));
+    assert!(message.contains(&directory.join("complete_8.c").display().to_string()));
+    let parsed = CompleteCsfFile::parse_path(&directory.join("complete_8.c")).unwrap();
+    assert_eq!(parsed.blocks.len(), 1);
+    assert!(
+        fs::symlink_metadata(conflict)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 3);
+}
+
 #[test]
 fn malformed_inputs_are_rejected_with_line_numbers() {
     let directory = TestDirectory::new();
@@ -265,8 +349,8 @@ fn malformed_inputs_are_rejected_with_line_numbers() {
     // Header-only file.
     let input = directory.join("header_only.c");
     fs::write(&input, header_section(COMPLETE_CSF)).unwrap();
-    let error = split_csfs_by_j(&input, &directory.0, "header_only", false, false)
-        .expect_err("no records");
+    let error =
+        split_csfs_by_j(&input, &directory.0, "header_only", false, false).expect_err("no records");
     assert!(format!("{error:#}").contains("contains no CSF records"));
 }
 

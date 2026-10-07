@@ -262,7 +262,7 @@ fn build_final_outputs_from_segments_inner(
     let _csf_parquet_writer_permit =
         csf_parquet_writer_permit(&deduplicated.budget, layout, "CSF Parquet encoding")?;
 
-    let schema = output_schema(layout, false)?;
+    let schema = output_schema(layout)?;
     let properties = descriptor::properties(
         layout,
         peel_subshells,

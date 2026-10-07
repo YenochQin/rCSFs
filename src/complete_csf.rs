@@ -117,35 +117,6 @@ pub struct CompleteCsfFile {
 }
 
 impl CompleteCsfFile {
-    /// Derive the legacy dense descriptor directly from an integer CSF record.
-    /// Each peel subshell contributes `[occupation, 2J_subshell,
-    /// 2J_cumulative]`; unoccupied subshells remain zero.
-    pub fn descriptor_for(&self, record: &CsfRecord) -> Result<Vec<i32>> {
-        let mut descriptor = vec![0i32; self.subshells.len() * 3];
-        let occupied = self.occupied(record)?;
-        let couplings = self.couplings(record)?;
-        for (position, shell) in occupied.iter().enumerate() {
-            let index = usize::from(shell.subshell_index);
-            ensure!(index < self.subshells.len(), "subshell index out of range");
-            let offset = index * 3;
-            descriptor[offset] = i32::from(shell.occupation);
-            if let Some(state) = shell.state {
-                descriptor[offset + 1] = i32::from(state.two_j);
-            }
-            // Text descriptors use the printed coupling after this occupied
-            // shell, falling back to its visible state J when omitted.
-            descriptor[offset + 2] = descriptor[offset + 1];
-            let boundary = u16::try_from(position + 1)?;
-            if let Some(coupling) = couplings.iter().find(|value| value.boundary == boundary) {
-                descriptor[offset + 2] = i32::from(coupling.two_j);
-            }
-            if position + 1 == occupied.len() {
-                descriptor[offset + 2] = i32::from(record.total_two_j);
-            }
-        }
-        Ok(descriptor)
-    }
-
     pub fn parse_path(path: &Path) -> Result<Self> {
         let file = File::open(path)
             .with_context(|| format!("failed to open CSF file {}", path.display()))?;
@@ -672,9 +643,7 @@ fn parse_record(
     Ok(record)
 }
 
-pub(crate) fn validate_header_labels(
-    header_lines: &[String; HEADER_LINE_COUNT],
-) -> Result<()> {
+pub(crate) fn validate_header_labels(header_lines: &[String; HEADER_LINE_COUNT]) -> Result<()> {
     for (index, label) in HEADER_LABELS {
         ensure!(
             header_lines[index].trim_end() == label,

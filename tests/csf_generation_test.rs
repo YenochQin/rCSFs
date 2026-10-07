@@ -41,24 +41,14 @@ fn parallel_generation_preserves_task_order_and_records() {
 }
 
 #[test]
-fn complete_integer_record_derives_dense_descriptor() {
+fn complete_integer_record_encodes_v2() {
+    use _rcsfs::descriptor_schema::{DescriptorLayout, DescriptorVersion};
+    use _rcsfs::descriptor_v2::encode_v2;
     let generated = generate_csfs(&request(&[("2p", 1)], 1, 5)).unwrap();
-    let descriptor = generated.descriptor_for(&generated.records[0]).unwrap();
-    assert_eq!(descriptor, [1, 3, 3]);
-}
-
-#[test]
-fn complete_integer_descriptor_matches_normalization_contract() {
-    let generated = generate_csfs(&request(&[("2p", 1)], 1, 5)).unwrap();
-    let descriptor = generated.descriptor_for(&generated.records[0]).unwrap();
-    let normalized = _rcsfs::descriptor_normalization::normalize_descriptor_per_csf(
-        &descriptor,
-        &generated.subshells,
-        generated.records[0].total_two_j as i32,
-    )
-    .unwrap();
-    assert_eq!(normalized.len(), descriptor.len());
-    assert!(normalized.iter().all(|value| value.is_finite()));
+    let layout = DescriptorLayout::new(DescriptorVersion::V2, generated.subshells.len());
+    let mut descriptor = vec![0; layout.row_len()];
+    encode_v2(&generated, &generated.records[0], &mut descriptor).unwrap();
+    assert_eq!(descriptor, [1, 3, -1, -1, 3, -1]);
 }
 
 fn roundtrip(request: &GenerationRequest) -> CompleteCsfFile {

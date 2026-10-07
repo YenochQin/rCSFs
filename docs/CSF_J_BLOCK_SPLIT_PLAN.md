@@ -4,6 +4,7 @@
 - **Version**: no version bump (per owner decision, 2026-01-21)
 - **Date**: 2026-01-21
 - **Status**: Implemented
+- **Output policy update**: default overwrite (owner decision, 2026-10-07)
 - **Fortran reference**: `grasp_2990_NNNP/src/tool/rasfsplit.f90` (Per Jonsson, Nov 2016)
 
 ---
@@ -78,7 +79,7 @@ Fortran tool. We adopt the same behavior with our naming: `name.w` →
 
 | Phase | Content | Status |
 |---|---|---|
-| **1 (this plan)** | Split one multi-block CSF **text** file into one single-block CSF text file per symmetry block, named `name_<2J>.c`; copy `name.w` to each output stem when present. Rust core + PyO3 binding + Python API + CLI subcommand + tests + docs. | planned |
+| **1 (this plan)** | Split one multi-block CSF **text** file into one single-block CSF text file per symmetry block, named `name_<2J>.c`; copy `name.w` to each output stem when present. Rust core + PyO3 binding + Python API + CLI subcommand + tests + docs. | Implemented |
 | ~~2~~ | ~~`name.w` copy~~ | folded into phase 1 (owner decision) |
 | — | `.m`/`.cm` Fortran-unformatted mixing-file split | **out of scope** — owner implements separately |
 
@@ -95,7 +96,7 @@ Fortran tool. We adopt the same behavior with our naming: `name.w` →
 | D5 | Block `J^P` detection | Parse **line 3's final coupling token + trailing parity byte** of every record, reusing `complete_csf::parse_two_j` and `Parity::parse` (shared as `pub(crate)` helpers if needed); require **all records in a block to agree** | Gives the real `2J` for output naming; detects malformed/mixed blocks that `rasfsplit` would silently mis-split. |
 | D6 | Split granularity | **One output per block** (never merge blocks with equal `2J^P`) | Mirrors `rasfsplit` (`_even1`, `_even2`, ...); merging would change record provenance; caller can concatenate trivially. |
 | D7 | **Output naming** (owner decision 2026-01-21) | Always `name_<2J>.c` — the integer 2J only, e.g. J=4 → `name_8.c`, J=5/2 → `name_5.c`, J=0 → `name_0.c`. Prefix = input stem by default. **No** parity label, **no** suffixes, **no** alternate naming modes. | Owner-specified simple naming. Upstream workflow tags parity (among other labels) in the file name itself, so a single input file contains one parity and its 2J values are unique; `name_<2J>` can never collide (see D14). |
-| D8 | Output transaction | Stage every output as a sibling temp file (`atomic_output::create_temporary_output`), publish with `publish_temporary_output` only after **all** blocks are written; refuse existing outputs unless `overwrite=true`; report already-published files if a later publication fails | Same contract as `split_csfs_by_active_spaces` / `select_interacting_csfs`; never half-write visibly. |
+| D8 | Output transaction | Stage every output as a sibling temp file (`atomic_output::create_temporary_output`), publish with `publish_temporary_output` only after **all** blocks are written; replace existing outputs by default (`overwrite=true`), with explicit `overwrite=false` available to refuse replacement; report already-published files if a later publication fails | Default overwrite per owner decision, 2026-10-07; never half-write visibly. |
 | D9 | Parity source | Parsed parity byte of each record (D5), **not** "last char before separator" | The Fortran heuristic mis-fires on blank-padded or malformed lines; per-record parity is already validated and is the same information. |
 | D10 | Parallelism | **Serial, I/O-bound** single pass | The work is a line copy; rayon adds nothing at I/O speed. Keep the code simple; benchmark later if ever needed. |
 | D11 | Binding style | Thin `#[pyfunction]` in `lib.rs` delegating to the module; stats returned as a dict; wrapper `rcsfs.split_csfs_by_j(...)` with `pathlib.Path` support; TypedDicts in `_types.py`; `.pyi` stub updated | Follows `partition_csfs` / `split_csfs_by_active_spaces` exactly. |
@@ -125,7 +126,8 @@ open input (BufReader, keep raw lines incl. LF discipline)
 ├─ .w handling (D15): if <input stem>.w exists and copy_w → stage one
 │    byte-copy per output stem (streamed, not fully buffered)
 ├─ flush + fsync all staged writers
-└─ publish all staged files; on partial failure, name what was published
+├─ publish all staged files, replacing existing outputs by default
+└─ on partial failure, name what was published
 ```
 
 Details:
@@ -192,7 +194,7 @@ pub fn split_csfs_by_j(
 
 ```rust
 #[pyfunction]
-#[pyo3(signature = (input_csf, output_dir=None, prefix=None, *, copy_w=true, overwrite=false))]
+#[pyo3(signature = (input_csf, output_dir=None, prefix=None, *, copy_w=true, overwrite=true))]
 fn split_csfs_by_j(...) -> PyResult<Py<PyAny>>   // dict per D11, IO errors → PyIOError
 ```
 
@@ -209,7 +211,7 @@ def split_csfs_by_j(
     prefix: str | None = None,              # default: input stem
     *,
     copy_w: bool = True,
-    overwrite: bool = False,
+    overwrite: bool = True,
 ) -> JBlockSplitStats: ...
 ```
 
@@ -231,6 +233,8 @@ rcsfs jsplit <input.c>
 
 - Outputs are written to the current directory (shared CLI policy); the
   input may live elsewhere and its sibling `.w` is found next to the input.
+- Existing `.c` and copied `.w` outputs are replaced by default; `--overwrite`
+  remains accepted. An explicit TOML `overwrite = false` refuses replacement.
 
 - `--json` prints the full stats dict; text mode prints one line per block
   (`name_8.c: 12,345 CSFs (2J=8, odd)` plus `  + name_8.w` when copied).
@@ -253,6 +257,7 @@ rcsfs jsplit <input.c>
 | CRLF / missing final LF / non-ASCII | error with line number |
 | > 10 000 blocks | explicit error before opening writers |
 | Duplicate `2J` across blocks (any parity) | **error** naming both block indices and their `2J^P` (D14); nothing published, staged temps removed |
+| Output path exists (default `overwrite=true`) | atomically replace the completed output after all blocks have been validated and staged |
 | Output path exists and `overwrite=false` | `FileExistsError` at publish; staged temps removed |
 | Output aliases input (`.c` or `.w`) | rejected up-front |
 | `copy_w=true` but `<stem>.w` absent | skipped; `w_file: null` in stats; not an error |
@@ -287,9 +292,9 @@ duplicate-`2J` error case writes its own temporary input inside the test.
    different parity) fails, names both block indices and `2J^P`, publishes
    nothing, and leaves no temporary files behind.
 6. Errors: truncated final record; empty block; mixed parity in one block;
-   CRLF input; non-canonical separator; existing output without `overwrite`;
+   CRLF input; non-canonical separator; existing output with `overwrite=false`;
    output aliasing input (`.c` and `.w`).
-7. `overwrite = true` replaces existing outputs.
+7. `overwrite = true` replaces existing `.c` and `.w` outputs.
 
 ### 9.3 Python — `tests/csf_block_split_test.py`
 
@@ -298,6 +303,8 @@ duplicate-`2J` error case writes its own temporary input inside the test.
 2. Stats TypedDict shape (keys exactly as declared in `_types.py`).
 3. `.w` behaviors: present → copied; absent → `w_file: null`; `copy_w=False`
    → not copied.
+   Default reruns replace both `.c` and `.w` outputs through the Python wrapper
+   and the native binding; explicit `overwrite=False` refuses replacement.
 4. CLI: `rcsfs jsplit`, `--json` output parse, `--no-copy-w`,
    exit codes on failure; `[jsplit]` TOML config batch run via `--config` and
    `init-config` adds the section.

@@ -47,7 +47,6 @@ class GenDescriptorsArgs(Protocol):
     output_parquet: Path
     header: Path
     num_workers: int | None
-    normalize: bool
     descriptor_version: int
     compression: str | None
     json: bool
@@ -110,7 +109,6 @@ class CsfsGenerateArgs(Protocol):
     rcsfs_parquet: Path | None
     descriptor: Path | None
 
-    normalize: bool
     threads: int | None
     memory_budget_mib: int | None
     estimate_only: bool
@@ -240,18 +238,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of worker threads to use.",
     )
     _ = gen_descriptors.add_argument(
-        "--normalize",
-        action="store_true",
-        help="Normalize descriptor values. Not supported with --descriptor-version 2.",
-    )
-    _ = gen_descriptors.add_argument(
         "--descriptor-version",
         type=int,
-        choices=[1, 2],
+        choices=[2],
         default=2,
         help=(
             "Descriptor format version: 2 (default; four-channel per-subshell "
-            "plus total_two_j/parity globals) or 1 (legacy dense triplet)."
+            "plus total_two_j/parity globals)."
         ),
     )
     _ = gen_descriptors.add_argument(
@@ -374,7 +367,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not copy a sibling <stem>.w beside every output.",
     )
     _ = jsplit.add_argument(
-        "--overwrite", action="store_true", help="Replace existing output files."
+        "--overwrite",
+        action="store_true",
+        default=True,
+        help="Replace existing output files (enabled by default).",
     )
     _ = jsplit.add_argument("--json", action="store_true")
 
@@ -426,11 +422,6 @@ def build_parser() -> argparse.ArgumentParser:
             "Descriptor Parquet output (default: <conf>_desc.parquet with top-level "
             "conf, otherwise <stem>_descriptors.parquet)."
         ),
-    )
-    _ = csfsgenerate.add_argument(
-        "--normalize",
-        action="store_true",
-        help="Normalize descriptor values when --generate-descriptors is enabled.",
     )
     _ = csfsgenerate.add_argument(
         "--threads",
@@ -570,12 +561,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_gen_descriptors_summary(
-    stats: Mapping[str, object], normalize: bool
-) -> None:
-    descriptor_kind = "normalized descriptors" if normalize else "descriptors"
+def _print_gen_descriptors_summary(stats: Mapping[str, object]) -> None:
     output_file = stats.get("output_file", "")
-    print(f"Generated {descriptor_kind}: {output_file}")
+    print(f"Generated V2 descriptors: {output_file}")
 
     descriptor_count = stats.get("descriptor_count")
     if descriptor_count is not None:
@@ -586,7 +574,6 @@ def _write_gen_descriptors_sidecar(
     output_parquet: Path,
     stats: Mapping[str, object],
     peel_subshells: list[str],
-    normalize: bool,
 ) -> None:
     """Write the `{descriptor_stem}.toml` mirror of the Parquet KV metadata.
 
@@ -597,10 +584,10 @@ def _write_gen_descriptors_sidecar(
     for the descriptor version tag rather than introducing a second key.
     """
     sidecar = output_parquet.with_suffix(".toml")
-    descriptor_version = stats.get("descriptor_version", 1)
+    descriptor_version = stats.get("descriptor_version", 2)
     _ = sidecar.write_text(
         f'format_version = {descriptor_version}\nencoding = "parquet"\n'
-        f"normalized = {str(normalize).lower()}\n"
+        "normalized = false\n"
         f"record_count = {stats.get('descriptor_count', 0)}\n"
         f"subshells = {json.dumps(peel_subshells)}\n",
         encoding="utf-8",
@@ -1189,7 +1176,6 @@ def _generate_outputs(
                 generate_csfs_from_transcript(
                     transcript,
                     staged,
-                    normalize=args.normalize,
                     threads=args.threads,
                 )
             )
@@ -1197,8 +1183,6 @@ def _generate_outputs(
                 publish_outputs([staged], [args.rcsfs_out], overwrite=True)
                 stats["output_file"] = str(args.rcsfs_out)
             return stats
-    if args.generation_storage == "disk" and args.normalize:
-        raise ValueError("normalize is not supported by reversible V2 descriptors")
     if args.memory_budget_mib is not None and args.generation_storage != "disk":
         raise ValueError("memory_budget_mib requires disk generation storage")
     if args.generation_storage == "disk":
@@ -1295,7 +1279,6 @@ def _generate_outputs(
                 generate_csfs_from_transcript(
                     cast(str, transcript),
                     csf,
-                    normalize=args.normalize,
                     threads=args.threads,
                 )
             )
@@ -1331,7 +1314,6 @@ def _generate_outputs(
                 parquet,
                 descriptors,
                 peel_subshells=shells,
-                normalize=args.normalize,
                 descriptor_version=2,
                 header_path=staged_header,
                 compression="zstd",
@@ -1344,7 +1326,7 @@ def _generate_outputs(
         sidecar = root / "features.toml"
         _ = sidecar.write_text(
             f'format_version = {result.get("descriptor_version", 2)}\nencoding = "parquet"\n'
-            f"normalized = {str(args.normalize).lower()}\n"
+            "normalized = false\n"
             f"record_count = {result['descriptor_count']}\n"
             f"subshells = {json.dumps(shells)}\n",
             encoding="utf-8",
@@ -1408,7 +1390,6 @@ def _write_interactive_generation_config(
         **generation,
         "rcsfs_out": str(args.rcsfs_out),
         "generate_descriptors": args.generate_descriptors,
-        "normalize": args.normalize,
         "estimate_only": args.estimate_only,
         "allow_unchecked_space": args.allow_unchecked_space,
     }
@@ -1783,15 +1764,12 @@ def _run_parsed_command(args: CliArgs) -> int:
                 output_parquet,
                 peel_subshells=peel_subshells,
                 num_workers=args.num_workers,
-                normalize=args.normalize,
                 descriptor_version=args.descriptor_version,
                 header_path=args.header,
                 compression=args.compression,
             )
             if stats.get("success") is True:
-                _write_gen_descriptors_sidecar(
-                    output_parquet, stats, peel_subshells, normalize=args.normalize
-                )
+                _write_gen_descriptors_sidecar(output_parquet, stats, peel_subshells)
                 if staging is not None:
                     publish_outputs(
                         [output_parquet, output_parquet.with_suffix(".toml")],
@@ -1818,7 +1796,7 @@ def _run_parsed_command(args: CliArgs) -> int:
             json.dump(stats, sys.stdout, indent=2, sort_keys=True)
             _ = sys.stdout.write("\n")
         elif stats.get("success") is True:
-            _print_gen_descriptors_summary(stats, normalize=args.normalize)
+            _print_gen_descriptors_summary(stats)
         else:
             error = stats.get("error", "unknown error")
             print(f"Descriptor generation failed: {error}", file=sys.stderr)

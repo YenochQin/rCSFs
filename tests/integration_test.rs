@@ -124,37 +124,6 @@ fn read_i32_descriptor_columns(path: &Path) -> Vec<Vec<i32>> {
     columns
 }
 
-fn read_f32_descriptor_columns(path: &Path) -> Vec<Vec<f32>> {
-    use arrow::array::Float32Array;
-    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-
-    let file = File::open(path).expect("Failed to open descriptor parquet");
-    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
-        .expect("Failed to create parquet reader")
-        .build()
-        .expect("Failed to build parquet reader");
-
-    let mut columns: Vec<Vec<f32>> = Vec::new();
-    for batch in reader {
-        let batch = batch.expect("Failed to read parquet batch");
-        if columns.is_empty() {
-            columns = (0..batch.num_columns()).map(|_| Vec::new()).collect();
-        }
-        for (col_idx, values) in columns.iter_mut().enumerate() {
-            let array = batch
-                .column(col_idx)
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .expect("Descriptor column should be Float32");
-            for row_idx in 0..array.len() {
-                values.push(array.value(row_idx));
-            }
-        }
-    }
-
-    columns
-}
-
 //////////////////////////////////////////////////////////////////////////////
 // Parquet I/O Tests
 //////////////////////////////////////////////////////////////////////////////
@@ -536,8 +505,7 @@ fn test_descriptor_parallel_rejects_zero_workers() {
         &descriptor_path,
         vec!["5s".to_string()],
         Some(0),
-        false,
-        DescriptorVersion::V1,
+        DescriptorVersion::V2,
         None,
         None,
     );
@@ -575,7 +543,6 @@ fn test_v2_descriptor_generation_rejects_invalid_rows_without_output() {
         &sequential_path,
         Some(wrong_peels.clone()),
         None,
-        false,
         DescriptorVersion::V2,
         None,
     );
@@ -584,7 +551,6 @@ fn test_v2_descriptor_generation_rejects_invalid_rows_without_output() {
         &parallel_path,
         wrong_peels,
         Some(2),
-        false,
         DescriptorVersion::V2,
         None,
         None,
@@ -612,8 +578,6 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
     let header_path = temp_dir().join("test_descriptor_consistency_header.toml");
     let sequential_raw_path = temp_dir().join("test_descriptor_consistency_seq_raw.parquet");
     let parallel_raw_path = temp_dir().join("test_descriptor_consistency_par_raw.parquet");
-    let sequential_norm_path = temp_dir().join("test_descriptor_consistency_seq_norm.parquet");
-    let parallel_norm_path = temp_dir().join("test_descriptor_consistency_par_norm.parquet");
 
     fs::copy(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.csf"),
@@ -631,8 +595,7 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
         &sequential_raw_path,
         Some(peel_subshells.clone()),
         None,
-        false,
-        DescriptorVersion::V1,
+        DescriptorVersion::V2,
         None,
     )
     .expect("Sequential raw descriptor generation should succeed");
@@ -641,42 +604,15 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
         &parallel_raw_path,
         peel_subshells.clone(),
         Some(2),
-        false,
-        DescriptorVersion::V1,
+        DescriptorVersion::V2,
         None,
         None,
     )
     .expect("Parallel raw descriptor generation should succeed");
 
-    generate_descriptors_from_parquet(
-        &parquet_path,
-        &sequential_norm_path,
-        Some(peel_subshells.clone()),
-        None,
-        true,
-        DescriptorVersion::V1,
-        None,
-    )
-    .expect("Sequential normalized descriptor generation should succeed");
-    generate_descriptors_from_parquet_parallel(
-        &parquet_path,
-        &parallel_norm_path,
-        peel_subshells,
-        Some(2),
-        true,
-        DescriptorVersion::V1,
-        None,
-        None,
-    )
-    .expect("Parallel normalized descriptor generation should succeed");
-
     assert_eq!(
         read_i32_descriptor_columns(&sequential_raw_path),
         read_i32_descriptor_columns(&parallel_raw_path)
-    );
-    assert_eq!(
-        read_f32_descriptor_columns(&sequential_norm_path),
-        read_f32_descriptor_columns(&parallel_norm_path)
     );
 
     cleanup_test_file(&input_path);
@@ -684,8 +620,6 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
     cleanup_test_file(&header_path);
     cleanup_test_file(&sequential_raw_path);
     cleanup_test_file(&parallel_raw_path);
-    cleanup_test_file(&sequential_norm_path);
-    cleanup_test_file(&parallel_norm_path);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -856,103 +790,5 @@ fn test_large_file_integrity() {
     assert_eq!(
         stats_seq.truncated_count, stats_par.truncated_count,
         "Truncated count should match"
-    );
-}
-
-#[test]
-fn test_encoding_policy_normalized_plain_raw_dictionary() {
-    use _rcsfs::csfs_conversion::convert_csfs_to_parquet;
-    use _rcsfs::csfs_descriptor::parquet_batch::generate_descriptors_from_parquet_parallel;
-    use _rcsfs::descriptor_schema::DescriptorVersion;
-    use parquet::basic::Encoding;
-    use parquet::file::reader::{FileReader, SerializedFileReader};
-
-    let input_path = temp_dir().join("test_encoding_policy.csf");
-    let parquet_path = temp_dir().join("test_encoding_policy.parquet");
-    let raw_desc_path = temp_dir().join("test_encoding_policy_raw.parquet");
-    let norm_desc_path = temp_dir().join("test_encoding_policy_norm.parquet");
-
-    create_minimal_csf(&input_path);
-    let _conversion = convert_csfs_to_parquet(&input_path, &parquet_path, 256, 1000)
-        .expect("Conversion should succeed");
-
-    // Raw Int32: dictionary encoding should be enabled (parquet default)
-    let _raw = generate_descriptors_from_parquet_parallel(
-        &parquet_path,
-        &raw_desc_path,
-        vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()],
-        Some(1),
-        false, // normalize=false
-        DescriptorVersion::V1,
-        None,
-        None, // compression default
-    )
-    .expect("Raw descriptor generation should succeed");
-
-    let raw_encodings = {
-        let file = File::open(&raw_desc_path).expect("Raw descriptor file should exist");
-        let reader = SerializedFileReader::new(file).expect("Should read raw descriptor metadata");
-        reader
-            .metadata()
-            .row_groups()
-            .first()
-            .unwrap()
-            .columns()
-            .first()
-            .unwrap()
-            .encodings()
-            .collect::<Vec<Encoding>>()
-    };
-
-    // Normalized Float32: dictionary encoding should be disabled
-    let _norm = generate_descriptors_from_parquet_parallel(
-        &parquet_path,
-        &norm_desc_path,
-        vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()],
-        Some(1),
-        true, // normalize=true
-        DescriptorVersion::V1,
-        None,
-        None, // compression default
-    )
-    .expect("Normalized descriptor generation should succeed");
-
-    let norm_encodings = {
-        let file = File::open(&norm_desc_path).expect("Normalized descriptor file should exist");
-        let reader =
-            SerializedFileReader::new(file).expect("Should read normalized descriptor metadata");
-        reader
-            .metadata()
-            .row_groups()
-            .first()
-            .unwrap()
-            .columns()
-            .first()
-            .unwrap()
-            .encodings()
-            .collect::<Vec<Encoding>>()
-    };
-
-    cleanup_test_file(&input_path);
-    cleanup_test_file(&parquet_path);
-    cleanup_test_file(&raw_desc_path);
-    cleanup_test_file(&norm_desc_path);
-
-    // Raw Int32 output should have dictionary encoding present
-    assert!(
-        raw_encodings
-            .iter()
-            .any(|e| matches!(e, Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY)),
-        "Raw Int32 descriptor output should use dictionary encoding, \
-         but encodings are {raw_encodings:?}"
-    );
-
-    // Normalized Float32 output should NOT have dictionary encoding
-    assert!(
-        !norm_encodings
-            .iter()
-            .any(|e| matches!(e, Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY)),
-        "Normalized Float32 descriptor output should use PLAIN encoding (no dictionary), \
-         but encodings are {norm_encodings:?}"
     );
 }

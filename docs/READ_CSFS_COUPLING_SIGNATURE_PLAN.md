@@ -1,5 +1,9 @@
 # `read_csfs` Coupling Signature — Implementation Plan
 
+> Historical V1 design or analysis. V1 generation and normalization were removed on
+> 2026-10-07. This document does not describe the current API; see
+> [the V2 descriptor guide](CSF_DESCRIPTOR_GUIDE.md).
+
 - **Date**: 2026-08-07
 - **Status**: Proposed
 - **Scope**: rCSFs only; no GraspKit implementation changes in this plan

@@ -2,7 +2,7 @@
 //!
 //! This is the single authority for descriptor shape and legality (design doc
 //! `csf_descriptor_v2_ml_design.md` §3.1-§3.3). Both descriptor producers
-//! (`complete_csf::CompleteCsfFile::descriptor_for` and
+//! (`descriptor_v2::encode_v2` and
 //! `csfs_descriptor::CSFDescriptorGenerator`) validate through
 //! [`validate_record`] so a legality rule can never drift between the two.
 
@@ -19,12 +19,11 @@ use crate::csf_generation::{Subshell, subshell_states};
 ///
 /// Distinct from a printed `0` (occupation, `2J`, seniority or `2K` can all be
 /// legitimately zero), so round-tripping preserves the "printed vs not"
-/// distinction that V1's dense zero-fill silently discarded.
+/// distinction needed to restore the original CSF record.
 pub const MISSING: i32 = -1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum DescriptorVersion {
-    V1,
     V2,
 }
 
@@ -32,7 +31,6 @@ impl DescriptorVersion {
     /// Integer channels stored per peel subshell.
     pub const fn channels_per_subshell(self) -> usize {
         match self {
-            Self::V1 => 3,
             Self::V2 => 4,
         }
     }
@@ -40,14 +38,15 @@ impl DescriptorVersion {
     /// The stable integer tag written to Parquet KV metadata and TOML sidecars.
     pub const fn tag(self) -> u8 {
         match self {
-            Self::V1 => 1,
             Self::V2 => 2,
         }
     }
 
     pub fn from_tag(tag: u8) -> Result<Self> {
         match tag {
-            1 => Ok(Self::V1),
+            1 => Err(anyhow::anyhow!(
+                "V1 descriptors have been removed; regenerate V2 descriptors from the original CSF data"
+            )),
             2 => Ok(Self::V2),
             other => Err(anyhow::anyhow!("unknown descriptor_version tag {other}")),
         }
@@ -87,12 +86,9 @@ impl DescriptorLayout {
         self.channels_per_subshell() * self.subshell_count
     }
 
-    /// Full row width including global columns (`3M` for V1, `4M+2` for V2).
+    /// Full row width including global columns (`4M+2`).
     pub fn row_len(self) -> usize {
-        match self.version {
-            DescriptorVersion::V1 => self.feature_len(),
-            DescriptorVersion::V2 => self.feature_len() + 2,
-        }
+        self.feature_len() + 2
     }
 
     /// Base offset of the feature block for peel subshell `index` (0-based).
@@ -116,60 +112,38 @@ impl DescriptorLayout {
 
     /// Offset of the printed-coupling (`2K`) channel within a subshell's slot.
     pub fn two_k_offset(self) -> usize {
-        match self.version {
-            DescriptorVersion::V1 => 2,
-            DescriptorVersion::V2 => 3,
-        }
+        3
     }
 
-    /// V2-only global column: absent (`None`) for V1, where the total is
-    /// folded into the last occupied subshell's third field instead.
+    /// Index of the total angular momentum global column.
     pub fn total_two_j_index(self) -> Option<usize> {
-        match self.version {
-            DescriptorVersion::V1 => None,
-            DescriptorVersion::V2 => Some(self.feature_len()),
-        }
+        Some(self.feature_len())
     }
 
-    /// V2-only global column: absent (`None`) for V1, which never records parity.
+    /// Index of the parity global column.
     pub fn parity_index(self) -> Option<usize> {
-        match self.version {
-            DescriptorVersion::V1 => None,
-            DescriptorVersion::V2 => Some(self.feature_len() + 1),
-        }
+        Some(self.feature_len() + 1)
     }
 
     /// Names of the per-subshell feature columns, in row order.
     ///
-    /// V1 keeps its historical positional `col_{i}` names: nothing consumes
-    /// them by name, and introducing named V1 columns would just add a second
-    /// column-mapping surface. V2 uses named columns because
-    /// `iter_indexed_descriptor_batches` must exclude the global columns
-    /// without computing a stride.
+    /// Named feature columns let consumers exclude the global columns.
     pub fn feature_column_names(self) -> Vec<String> {
-        match self.version {
-            DescriptorVersion::V1 => (0..self.feature_len())
-                .map(|index| format!("col_{index}"))
-                .collect(),
-            DescriptorVersion::V2 => (0..self.subshell_count)
-                .flat_map(|index| {
-                    [
-                        format!("sub{index}_n"),
-                        format!("sub{index}_2j"),
-                        format!("sub{index}_v"),
-                        format!("sub{index}_2k"),
-                    ]
-                })
-                .collect(),
-        }
+        (0..self.subshell_count)
+            .flat_map(|index| {
+                [
+                    format!("sub{index}_n"),
+                    format!("sub{index}_2j"),
+                    format!("sub{index}_v"),
+                    format!("sub{index}_2k"),
+                ]
+            })
+            .collect()
     }
 
     /// Names of the global (non-per-subshell) columns, in row order.
     pub fn global_column_names(self) -> Vec<String> {
-        match self.version {
-            DescriptorVersion::V1 => Vec::new(),
-            DescriptorVersion::V2 => vec!["total_two_j".to_owned(), "parity".to_owned()],
-        }
+        vec!["total_two_j".to_owned(), "parity".to_owned()]
     }
 }
 
@@ -254,34 +228,15 @@ pub fn validate_record(
 
 /// Build the Arrow output schema for a descriptor Parquet file.
 ///
-/// V2 never normalizes (design doc §4.4, §5.1): the old per-subshell
-/// normalization divides by physics-derived denominators keyed to a 3-wide
-/// row and cannot be reused by just changing the stride to 4. Rejecting the
-/// combination here means every V2 export path is Int32-only.
-pub fn output_schema(
-    layout: DescriptorLayout,
-    normalize: bool,
-) -> Result<Arc<arrow::datatypes::Schema>> {
+/// Descriptors retain raw integers; ML preprocessing belongs to the consumer.
+pub fn output_schema(layout: DescriptorLayout) -> Result<Arc<arrow::datatypes::Schema>> {
     use arrow::datatypes::{DataType, Field, Schema};
-
-    ensure!(
-        !(layout.version() == DescriptorVersion::V2 && normalize),
-        "V2 descriptors do not support normalize=true; normalization is P1 scope \
-         (design doc §4.4/§5.1)"
-    );
-
-    let value_type = if normalize {
-        DataType::Float32
-    } else {
-        DataType::Int32
-    };
-    let mut fields = Vec::with_capacity(layout.row_len());
-    for name in layout.feature_column_names() {
-        fields.push(Field::new(name, value_type.clone(), false));
-    }
-    for name in layout.global_column_names() {
-        fields.push(Field::new(name, DataType::Int32, false));
-    }
+    let fields = layout
+        .feature_column_names()
+        .into_iter()
+        .chain(layout.global_column_names())
+        .map(|name| Field::new(name, DataType::Int32, false))
+        .collect::<Vec<_>>();
     Ok(Arc::new(Schema::new(fields)))
 }
 
@@ -335,7 +290,6 @@ fn json_string_array(values: &[String]) -> String {
 pub fn output_kv_metadata(
     layout: DescriptorLayout,
     peel_subshells: &[String],
-    normalized: bool,
     source_header_sha256: Option<&str>,
     source_header_filename: Option<&str>,
 ) -> Vec<KeyValue> {
@@ -357,7 +311,7 @@ pub fn output_kv_metadata(
             Some(json_string_array(peel_subshells)),
         ),
         KeyValue::new("missing_sentinel".to_owned(), Some(MISSING.to_string())),
-        KeyValue::new("normalized".to_owned(), Some(normalized.to_string())),
+        KeyValue::new("normalized".to_owned(), Some("false".to_owned())),
         KeyValue::new(
             "feature_columns".to_owned(),
             Some(json_string_array(&layout.feature_column_names())),
@@ -386,22 +340,6 @@ pub fn output_kv_metadata(
 mod tests {
     use super::*;
     use crate::complete_csf::SubshellState;
-
-    #[test]
-    fn v1_layout_matches_legacy_dense_shape() {
-        let layout = DescriptorLayout::new(DescriptorVersion::V1, 3);
-        assert_eq!(layout.row_len(), 9);
-        assert_eq!(layout.feature_len(), 9);
-        assert_eq!(layout.total_two_j_index(), None);
-        assert_eq!(layout.parity_index(), None);
-        assert_eq!(
-            layout.feature_column_names(),
-            [
-                "col_0", "col_1", "col_2", "col_3", "col_4", "col_5", "col_6", "col_7", "col_8"
-            ]
-        );
-        assert!(layout.global_column_names().is_empty());
-    }
 
     #[test]
     fn v2_layout_adds_two_global_columns() {
@@ -557,32 +495,12 @@ mod tests {
     }
 
     #[test]
-    fn output_schema_rejects_v2_normalize() {
-        let layout = DescriptorLayout::new(DescriptorVersion::V2, 2);
-        assert!(output_schema(layout, true).is_err());
-    }
-
-    #[test]
-    fn output_schema_v1_normalize_uses_float32() {
-        use arrow::datatypes::DataType;
-        let layout = DescriptorLayout::new(DescriptorVersion::V1, 2);
-        let schema = output_schema(layout, true).unwrap();
-        assert!(
-            schema
-                .fields()
-                .iter()
-                .all(|field| *field.data_type() == DataType::Float32)
-        );
-    }
-
-    #[test]
     fn kv_metadata_round_trips_expected_keys() {
         let layout = DescriptorLayout::new(DescriptorVersion::V2, 2);
         let peel_subshells = vec!["4f-".to_owned(), "4f".to_owned()];
         let entries = output_kv_metadata(
             layout,
             &peel_subshells,
-            false,
             Some("abc123"),
             Some("x_header.toml"),
         );

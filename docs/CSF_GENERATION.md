@@ -480,8 +480,8 @@ depends on which worker finishes first.
 
 
 Descriptor columns and sidecar subshells follow the final CSF header. The
-standalone `gen-descriptors` command still supports the legacy V1 layout only
-when `descriptor_version=1` is explicit; V1 normalization is also explicit.
+standalone `gen-descriptors` command and both generation backends support only V2.
+V1 generation and the `normalize` option have been removed.
 Raw V2 values are checked against the existing text-to-Parquet descriptor
 pipeline and can be restored to CSF text with the exact source header. See
 [local parallel measurements](benchmarks/rcsfgenerate_parallel_20260912.md).

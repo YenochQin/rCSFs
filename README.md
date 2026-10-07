@@ -21,7 +21,6 @@ It helps you:
 - Preserve the original CSF ordering during conversion.
 - Extract peel subshell definitions from the generated header TOML.
 - Generate descriptor Parquet files from converted CSFs.
-- Optionally normalize descriptors for ML-oriented downstream use.
 
 ## Why rCSFs
 
@@ -194,9 +193,9 @@ Typical output:
 ### 3. Generate descriptor Parquet
 
 `generate_descriptors_from_parquet(...)` reads the converted CSF Parquet file and writes a
-descriptor table. There are two descriptor formats, selected with `descriptor_version`:
+descriptor table in the reversible V2 format. `descriptor_version` accepts only `2`:
 
-#### V2 (default)
+#### V2
 
 Four integer channels per peel subshell, in named columns:
 
@@ -211,7 +210,8 @@ total_two_j, parity   (parity is +1/-1)
 ```
 
 A value GRASP never printed for that record is `-1` (`MISSING`), distinct from a printed `0`.
-V2 always writes `Int32` columns and does **not** support `normalize=True`.
+V2 always writes raw `Int32` columns. Feature scaling belongs to the consuming ML pipeline;
+the former `normalize` parameter has been removed.
 
 When `header_path` is given (or auto-detected next to `input_parquet`), its SHA-256 is recorded
 in the output Parquet's key-value metadata as `source_header_sha256`, binding the descriptor
@@ -220,18 +220,9 @@ rest of the format contract (`descriptor_version`, `channels_per_subshell`, `pee
 `feature_columns`, `global_columns`, `missing_sentinel`, `normalized`) under
 `key_value_metadata`.
 
-#### V1 (legacy)
-
-Positional columns `col_0, col_1, ..., col_N`, flattened by orbital as a dense triplet:
-
-```text
-[n_i, 2Q_i, 2J_cum,i] for each peel subshell
-```
-
-Pass `descriptor_version=1` explicitly to get this format. Raw V1 descriptors are `Int32`;
-`normalize=True` (V1-only) writes `Float32` columns instead.
-
-Output Parquet uses ZSTD compression in both formats.
+V1 generation and its normalization have been removed. Regenerate old descriptors from
+the original CSF data; converting a V1 row cannot recover the missing seniority information.
+Output Parquet uses ZSTD compression by default.
 
 Example:
 
@@ -247,15 +238,6 @@ stats = generate_descriptors_from_parquet(
     header_path="output_header.toml",
 )
 
-# V1, with normalization
-stats_v1 = generate_descriptors_from_parquet(
-    "output.parquet",
-    "descriptors_v1.parquet",
-    peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
-    num_workers=8,
-    normalize=True,
-    descriptor_version=1,
-)
 ```
 
 ### 3a. Restore CSFs from a V2 descriptor file
@@ -634,7 +616,7 @@ record_count: 452373
 block_count: 7
 ```
 
-Flags: `--generate-parquet`, `--generate-descriptors`, `--normalize`, `--threads N`,
+Flags: `--generate-parquet`, `--generate-descriptors`, `--threads N`,
 `--memory-budget-mib MiB`, `--json`.
 
 For reproducible batch runs, use a TOML configuration instead of the interactive
@@ -660,7 +642,6 @@ generate_descriptors = true
 csf = "calculation.c"
 parquet = "calculation.parquet"
 descriptor_parquet = "calculation_descriptors.parquet"
-normalize = false
 ```
 
 Run it with:
@@ -693,7 +674,6 @@ generate_descriptors = true
 csf = "out.c"
 parquet = "out.parquet"
 descriptor_parquet = "out_descriptors.parquet"
-normalize = false
 ```
 
 Run it with `uv run rcsfs csfsgenerate --config generation.toml`. By default
@@ -716,17 +696,12 @@ Both the interactive memory backend and the disk backend emit reversible V2 desc
 ```bash
 # V2 (default)
 uv run rcsfs gen-descriptors csf.parquet descriptors.parquet --header csf_header.toml
-
-# V1, with normalization
-uv run rcsfs gen-descriptors csf.parquet descriptors.parquet \
-  --header csf_header.toml --descriptor-version 1 --normalize
 ```
 
-`--descriptor-version {1,2}` selects the format (default: `2`); `--normalize` is V1-only and
-errors if combined with `--descriptor-version 2`. The TOML/config transcript
-generation path uses V2 and does not silently fall back to V1. This command also writes a
-`{output_stem}.toml` sidecar mirroring the descriptor version and subshell list, for tools
-that read TOML without opening the Parquet file.
+`--descriptor-version 2` is optional; V2 is the only supported generation format.
+The former `--normalize` flag and TOML `normalize` key have been removed.
+This command also writes a `{output_stem}.toml` sidecar mirroring the descriptor version
+and subshell list, for tools that read TOML without opening the Parquet file.
 
 ### `rcsfs restore-csfs` — rebuild a CSF text file from V2 descriptors
 
@@ -801,12 +776,12 @@ rather than treated as an identity selection.
 | `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | Convert CSF text to Parquet |
 | `get_parquet_info(input_path)` | Inspect Parquet metadata |
 | `read_peel_subshells(header_path)` | Read peel subshells from header TOML |
-| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False, compression=None, *, descriptor_version=2, header_path=None)` | Generate descriptor Parquet from converted CSFs; `descriptor_version=2` (default) writes named columns, `1` writes the legacy `col_{i}` layout and is required for `normalize=True` |
+| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, compression=None, *, descriptor_version=2, header_path=None)` | Generate descriptor Parquet from converted CSFs; `descriptor_version=2` is the only supported format and writes named Int32 columns |
 | `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | Rebuild a CSF text file from a V2 descriptor Parquet file and its source header TOML |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | Reorder a CSF list into zero-order + first-order space per symmetry block |
 | `split_csfs_by_active_spaces(input_parquet, header_path, targets)` | Split one Parquet CSF list into independently selected, possibly overlapping active-space CSF text files; `targets` maps output path to orbital limits |
 | `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | Write a conservative, non-exact upper bound of interacting candidates; returned stats always include `exact=False` |
-| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` |
+| `generate_csfs_from_transcript(transcript, output_path, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` |
 | `generate_disk_outputs_from_transcript(transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None, *, memory_budget_mib=None)` | Generate staged CSF and reversible V2 outputs with managed-memory accounting |
 
 ### Split CSFs by active space
@@ -853,7 +828,7 @@ rCSFs expects CSF text files in this layout:
 - Preparing CSF datasets for analytics pipelines.
 - Moving large text-based CSF collections into Parquet.
 - Building ML-ready descriptor matrices from CSF data.
-- Creating normalized descriptor datasets for model training.
+- Creating reversible V2 descriptor datasets for model training.
 
 ## Performance Tips
 

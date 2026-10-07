@@ -1,5 +1,9 @@
 # rCSFs Code Execution Flow Diagrams
 
+> Historical V1 design or analysis. V1 generation and normalization were removed on
+> 2026-10-07. This document does not describe the current API; see
+> [the V2 descriptor guide](CSF_DESCRIPTOR_GUIDE.md).
+
 ## Diagram 1: Top-Level Architecture
 
 ```mermaid

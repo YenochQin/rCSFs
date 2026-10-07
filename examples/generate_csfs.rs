@@ -1,6 +1,7 @@
 //! Generate a fixed relativistic occupation configuration from a TOML request.
 use _rcsfs::csf_generation::{GenerationRequest, Subshell, SubshellOccupation, generate_csfs};
-use _rcsfs::descriptor_normalization::{infer_two_j_target, normalize_descriptor_per_csf};
+use _rcsfs::descriptor_schema::{DescriptorLayout, DescriptorVersion};
+use _rcsfs::descriptor_v2::encode_v2;
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::fs::{self, OpenOptions};
@@ -36,10 +37,9 @@ fn main() -> Result<()> {
             .context("usage: generate_csfs REQUEST.toml OUTPUT.c [DESCRIPTORS.csv]")?,
     );
     let descriptor_output = args.next().map(PathBuf::from);
-    let normalize = args.next().is_some_and(|arg| arg == "--normalize");
     ensure!(
         args.next().is_none(),
-        "usage: generate_csfs REQUEST.toml OUTPUT.c [DESCRIPTORS.csv] [--normalize]"
+        "usage: generate_csfs REQUEST.toml OUTPUT.c [DESCRIPTORS.csv]"
     );
     let input: Input = toml::from_str(&fs::read_to_string(input)?)?;
     let request = GenerationRequest {
@@ -79,24 +79,17 @@ fn main() -> Result<()> {
             .open(&path)
             .with_context(|| format!("descriptor output must be a new file: {}", path.display()))?;
         let mut writer = BufWriter::new(file);
+        let layout = DescriptorLayout::new(DescriptorVersion::V2, generated.subshells.len());
+        let columns = layout
+            .feature_column_names()
+            .into_iter()
+            .chain(layout.global_column_names())
+            .collect::<Vec<_>>();
+        writeln!(writer, "{}", columns.join(","))?;
+        let mut descriptor = vec![0; layout.row_len()];
         for record in &generated.records {
-            let descriptor = generated.descriptor_for(record)?;
-            let normalized = normalize_descriptor_per_csf(
-                &descriptor,
-                &generated.subshells,
-                infer_two_j_target(&descriptor),
-            )?;
-            let values = if normalize {
-                normalized
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            } else {
-                descriptor
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            };
+            encode_v2(&generated, record, &mut descriptor)?;
+            let values = &descriptor;
             for (index, value) in values.iter().enumerate() {
                 if index > 0 {
                     write!(writer, ",")?;

@@ -19,7 +19,7 @@ SAMPLE_CSF = FIXTURES_DIR / "sample.csf"
 E1_CC1AS1_TRANSCRIPT = FIXTURES_DIR / "e1_cc1as1.rcsfgenerate"
 
 
-def test_descriptor_compression_keeps_legacy_positional_slot(
+def test_descriptor_compression_positional_argument(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import rcsfs
@@ -32,7 +32,7 @@ def test_descriptor_compression_keeps_legacy_positional_slot(
 
     monkeypatch.setattr(rcsfs, "_generate_descriptors_from_parquet", fake_generate)
     result = rcsfs.generate_descriptors_from_parquet(
-        "input.parquet", "output.parquet", ["1s"], None, False, "snappy"
+        "input.parquet", "output.parquet", ["1s"], None, "snappy"
     )
     assert result["success"] is True
     assert calls["compression"] == "snappy"
@@ -63,7 +63,6 @@ def test_end_to_end_public_python_api_defaults_to_v2(tmp_path: Path) -> None:
         descriptor_parquet,
         peel_subshells=peel_subshells,
         num_workers=2,
-        normalize=False,
         header_path=stats["header_file"],
     )
 
@@ -218,29 +217,19 @@ def test_generate_csfs_from_transcript_reports_failure(tmp_path: Path) -> None:
     assert "error" in stats
 
 
-def test_normalize_path_tolerates_normalization_errors(tmp_path: Path) -> None:
-    csf_parquet = tmp_path / "sample.parquet"
-    convert_stats = convert_csfs(SAMPLE_CSF, csf_parquet, chunk_size=90, num_workers=2)
-
-    bad_subshells = ["xyz"]
-    normalized_output = tmp_path / "normalized_bad_subshells.parquet"
-    normalized_stats = generate_descriptors_from_parquet(
-        csf_parquet,
-        normalized_output,
-        peel_subshells=bad_subshells,
-        num_workers=2,
-        normalize=True,
-        descriptor_version=1,
-    )
-
-    assert normalized_stats["success"] is True
-    assert normalized_stats["csf_count"] == convert_stats["csf_count"]
-    assert normalized_stats["descriptor_count"] == convert_stats["csf_count"]
-    assert normalized_stats["descriptor_size"] == 3 * len(bad_subshells)
-
-    normalized_info = get_parquet_info(normalized_output)
-    assert normalized_info["num_rows"] == convert_stats["csf_count"]
-    assert "ZSTD" in normalized_info["compression"]
+def test_retired_descriptor_options_fail_without_outputs(tmp_path: Path) -> None:
+    output = tmp_path / "descriptors.parquet"
+    with pytest.raises(
+        ValueError, match="V1 descriptors have been removed.*regenerate V2"
+    ):
+        generate_descriptors_from_parquet(
+            tmp_path / "missing.parquet", output, ["1s"], descriptor_version=1
+        )
+    with pytest.raises(TypeError, match="normalize"):
+        generate_descriptors_from_parquet(
+            tmp_path / "missing.parquet", output, ["1s"], normalize=True
+        )
+    assert not output.exists()
 
 
 @pytest.mark.parametrize(
@@ -257,65 +246,53 @@ def test_generated_descriptors_match_text_pipeline(
 
     import polars as pl
 
-    for normalize in (False, True):
-        work = tmp_path / str(normalize)
+    from rcsfs import cli
+    from unittest.mock import patch
+
+    for storage in ("memory", "disk"):
+        work = tmp_path / storage
         work.mkdir()
         monkeypatch.chdir(work)
         csf = work / "out.c"
-        from rcsfs import cli
-
         direct_path = work / "direct.parquet"
-        stats = generate_csfs_from_transcript(
-            transcript,
-            csf,
-            normalize=normalize,
-            threads=2,
-        )
+        stats = generate_csfs_from_transcript(transcript, csf, threads=2)
         assert stats["success"], stats
         converted = convert_csfs(csf, work / "text.parquet")
         assert converted["success"], converted
         shells = read_peel_subshells(converted["header_file"])
         derived = generate_descriptors_from_parquet(
-            work / "text.parquet",
-            work / "features.parquet",
-            shells,
-            normalize=normalize,
-            # csfsgenerate --generate-descriptors still hardcodes V1
-            # (plan step 13 is deferred); match it here so the two
-            # pipelines are directly comparable.
-            descriptor_version=1,
+            work / "text.parquet", work / "features.parquet", shells
         )
         assert derived["success"], derived
         lines = iter(["*", *transcript.splitlines()[1:]])
-        from unittest.mock import patch
-
         with patch.object(
             cli, "_prompt", side_effect=lambda _, lines=lines: next(lines)
         ):
-            argv = [
-                "csfsgenerate",
-                str(work / "cli.c"),
-                "--generate-descriptors",
-                "--descriptor-parquet",
-                str(direct_path),
-            ]
-            if normalize:
-                argv.append("--normalize")
-            assert cli.main(argv) == 0
+            assert (
+                cli.main(
+                    [
+                        "csfsgenerate",
+                        str(work / "cli.c"),
+                        "--generate-descriptors",
+                        "--descriptor-parquet",
+                        str(direct_path),
+                        "--generation-storage",
+                        storage,
+                    ]
+                )
+                == 0
+            )
         direct = pl.read_parquet(direct_path)
         expected = pl.read_parquet(work / "features.parquet")
-        assert direct.shape == expected.shape
-        for actual_row, expected_row in zip(
-            direct.iter_rows(), expected.iter_rows(), strict=True
-        ):
-            if normalize:
-                assert actual_row == pytest.approx(expected_row, abs=1e-7)
-            else:
-                assert actual_row == expected_row
+        assert direct.equals(expected)
         assert (
-            tomllib.loads(direct_path.with_suffix(".toml").read_text())["subshells"]
-            == shells
+            get_parquet_info(direct_path)["key_value_metadata"]["descriptor_version"]
+            == "2"
         )
+        sidecar = tomllib.loads(direct_path.with_suffix(".toml").read_text())
+        assert sidecar["subshells"] == shells
+        assert sidecar["format_version"] == 2
+        assert sidecar["normalized"] is False
 
 
 def test_restore_csfs_cli_roundtrip(
@@ -504,7 +481,6 @@ generate_descriptors = true
 csf = "{csf}"
 parquet = "{parquet}"
 descriptor_parquet = "{descriptors}"
-normalize = false
 """,
         encoding="utf-8",
     )

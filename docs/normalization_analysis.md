@@ -1,5 +1,9 @@
 # 描述符归一化方案分析报告
 
+> Historical V1 design or analysis. V1 generation and normalization were removed on
+> 2026-10-07. This document does not describe the current API; see
+> [the V2 descriptor guide](CSF_DESCRIPTOR_GUIDE.md).
+
 基于 GRASP `rcsfgenerate90` 源码审查（`genb.f90`, `kopp1.f90`, `kopp2.f90`）及 rCSFs 当前实现（`src/descriptor_normalization.rs`, `src/csfs_descriptor.rs`）。
 
 ---

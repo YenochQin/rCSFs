@@ -1,6 +1,6 @@
 //! V2 descriptor encode/decode and CSF restoration.
 //!
-//! Unlike V1's dense triplet, V2 stores every printed value verbatim (using
+//! V2 stores every printed value verbatim (using
 //! [`descriptor_schema::MISSING`] for anything GRASP did not print) so
 //! `decode_v2_into` is the exact inverse of `encode_v2`: no line2 back-fill, no
 //! folding the total `2J` into the last occupied subshell, and seniority is
@@ -37,7 +37,7 @@ pub fn encode_v2(file: &CompleteCsfFile, record: &CsfRecord, row: &mut [i32]) ->
 /// Write occupied/coupling data into a caller-owned V2 row buffer.
 ///
 /// Shared by [`encode_v2`] (integer-record producer) and
-/// `csfs_descriptor::CSFDescriptorGenerator::parse_csf_v2_into` (text
+/// `csfs_descriptor::CSFDescriptorGenerator::parse_csf_into` (text
 /// producer) so the two producers cannot silently diverge on how a record's
 /// fields land in the row (design doc §5.1/plan D9). Callers must validate
 /// `occupied`/`couplings` themselves first.
@@ -585,15 +585,6 @@ mod tests {
             .write_record_to(&restored.records[0], &mut restored_bytes)
             .unwrap();
         assert_eq!(expected_bytes, restored_bytes);
-    }
-
-    #[test]
-    fn decode_v2_into_rejects_non_v2_layout() {
-        let layout = DescriptorLayout::new(DescriptorVersion::V1, 1);
-        let row = vec![0i32; layout.row_len()];
-        let mut occupied = Vec::new();
-        let mut couplings = Vec::new();
-        assert!(decode_v2_into(&row, layout, &mut occupied, &mut couplings).is_err());
     }
 
     #[test]

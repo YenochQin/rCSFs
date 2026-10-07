@@ -183,9 +183,9 @@ peel_subshells = read_peel_subshells("output_header.toml")
 ### 3. 生成描述符 Parquet
 
 `generate_descriptors_from_parquet(...)` 会读取转换后的 CSF Parquet，并输出描述符表。
-通过 `descriptor_version` 可选择两种格式：
+`descriptor_version` 只接受 `2`，统一输出可逆 V2 描述符：
 
-#### V2（默认）
+#### V2
 
 每个 peel subshell 对应四个整数列（具名列）：
 
@@ -200,7 +200,7 @@ total_two_j, parity   （parity 取值 +1/-1）
 ```
 
 GRASP 未打印的字段值为 `-1`（`MISSING`），与显式打印的 `0` 区分。V2 始终写为 `Int32` 列，
-**不支持** `normalize=True`。
+保留原始整数。原 `normalize` 参数已删除；ML 特征缩放由下游训练流程处理。
 
 当提供 `header_path`（或从 `input_parquet` 同目录自动检测）时，其 SHA-256 会记录在输出
 Parquet 的 key-value metadata 的 `source_header_sha256` 字段中，将描述符文件与生成它的确切
@@ -208,18 +208,8 @@ header 文件绑定。`get_parquet_info(...)` 会在 `key_value_metadata` 中返
 格式约定（`descriptor_version`、`channels_per_subshell`、`peel_subshells`、
 `feature_columns`、`global_columns`、`missing_sentinel`、`normalized`）。
 
-#### V1（旧版）
-
-列名为位置式 `col_0, col_1, ..., col_N`，按轨道展开为稠密三元组：
-
-```text
-[n_i, 2Q_i, 2J_cum,i]
-```
-
-显式传入 `descriptor_version=1` 即可使用该格式。原始 V1 描述符写为 `Int32` 列；
-`normalize=True`（仅 V1 支持）会写为 `Float32` 列。
-
-两种格式的输出 Parquet 均使用 ZSTD 压缩。
+V1 生成器及其归一化模块已移除。旧描述符需要从原始 CSF 重新生成；
+V1 已丢失的 seniority 信息无法通过转换旧行恢复。输出 Parquet 默认使用 ZSTD 压缩。
 
 示例：
 
@@ -235,15 +225,6 @@ stats = generate_descriptors_from_parquet(
     header_path="output_header.toml",
 )
 
-# V1，附加归一化
-stats_v1 = generate_descriptors_from_parquet(
-    "output.parquet",
-    "descriptors_v1.parquet",
-    peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
-    num_workers=8,
-    normalize=True,
-    descriptor_version=1,
-)
 ```
 
 ### 3a. 从 V2 描述符还原 CSF
@@ -358,7 +339,7 @@ uv run cargo run --release --example generate_csfs -- \
 
 ### `rcsfs csfsgenerate` —— 生成新的 CSF 列表
 
-除了交互式问答外，也可以使用 TOML 配置进行可复现的批处理。默认只生成 CSF 文本；将 `generate_descriptors` 设为 `true` 后，还会生成 CSF Parquet、header TOML、描述符 Parquet 和描述符 TOML sidecar。CSV 描述符输出不再支持。TOML/config 描述符运行默认使用 disk backend，直接写出可逆的 **V2 描述符**，不会自动回退到 V1；V2 不支持 `normalize=true`。可在 `[generate]` 中设置 `memory_budget_mib`，或使用 `--memory-budget-mib`，限制受管内存预算。使用 `--json` 时还会返回阶段耗时、逻辑字节数和资源统计。交互式 memory 路径也生成可逆 V2 描述符。
+除了交互式问答外，也可以使用 TOML 配置进行可复现的批处理。默认只生成 CSF 文本；将 `generate_descriptors` 设为 `true` 后，还会生成 CSF Parquet、header TOML、描述符 Parquet 和描述符 TOML sidecar。CSV 描述符输出不再支持。TOML/config 描述符运行默认使用 disk backend，直接写出可逆的 **V2 描述符**。可在 `[generate]` 中设置 `memory_budget_mib`，或使用 `--memory-budget-mib`，限制受管内存预算。使用 `--json` 时还会返回阶段耗时、逻辑字节数和资源统计。交互式 memory 路径也统一生成 V2 描述符。V1 生成及原 `normalize` 选项已移除。
 
 ```toml
 [generate]
@@ -376,7 +357,6 @@ generate_descriptors = true
 csf = "out.c"
 parquet = "out.parquet"
 descriptor_parquet = "out_descriptors.parquet"
-normalize = false
 ```
 
 运行：`uv run rcsfs csfsgenerate --config generation.toml`。
@@ -392,15 +372,11 @@ normalize = false
 ```bash
 # V2（默认）
 uv run rcsfs gen-descriptors csf.parquet descriptors.parquet --header csf_header.toml
-
-# V1，附加归一化
-uv run rcsfs gen-descriptors csf.parquet descriptors.parquet \
-  --header csf_header.toml --descriptor-version 1 --normalize
 ```
 
-`--descriptor-version {1,2}` 选择格式（默认 `2`）；`--normalize` 仅 V1 支持，与
-`--descriptor-version 2` 同时使用会报错。该命令还会写出 `{output_stem}.toml` sidecar，
-镜像描述符版本与轨道列表，供不打开 Parquet 文件的工具读取。
+可选的 `--descriptor-version 2` 只接受 V2。原 `--normalize` 参数和 TOML `normalize`
+键已删除。该命令还会写出 `{output_stem}.toml` sidecar，镜像描述符版本与轨道列表，
+供不打开 Parquet 文件的工具读取。
 
 ### `rcsfs restore-csfs` —— 从 V2 描述符还原 CSF 文本文件
 
@@ -450,11 +426,11 @@ uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
 | `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | 将 CSF 文本转换为 Parquet |
 | `get_parquet_info(input_path)` | 读取 Parquet 元数据 |
 | `read_peel_subshells(header_path)` | 从头文件 TOML 中提取 peel subshells |
-| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, normalize=False, compression=None, *, descriptor_version=2, header_path=None)` | 从转换后的 CSF 数据生成描述符 Parquet；`descriptor_version=2`（默认）写具名列，`1` 写旧版 `col_{i}` 列且是 `normalize=True` 的前提 |
+| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, compression=None, *, descriptor_version=2, header_path=None)` | 从转换后的 CSF 数据生成描述符 Parquet；`descriptor_version=2` 是唯一受支持的格式，写具名 Int32 列 |
 | `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | 根据 V2 描述符 Parquet 文件及其来源 header TOML 重建 CSF 文本文件 |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | 按对称性分块将 CSF 列表重排为零级 + 一级空间 |
 | `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | 写出保守且非精确的相互作用候选上界；统计固定包含 `exact=False` |
-| `generate_csfs_from_transcript(transcript, output_path, normalize=False, threads=None)` | 从内存中的 `rcsfgenerate.log` 格式 transcript 生成 CSF；`rcsfs csfsgenerate` 的内存路径底层实现 |
+| `generate_csfs_from_transcript(transcript, output_path, threads=None)` | 从内存中的 `rcsfgenerate.log` 格式 transcript 生成 CSF；`rcsfs csfsgenerate` 的内存路径底层实现 |
 | `generate_disk_outputs_from_transcript(transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None, *, memory_budget_mib=None)` | 生成暂存的 CSF 和可逆 V2 输出，并返回阶段及受管内存统计 |
 
 ## 输入数据格式
@@ -472,7 +448,7 @@ rCSFs 期望的 CSF 文本结构如下：
 - 为 CSF 数据建立分析用 Parquet 数据集。
 - 将大规模文本格式 CSF 数据迁移到列式存储。
 - 生成适合机器学习训练的描述符矩阵。
-- 构建带归一化的描述符数据集。
+- 构建可逆的 V2 描述符数据集。
 
 ## 性能建议
 

@@ -1,5 +1,9 @@
 # CSF Descriptor Construction: Technical Methods Documentation
 
+> Historical V1 design or analysis. V1 generation and normalization were removed on
+> 2026-10-07. This document does not describe the current API; see
+> [the V2 descriptor guide](CSF_DESCRIPTOR_GUIDE.md).
+
 ## 1. Overview
 
 The `rCSFs` library converts Configuration State Functions (CSFs) from the GRASP2018 relativistic atomic structure code into fixed-length numerical descriptor vectors suitable for machine learning. The pipeline has two stages: **parsing** (text → integer vector) and **normalization** (integer vector → float vector in [0, 1]).

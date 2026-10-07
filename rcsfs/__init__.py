@@ -259,138 +259,49 @@ def generate_descriptors_from_parquet(
     output_parquet: str | Path,
     peel_subshells: list[str],
     num_workers: int | None = None,
-    normalize: bool = False,
     compression: str | None = None,
     *,
     descriptor_version: int = 2,
     header_path: str | Path | None = None,
 ) -> DescriptorGenerationStats:
-    """
-    Generate CSF descriptors from a parquet file using parallel processing.
+    """Generate reversible V2 Int32 descriptors from CSF Parquet.
 
-    This function is optimized for large-scale descriptor generation (tens of millions
-    to billions of CSFs). It uses rayon's work-stealing for automatic load balancing
-    with streaming batch processing for low memory usage.
-
-    Output Format:
-        - Non-normalized: Parquet with multiple Int32 columns `col_0, col_1, ..., col_N`
-        - Normalized: Parquet with multiple Float32 columns `col_0, col_1, ..., col_N`
-        - Compression defaults to ZSTD level 3; pass ``compression="none"`` to disable
-          (much faster write at the cost of ~3-5x larger files).
-        Each column corresponds to one position in the descriptor array.
-        This multi-column format is much faster than List column format for large datasets.
-        Example: For 3 orbitals (descriptor_size=9), columns are: col_0, col_1, ..., col_8
+    Each peel subshell contributes named ``sub{i}_n``, ``sub{i}_2j``,
+    ``sub{i}_v``, ``sub{i}_2k`` columns. Unprinted J, seniority and coupling
+    fields are -1, distinct from a printed zero. Global ``total_two_j`` and
+    ``parity`` columns make the full row width ``4 * len(peel_subshells) + 2``.
 
     Args:
-        input_parquet: Path to input parquet file (must have line1, line2, line3, idx columns)
-        output_parquet: Path to output Parquet file for descriptors
-        peel_subshells: List of subshell names (e.g., ['5s', '4d-', '4d', '5p-', '5p', '6s'])
-        num_workers: Number of worker threads (default: CPU core count)
-        normalize: Whether to normalize descriptors using per-CSF physics-correct
-            denominators (default: False). When True, each descriptor triplet
-            [n_i, 2Q_i, 2J_cum,i] is normalized by [g_i, n_i*(g_i-n_i),
-            min(prefix_i, 2J_target+suffix_i)] respectively, where 2J_target is
-            read from the final coupling value of each individual CSF.
-            Normalization is V1-only: it raises if the effective
-            ``descriptor_version`` is ``2`` (the default), so pass
-            ``descriptor_version=1`` explicitly to normalize.
-        descriptor_version: ``2`` (default; four-channel per-subshell:
-            occupation, printed 2J, seniority, printed coupling 2K; plus
-            global ``total_two_j``/``parity`` columns) or ``1`` (legacy
-            dense triplet). V2 uses named columns (``sub{i}_n``,
-            ``sub{i}_2j``, ``sub{i}_v``, ``sub{i}_2k``, ``total_two_j``,
-            ``parity``) rather than positional ``col_{i}`` columns.
-        header_path: Path to the source ``{stem}_header.toml``. When given,
-            its SHA-256 is recorded in the output Parquet's key-value
-            metadata as ``source_header_sha256``, binding the descriptor
-            file to the exact header it was generated from. Auto-detected
-            from ``input_parquet`` when omitted.
-        compression: Parquet compression codec (default: ``zstd-3``). Accepted values:
-            ``"none"``/``"uncompressed"``, ``"snappy"``, ``"zstd"``, ``"zstd-N"``
-            (N in 1..=22). Pass ``"none"`` to maximize writer throughput when disk
-            space is not a concern.
+        input_parquet: CSF Parquet with idx, line1, line2 and line3 columns.
+        output_parquet: Descriptor Parquet destination.
+        peel_subshells: Ordered peel subshell labels from the source header.
+        num_workers: Positive worker count; defaults to the CPU count.
+        compression: ``none``, ``uncompressed``, ``snappy``, ``zstd`` or
+            ``zstd-N`` (N in 1..22); defaults to ZSTD level 3.
+        descriptor_version: Only 2 is supported. Regenerate old descriptors
+            from their original CSF text or three-line CSF Parquet.
+        header_path: Source header TOML whose SHA-256 binds the descriptor
+            file to its header; auto-detected when omitted.
 
     Returns:
-        Dictionary containing generation statistics:
-        - success: Whether generation succeeded
-        - input_file: Input parquet file path
-        - output_file: Output Parquet file path
-        - csf_count: Number of CSFs processed
-        - descriptor_count: Number of descriptors generated
-        - orbital_count: Number of orbitals
-        - descriptor_size: Size of each descriptor (3 * orbital_count for V1,
-          4 * orbital_count + 2 for V2)
-        - descriptor_version: The version tag written (1 or 2)
-        - channels_per_subshell: 3 for V1, 4 for V2
+        Generation statistics, including descriptor_size, descriptor_version=2
+        and channels_per_subshell=4. Rows preserve the source order.
+
+    ML feature scaling belongs to the consuming training pipeline. Descriptor
+    exports always preserve raw integers for exact CSF restoration.
 
     Examples:
-        >>> # Basic usage with peel_subshells from header
-        >>> from rcsfs import read_peel_subshells, generate_descriptors_from_parquet
-        >>>
-        >>> peel_subshells = read_peel_subshells("data_header.toml")
+        >>> shells = read_peel_subshells("data_header.toml")
         >>> stats = generate_descriptors_from_parquet(
-        ...     "csfs_data.parquet",
-        ...     "descriptors.parquet",
-        ...     peel_subshells=peel_subshells
+        ...     "data.parquet", "descriptors.parquet", shells,
+        ...     descriptor_version=2, compression="none",
         ... )
-
-        >>> # Read with polars
-        >>> import polars as pl
-        >>> df = pl.read_parquet("descriptors.parquet")
-        >>> # Get all descriptor columns (col_0, col_1, ..., col_N)
-        >>> descriptor_cols = [col for col in df.columns if col.startswith("col_")]
-        >>> descriptors = df[descriptor_cols].to_numpy()  # Shape: (n_csfs, descriptor_size)
-
-        >>> # With normalization (V1-only; explicit descriptor_version=1 required)
-        >>> stats = generate_descriptors_from_parquet(
-        ...     "csfs_data.parquet",
-        ...     "descriptors_normalized.parquet",
-        ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s'],
-        ...     normalize=True,
-        ...     descriptor_version=1,
-        ... )
-
-        >>> # With custom worker count for large files
-        >>> stats = generate_descriptors_from_parquet(
-        ...     "csfs_data.parquet",
-        ...     "descriptors.parquet",
-        ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s'],
-        ...     num_workers=8
-        ... )
-
-        >>> # Disable compression for maximum writer throughput
-        >>> stats = generate_descriptors_from_parquet(
-        ...     "csfs_data.parquet",
-        ...     "descriptors.parquet",
-        ...     peel_subshells=['5s', '4d-', '4d', '5p-', '5p', '6s'],
-        ...     compression="none",
-        ... )
-
-    Performance Considerations:
-        - For medium files (1-10M CSFs): num_workers=4-8
-        - For large files (>10M CSFs): num_workers=8+
-        - More workers = higher CPU usage, faster processing
-        - Rayon automatically handles work stealing for optimal load balancing
-        - Uses 65536 rows/batch for better I/CPU balance on multi-core systems
-        - ``compression="none"`` removes the writer-side ZSTD bottleneck on
-          many-core machines; pair with fast local storage (NVMe) for best results.
-
-    Note:
-        This implementation uses streaming batch processing to minimize memory usage:
-        1. Read parquet in batches (65536 rows per batch)
-        2. Parse CSFs to descriptors in parallel (Rayon work-stealing)
-        3. Build column arrays directly (Int32 or Float32 builders per column, no ListArray overhead)
-        4. Write batch to Parquet file (compression configurable, default ZSTD level 3)
-        5. Repeat until all data processed
-
-        Multi-column format is significantly faster than List column format for billion-scale data.
     """
     return _generate_descriptors_from_parquet(
         input_parquet=str(input_parquet),
         output_file=str(output_parquet),
         peel_subshells=peel_subshells,
         num_workers=num_workers,
-        normalize=normalize,
         descriptor_version=descriptor_version,
         header_path=str(header_path) if header_path is not None else None,
         compression=compression,
@@ -516,7 +427,7 @@ def split_csfs_by_j(
     prefix: str | None = None,
     *,
     copy_w: bool = True,
-    overwrite: bool = False,
+    overwrite: bool = True,
 ) -> JBlockSplitStats:
     """Split a multi-block CSF text file into one file per ``J^P`` block.
 
@@ -526,8 +437,8 @@ def split_csfs_by_j(
     ``name_8.c`` and ``J = 5/2`` becomes ``name_5.c``. ``output_dir``
     defaults to the input's directory and ``prefix`` to the input's file
     stem. Outputs are staged beside their destinations and published only
-    after the whole input has been read; existing outputs are refused
-    unless ``overwrite`` is set.
+    after the whole input has been read; existing outputs are replaced
+    by default. Set ``overwrite=False`` to refuse existing outputs.
 
     A sibling ``<input stem>.w`` orbital file is byte-copied beside every
     output (``<prefix>_<2J>.w``) when it exists and ``copy_w`` is true; a
@@ -544,7 +455,7 @@ def split_csfs_by_j(
             parent directory).
         prefix: Output filename prefix (default: the input's file stem).
         copy_w: Copy a sibling ``<stem>.w`` beside every output when present.
-        overwrite: Replace existing output files when ``True``.
+        overwrite: Replace existing output files (default: ``True``).
 
     Returns:
         Dictionary with ``success``, ``input_file``, ``input_csf_count``,
@@ -654,7 +565,6 @@ def select_interacting_csfs(
 def generate_csfs_from_transcript(
     transcript: str,
     output_path: str | Path,
-    normalize: bool = False,
     threads: int | None = None,
 ) -> CsfGenerationStats:
     """
@@ -674,8 +584,6 @@ def generate_csfs_from_transcript(
             (list continuation is not supported).
         output_path: Destination CSF text file.
 
-        normalize: Retained for API compatibility; descriptor Parquet export
-            is performed by the generation CLI pipeline.
         threads: Optional Rayon thread count (default: all cores).
 
     Returns:
@@ -700,7 +608,6 @@ def generate_csfs_from_transcript(
     return _generate_csfs_from_transcript(
         transcript=transcript,
         output_path=str(output_path),
-        normalize=normalize,
         threads=threads,
     )
 

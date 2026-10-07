@@ -32,7 +32,7 @@ def test_grasp_five_g_text_is_byte_exact(tmp_path: Path) -> None:
         "*\n5g\n8,8\n3 ! Number of excitations\nn\n"
     )
     output = tmp_path / "rcsfs.c"
-    stats = generate_csfs_from_transcript(transcript, str(output), False, 8)
+    stats = generate_csfs_from_transcript(transcript, str(output), 8)
     assert stats["success"] is True
     assert stats["record_count"] == 13_129
     assert hashlib.sha256(output.read_bytes()).hexdigest() == (
@@ -64,7 +64,6 @@ def config_file(tmp_path: Path, **outputs: object) -> Path:
     values = {
         "csf": str(tmp_path / "out.c"),
         "generate_descriptors": True,
-        "normalize": False,
         **outputs,
     }
     config.write_text(
@@ -215,15 +214,14 @@ def test_config_multiple_lists_reject_different_electron_counts(
     assert not output.exists()
 
 
-def test_config_generation_rejects_v2_normalization_without_outputs(
+def test_config_generation_rejects_retired_normalize_key_without_outputs(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     config = config_file(tmp_path, normalize=True)
-    assert cli.main(["csfsgenerate", "--config", str(config)]) == 1
-    assert (
-        "normalize is not supported by reversible V2 descriptors"
-        in capfd.readouterr().err
-    )
+    with pytest.raises(SystemExit) as error:
+        cli.main(["csfsgenerate", "--config", str(config)])
+    assert error.value.code == 2
+    assert "unknown output keys: normalize" in capfd.readouterr().err
     assert set(tmp_path.iterdir()) == {config}
 
 
@@ -571,7 +569,7 @@ def test_publication_race_replaces_other_writer(
 
 def test_extension_positional_signature(tmp_path: Path) -> None:
     transcript = "* ! Orbital order\n0\n1s(2,*)\n\n1s\n0,0\n0\nn\n"
-    assert generate_csfs_from_transcript(transcript, str(tmp_path / "out.c"), False, 1)[
+    assert generate_csfs_from_transcript(transcript, str(tmp_path / "out.c"), 1)[
         "success"
     ]
     with pytest.raises(TypeError):

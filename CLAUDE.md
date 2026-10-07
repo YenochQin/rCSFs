@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 rCSFs is a high-performance Rust/Python hybrid library for processing CSF (Configuration State Function) data from atomic physics calculations (e.g., GRASP). It provides:
 1. **CSF-to-Parquet conversion**: Convert CSF text files to Parquet format
 2. **CSF descriptor generation**: Convert CSF data into fixed-length descriptor arrays for ML applications
-3. **Descriptor normalization**: Normalize descriptors using relativistic subshell physics properties
+3. **CSF restoration and splitting**: Restore CSF text from V2 descriptors and split symmetry blocks
 
 **Key Implementation Details:**
 - Rust edition: 2024
@@ -119,10 +119,9 @@ basedpyright rcsfs/
 **Rust Backend (`src/`):**
 - `lib.rs` — PyO3 module entry point: registers `convert_csfs`, `get_parquet_info`, and the descriptor submodule
 - `csfs_conversion.rs` — CSF-to-Parquet conversion (parallel via rayon, streaming batches)
-- `csfs_descriptor.rs` — descriptor parsing core (both V1 and V2 text-path parsers) and batch `generate_descriptors_from_parquet_parallel()`
-- `descriptor_schema.rs` — shared format contract: `DescriptorVersion`, `DescriptorLayout` (row/column layout for both versions), `validate_record` (legality checks shared by both descriptor producers), Parquet key-value metadata construction
+- `csfs_descriptor.rs` — strict V2 descriptor parsing core and batch `generate_descriptors_from_parquet_parallel()`
+- `descriptor_schema.rs` — shared V2 format contract: `DescriptorVersion`, `DescriptorLayout`, `validate_record` (legality checks shared by both descriptor producers), Parquet key-value metadata construction
 - `descriptor_v2.rs` — V2 encode/decode (`encode_v2`, `decode_v2_into`) and CSF restoration (`restore_file`) from decoded V2 rows
-- `descriptor_normalization.rs` — V1-only normalization utilities: converts descriptor values using relativistic subshell physics (`max_electrons`, `kappa²`, cumulative `2J`); V2 does not support normalization
 
 **Python Frontend (`rcsfs/`):**
 - `__init__.py` — Public API; wraps Rust functions with `pathlib.Path` support
@@ -131,7 +130,7 @@ basedpyright rcsfs/
 **Tests (`tests/`):**
 - `integration_test.rs` — Rust integration tests for `csfs_conversion`
 - `csfs_descriptor_test.rs` — Rust integration tests for `CSFDescriptorGenerator`
-- `descriptor_normalization_test.rs` — Rust unit tests for normalization functions
+- `csf_block_split_test.rs` — Rust integration tests for symmetry block splitting and output publication
 - `rcsfs_test.py` — Python integration tests for the public wrapper API
 
 ### Public Python API (`rcsfs/__init__.py`)
@@ -140,10 +139,10 @@ basedpyright rcsfs/
 |--------|-------------|
 | `convert_csfs(input_path, output_path, ...)` | CSF → Parquet, parallel via rayon |
 | `get_parquet_info(input_path)` | Parquet file metadata, including `key_value_metadata` |
-| `generate_descriptors_from_parquet(input, output, peel_subshells, ..., descriptor_version=2, header_path=None)` | Batch descriptor generation; `descriptor_version=2` is the default, `1` is legacy |
+| `generate_descriptors_from_parquet(input, output, peel_subshells, ..., descriptor_version=2, header_path=None)` | Batch V2 descriptor generation; only version `2` is supported |
 | `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | Rebuild a CSF text file from a V2 descriptor Parquet file |
 | `read_peel_subshells(header_path)` | Extract subshell list from `*_header.toml` |
-| `split_csfs_by_j(input_csf, output_dir=None, prefix=None, *, copy_w=True, overwrite=False)` | Split a multi-block CSF text file into one single-block file per `2J` (`<prefix>_<2J>.c`, GRASP `rasfsplit` for `.c`), optionally copying a sibling `.w` beside each output |
+| `split_csfs_by_j(input_csf, output_dir=None, prefix=None, *, copy_w=True, overwrite=True)` | Split a multi-block CSF text file into one single-block file per `2J` (`<prefix>_<2J>.c`, GRASP `rasfsplit` for `.c`), optionally copying a sibling `.w` beside each output; replaces existing outputs by default |
 | `ConversionStats` | TypedDict for `convert_csfs` return |
 | `DescriptorGenerationStats` | TypedDict for descriptor generation return |
 | `CsfRestoreStats` | TypedDict for `restore_csfs_from_descriptors` return |
@@ -152,9 +151,9 @@ basedpyright rcsfs/
 `rcsfs` only exposes function-based Python APIs today. `CSFProcessor` and `CSFDescriptorGenerator` are internal Rust types and are not importable from `rcsfs._rcsfs`.
 
 TOML/config `csfsgenerate` runs select the disk backend by default and write
-reversible V2 descriptors. V1 remains available through the explicit
-`descriptor_version=1` option of the standalone `gen-descriptors` path, and the
-interactive in-memory descriptor path remains a legacy V1 compatibility path.
+reversible V2 descriptors. The interactive memory backend also writes V2.
+V1 generation and its normalization module have been removed; requests for version 1
+must fail with an instruction to regenerate from the original CSFs.
 
 ### Key Data Flow
 
@@ -172,17 +171,10 @@ interactive in-memory descriptor path remains a legacy V1 compatibility path.
   (`MISSING`), distinct from a printed `0`; Parquet key-value metadata carries the format
   contract (`descriptor_version`, `channels_per_subshell`, `peel_subshells`,
   `source_header_sha256`, etc.)
-- Output schema, V1 (legacy, `descriptor_version=1`): positional `col_0, col_1, ..., col_N`
-  (Int32, or Float32 if `normalize=True`)
 - ZSTD level 3 by default; order preserved via `BTreeMap` in writer thread
 
-**Descriptor Normalization (`descriptor_normalization.rs`) — V1 only:**
-- Converts subshell notation: `"2p-"` → `"p-"` (angular notation with trailing space for positive parity)
-- Each descriptor triplet `[n_i, 2Q_i, 2J_cum,i]` is divided per-CSF by `[g_i, n_i*(g_i-n_i),
-  min(prefix_i, 2J_target+suffix_i)]`, where `g_i = 2|kappa_i|` and `2J_target` is inferred from
-  the descriptor itself (no separate parameter)
-- Python API: `generate_descriptors_from_parquet(..., normalize=True, descriptor_version=1)`
-  (`normalize=True` raises for the V2 default — normalization is not implemented for V2)
+Descriptors remain raw Int32. The Python/CLI `normalize` option has been removed;
+any feature scaling belongs to the consuming ML pipeline.
 
 ### CSF File Format
 
@@ -195,9 +187,9 @@ Line 6+:   CSF entries, 3 lines per CSF:
 ```
 
 **J-value text parsing:** fractional `"3/2"` → 3 (numerator); integer `"4"` → 8, `"4-"` → 8
-(doubled, parity stripped). Both V1 and V2 store 2J as integer; V2 additionally reads the
-trailing `+`/`-` byte on line 3 as a separate `parity` global column (`+1`/`-1`), and keeps the
-seniority digit at line 2 offsets 3-4 that V1 discards.
+(doubled, parity stripped). V2 reads the trailing `+`/`-` byte on line 3 as a
+separate `parity` global column (`+1`/`-1`), and keeps the seniority digit at line 2
+offsets 3-4.
 
 ### Module Naming
 

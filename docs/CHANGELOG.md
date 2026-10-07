@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### J 块拆分默认覆盖输出（2026-10-07）
+
+- `split_csfs_by_j`、原生 Python 绑定及 `rcsfs jsplit` 默认覆盖已有 `.c`
+  和复制的 `.w` 输出，重复运行不再因已有生成文件而报 `FileExistsError`。
+- Python `overwrite` 默认值与 `[jsplit]` 配置模板改为 `true`；仍支持显式
+  `overwrite=False` / TOML `overwrite = false` 拒绝覆盖，`--overwrite` 保持兼容。
+- 输出在输入完整校验、暂存完成后原子替换；输入及轨道源文件的别名保护保留。
+
 ### 磁盘生成描述符绑定源 header（2026-10-07）
 
 - 磁盘生成的最终 V2 描述符自动记录 `source_header_sha256` 与
@@ -15,6 +23,25 @@
 - 配置了顶层 `conf` 时，省略 `descriptor` 默认输出 `{conf}_desc.parquet`；
   显式 TOML 路径或命令行参数仍优先。无需同时设置 `generate_parquet = true`。
 - 补充磁盘/内存 CLI 发布、重复生成更新绑定、直接 API 与 header 改动拒绝的回归测试。
+
+### J 块拆分边界校验修复（2026-10-07）
+
+- 拒绝第二字符为 `*` 但不等于 `" *"` 的非规范分隔符，避免将非法块边界
+  当作 CSF 记录内容发布。
+- 保留文件发布失败的底层 I/O 错误类型，预检及发布时的文件冲突均映射为
+  `FileExistsError`；异常分类不再依赖路径或系统错误信息中的文本。
+- 在创建下一个输出文件前检查 10,000 块上限；补充文件冲突、部分发布及
+  临时文件清理、`.w` 别名、统计字段和配置批处理的回归测试。
+
+### 移除 V1 描述符（2026-10-07）
+
+- 删除 V1 三字段编码器和归一化模块，所有 Rust/Python/CLI 描述符生成路径
+  统一输出可逆 V2：每轨道四字段与两个全局字段，原始 `Int32`。
+- 删除 Python `normalize` 参数、CLI `--normalize` 和 TOML `normalize` 键；
+  `descriptor_version` 仅接受 `2`，旧版本请求明确提示从原始 CSF 重新生成。
+- 交互式内存生成路径迁移到 V2。`read_csfs` 的耦合分组签名从 V2 派生，
+  保留用于分组的接口；该签名不作为 CSF 唯一标识。
+- 此次不引入 V2 特征归一化方案；下游调用者移除原 `normalize=False` 参数。
 
 ### J 块拆分（2026-01-21）
 

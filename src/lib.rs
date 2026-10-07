@@ -16,7 +16,6 @@ pub mod csf_partition;
 pub mod csfs_conversion;
 pub mod csfs_descriptor;
 pub mod csfs_memory;
-pub mod descriptor_normalization;
 pub mod descriptor_schema;
 pub mod descriptor_v2;
 pub mod interaction;
@@ -388,7 +387,7 @@ fn split_csfs_by_active_spaces(
 /// `block_count` and per-output `outputs` entries (`output_file`, `w_file`,
 /// `block_index`, `total_two_j`, `parity`, `csf_count`).
 #[pyfunction]
-#[pyo3(signature = (input_csf, output_dir=None, prefix=None, *, copy_w=true, overwrite=false))]
+#[pyo3(signature = (input_csf, output_dir=None, prefix=None, *, copy_w=true, overwrite=true))]
 fn split_csfs_by_j(
     py: Python<'_>,
     input_csf: String,
@@ -472,7 +471,10 @@ fn ensure_usable_split_prefix(prefix: &str) -> PyResult<()> {
 /// dedicated exception class, everything else is I/O shaped.
 fn split_error(error: anyhow::Error) -> PyErr {
     let message = format!("{error:#}");
-    if message.contains("already exists") {
+    if error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|cause| cause.kind() == std::io::ErrorKind::AlreadyExists)
+    {
         PyFileExistsError::new_err(message)
     } else {
         PyIOError::new_err(message)
@@ -489,7 +491,6 @@ fn split_error(error: anyhow::Error) -> PyErr {
 /// Args:
 /// - transcript: `rcsfgenerate.log`-format text (see `ExcitationRequest::from_transcript`).
 /// - output_path: Destination CSF text file. Must not already exist.
-/// - normalize: Retained for Python API compatibility; descriptors use the CLI pipeline.
 /// - threads: Optional Rayon thread count; defaults to all cores.
 ///
 /// Returns:
@@ -500,23 +501,18 @@ fn split_error(error: anyhow::Error) -> PyErr {
 #[pyo3(signature = (
     transcript,
     output_path,
-
-    normalize=false,
     threads=None
 ))]
 fn generate_csfs_from_transcript(
     py: Python,
     transcript: String,
     output_path: String,
-
-    normalize: bool,
     threads: Option<usize>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
     if matches!(threads, Some(0)) {
         return Err(PyValueError::new_err("threads must be greater than 0"));
     }
 
-    let _ = normalize;
     let result = py.detach(|| {
         crate::csf_generation::generate_csfs_from_transcript(
             &transcript,

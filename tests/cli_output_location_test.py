@@ -31,7 +31,7 @@ def test_all_processing_outputs_and_scratch_stay_in_invocation_directory(
 
     parquet = inputs / "calc_as0raw.parquet"
     header = inputs / "calc_as0raw_header.toml"
-    descriptors = inputs / "calc_as0raw_descriptors.parquet"
+    descriptors = inputs / "calc__desc.parquet"
     source = inputs / "calc_as0raw.c"
     assert (
         cli.main(

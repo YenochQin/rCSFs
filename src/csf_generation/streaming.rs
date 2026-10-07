@@ -1225,7 +1225,7 @@ pub(crate) fn merge_v2_descriptor_segments(
         "descriptor output already exists: {}",
         output_path.display()
     );
-    let schema = output_schema(generated.layout, false)?;
+    let schema = output_schema(generated.layout)?;
     let _memory_permit = crate::csf_output::descriptor_writer_permit(
         &generated.budget,
         generated.layout,
@@ -1534,7 +1534,7 @@ pub(crate) fn merge_v2_deduplicated_segments(
         "descriptor output already exists: {}",
         output_path.display()
     );
-    let schema = output_schema(deduplicated.layout, false)?;
+    let schema = output_schema(deduplicated.layout)?;
     let _memory_permit = crate::csf_output::descriptor_writer_permit(
         &deduplicated.budget,
         deduplicated.layout,
@@ -2656,7 +2656,7 @@ fn segment_write_options(codec: SegmentCodec) -> Result<IpcWriteOptions> {
 }
 
 fn segment_schema(layout: DescriptorLayout) -> Result<SchemaRef> {
-    let schema = output_schema(layout, false)?;
+    let schema = output_schema(layout)?;
     let mut fields = schema.fields().iter().cloned().collect::<Vec<_>>();
     fields.push(Arc::new(Field::new(
         "range_ordinal",

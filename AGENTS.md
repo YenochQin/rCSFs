@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`rCSFs` is a high-performance Rust/Python hybrid library for processing Configuration State Function (CSF) data from atomic-physics calculations such as GRASP. It provides CSF-to-Parquet conversion, fixed-length descriptor generation for ML workflows, and descriptor normalization using relativistic subshell physics.
+`rCSFs` is a high-performance Rust/Python hybrid library for processing Configuration State Function (CSF) data from atomic-physics calculations such as GRASP. It provides CSF-to-Parquet conversion, reversible V2 descriptors for ML workflows, and CSF restoration and splitting.
 
 Key implementation details:
 
@@ -18,7 +18,7 @@ Rust backend code lives in `src/`:
 - `src/lib.rs`: PyO3 module entry point registering `convert_csfs`, `get_parquet_info`, and the descriptor submodule.
 - `src/csfs_conversion.rs`: CSF-to-Parquet conversion, parallelized with rayon and streaming batches.
 - `src/csfs_descriptor.rs`: descriptor parsing core and batch `generate_descriptors_from_parquet_parallel()`.
-- `src/descriptor_normalization.rs`: descriptor normalization with `max_electrons`, `kappa^2`, and `max_cumulative_2J`.
+- `src/descriptor_schema.rs` and `src/descriptor_v2.rs`: V2 layout, validation, encoding/decoding, and CSF restoration.
 
 The Python frontend lives in `rcsfs/`. `rcsfs/__init__.py` is the public API wrapper and supports `pathlib.Path`; `rcsfs/py.typed` marks the package as typed. Tests live in `tests/`, including Rust integration tests, Python API checks, speed tests, and fixtures such as `tests/fixtures/sample.csf`. Treat `dist/` and `target/` as build output unless a release task explicitly requires them.
 
@@ -58,7 +58,7 @@ Always activate the Tools venv and use `maturin build --release` for production.
 | `get_parquet_info(input_path)` | Return Parquet file metadata. |
 | `generate_descriptors_from_parquet(input, output, peel_subshells, ...)` | Generate descriptor arrays from Parquet input. |
 | `read_peel_subshells(header_path)` | Extract the subshell list from a `*_header.toml` file. |
-| `split_csfs_by_j(input_csf, output_dir=None, prefix=None, *, copy_w=True, overwrite=False)` | Split a multi-block CSF text file into one single-block file per `2J` (`<prefix>_<2J>.c`, GRASP `rasfsplit` for `.c`); copies a sibling `.w` beside each output when present. |
+| `split_csfs_by_j(input_csf, output_dir=None, prefix=None, *, copy_w=True, overwrite=True)` | Split a multi-block CSF text file into one single-block file per `2J` (`<prefix>_<2J>.c`, GRASP `rasfsplit` for `.c`); copies a sibling `.w` beside each output when present and replaces existing outputs by default. |
 | `ConversionStats` | TypedDict for `convert_csfs` results. |
 | `DescriptorGenerationStats` | TypedDict for descriptor-generation results. |
 | `JBlockSplitStats` | TypedDict for `split_csfs_by_j` results. |
@@ -68,9 +68,9 @@ Always activate the Tools venv and use `maturin build --release` for production.
 ## Data Flow & File Format
 CSF conversion streams a CSF file in `chunk_size`-line batches. The default is 3 million lines, or 1 million CSFs. The first five lines are extracted as header metadata and saved as `{input_stem}_header.toml` in the output directory. Remaining lines are processed in parallel with rayon and written to uncompressed Parquet with schema `idx: UInt64`, `line1: Utf8`, `line2: Utf8`, `line3: Utf8`.
 
-Descriptor generation uses a three-stage pipeline: reader thread -> rayon workers -> writer thread. It reads Parquet in 65,536-row batches and writes `col_0`, `col_1`, ..., `col_N` as `Int32`, or `Float32` when normalized, using ZSTD level 3. Output order is preserved through a `BTreeMap` in the writer thread.
+Descriptor generation uses a three-stage pipeline: reader thread -> rayon workers -> writer thread. It reads Parquet in 65,536-row batches and writes V2 named `Int32` columns: `sub{i}_n`, `sub{i}_2j`, `sub{i}_v`, `sub{i}_2k`, followed by `total_two_j` and `parity`. Missing printed values use `-1`, distinct from printed zero. ZSTD level 3 is the default; output order is preserved through a `BTreeMap` in the writer thread.
 
-Descriptor normalization converts subshell notation such as `"2p-"` to angular notation such as `"p-"`, and divides each descriptor triplet `[n_electrons, J_middle, J_coupling]` by `[max_electrons, kappa^2, max_2J]`. The Python API is `generate_descriptors_from_parquet(..., normalize=True, max_cumulative_doubled_j=N)`.
+V2 is the only descriptor generation format, for both memory and disk backends. V1 generation and its normalization module have been removed. The Python/CLI `normalize` option is unavailable; any ML feature scaling belongs to the consuming pipeline.
 
 CSF files use this structure:
 
@@ -111,7 +111,7 @@ under `temp/`, not `tests/`, `src/`, or `examples/`. Temporary code is outside t
 maintained suite and must not be added to Cargo or pytest test discovery. Keep
 local inputs and generated outputs there untracked. This rule concerns temporary
 test code; maintained tests may still use standard temporary directories for I/O.
-Add Rust coverage for core parsing, conversion, descriptor behavior, and normalization in `tests/`. Add Python regression tests when changing the public package API or file I/O behavior. Name Rust tests `*_test.rs`; keep Python tests under `tests/` and start functions with `test_`. Reuse `tests/fixtures/` for stable sample data.
+Add Rust coverage for core parsing, conversion, descriptors, restoration, and splitting in `tests/`. Add Python regression tests when changing the public package API or file I/O behavior. Name Rust tests `*_test.rs`; keep Python tests under `tests/` and start functions with `test_`. Reuse `tests/fixtures/` for stable sample data.
 
 Run both Rust and Python checks before opening a PR:
 

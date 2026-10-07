@@ -52,7 +52,7 @@ _CONFIG_TEMPLATES = {
 # generate_parquet = false
 # generate_descriptors = false
 # rcsfs_parquet = "generated.parquet"
-# descriptor = "generated_descriptors.parquet"
+# descriptor = "generated_descriptors.parquet"  # Optional: defaults to {conf}_desc.parquet with conf.
 # normalize = false
 # threads = 8
 # memory_budget_mib = 1024
@@ -569,11 +569,14 @@ def _load_config(
         if action is None:
             raise ValueError(f"unknown [{section}] key: {key}")
         converted[key] = _value(key, value, action)
-    if section == "csfsgenerate" and as_level is not None:
+    if section == "csfsgenerate":
         if conf is not None:
-            _ = converted.setdefault("rcsfs_out", Path(f"{conf}as{as_level}raw.c"))
-        elif "rcsfs_out" not in converted:
-            raise ValueError("as requires top-level conf or an explicit rcsfs_out")
+            _ = converted.setdefault("descriptor", Path(f"{conf}_desc.parquet"))
+        if as_level is not None:
+            if conf is not None:
+                _ = converted.setdefault("rcsfs_out", Path(f"{conf}as{as_level}raw.c"))
+            elif "rcsfs_out" not in converted:
+                raise ValueError("as requires top-level conf or an explicit rcsfs_out")
     elif section == "csfs-split" and conf is not None:
         source_paths = (
             _split_source_paths(root, conf)

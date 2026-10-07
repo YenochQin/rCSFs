@@ -238,9 +238,8 @@ RCSFS_THREADS=4 uv run cargo run --release --example generate_transcript_csfs --
 
 The transcript is parsed in memory and CSFs are written in deterministic J/parity
 block order. The Rust example accepts only input and output paths. Use the Python
-CLI's `--generate-descriptors` option for CSF and descriptor Parquet output, and
-`--normalize` for normalized descriptors. TOML `[output]` settings offer the same
-options (see the configuration example above).
+CLI's `--generate-descriptors` option for CSF and raw V2 descriptor Parquet output.
+TOML `[output]` settings offer the same options (see the configuration example above).
 
 All destinations must be new and distinct: CSF text, CSF Parquet, its
 `{csf_stem}_header.toml` sidecar, descriptor Parquet, and its same-stem `.toml`
@@ -274,6 +273,21 @@ subshells. Each contributes four consecutive V2 columns:
 explicit zero. `record_count` is the descriptor Parquet row count. All V2
 columns are `Int32`, compressed with ZSTD level 3. V2 descriptors are
 reversible and normalization is rejected.
+
+Both disk and memory generation bind descriptor Parquet metadata to the completed
+header: `source_header_sha256` is SHA-256 of the entire header file's exact bytes,
+and `source_header_filename` records its basename. Publishing the staged header
+preserves this binding. Comments or whitespace edits change the hash; the hash
+does not checksum CSF rows or their order. The generated descriptors can therefore
+be loaded directly by consumers that require a header hash, without a second
+`gen-descriptors` pass. For an existing CSF Parquet/header pair, standalone
+`gen-descriptors` with `--header` remains available.
+
+With top-level `conf`, `generate_descriptors = true` defaults the descriptor
+filename to `{conf}_desc.parquet` and also publishes CSF Parquet/header;
+`descriptor` and `generate_parquet` can be omitted. Explicit descriptor filenames
+in TOML or on the command line take precedence. Without `conf`, the existing
+`{csf_stem}_descriptors.parquet` default applies.
 
 For descriptor-producing TOML/config `csfsgenerate` runs, add the optional
 setting below to the `[generate]` table to reject runs whose managed

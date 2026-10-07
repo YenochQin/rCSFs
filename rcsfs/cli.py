@@ -422,7 +422,10 @@ def build_parser() -> argparse.ArgumentParser:
         dest="descriptor",
         type=Path,
         default=None,
-        help="Descriptor Parquet output (default: <stem>_descriptors.parquet).",
+        help=(
+            "Descriptor Parquet output (default: <conf>_desc.parquet with top-level "
+            "conf, otherwise <stem>_descriptors.parquet)."
+        ),
     )
     _ = csfsgenerate.add_argument(
         "--normalize",
@@ -1329,7 +1332,7 @@ def _generate_outputs(
                 descriptors,
                 peel_subshells=shells,
                 normalize=args.normalize,
-                descriptor_version=1,
+                descriptor_version=2,
                 header_path=staged_header,
                 compression="zstd",
             )

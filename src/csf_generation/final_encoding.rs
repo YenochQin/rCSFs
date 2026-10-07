@@ -218,6 +218,7 @@ pub(crate) fn build_final_outputs_from_segments(
     descriptor_output: &Path,
     csf_output: &Path,
     csf_parquet_output: &Path,
+    header_path: &Path,
     threads: Option<usize>,
 ) -> Result<FinalEncodingStats> {
     super::planning::run_parallel(threads, || {
@@ -227,6 +228,7 @@ pub(crate) fn build_final_outputs_from_segments(
             descriptor_output,
             csf_output,
             csf_parquet_output,
+            header_path,
         )
     })
 }
@@ -237,6 +239,7 @@ fn build_final_outputs_from_segments_inner(
     descriptor_output: &Path,
     csf_output: &Path,
     csf_parquet_output: &Path,
+    header_path: &Path,
 ) -> Result<FinalEncodingStats> {
     for (path, label) in [
         (descriptor_output, "descriptor output"),
@@ -267,6 +270,7 @@ fn build_final_outputs_from_segments_inner(
         deduplicated.unique_count,
         deduplicated.duplicate_count,
         &deduplicated.block_lengths,
+        Some(header_path),
     )?;
     let (descriptor_temporary, descriptor_file) = create_temporary_output(descriptor_output)?;
     let descriptor_io_nanos = Arc::new(AtomicU64::new(0));

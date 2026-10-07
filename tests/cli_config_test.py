@@ -600,6 +600,27 @@ def test_top_level_config_rejects_repeated_generator_output_before_running(
     assert not (tmp_path / "same.c").exists()
 
 
+def test_top_level_config_rejects_shared_default_descriptor_before_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = (
+        '[[csfsgenerate]]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        "generate_descriptors = true\n"
+    )
+    config = tmp_path / "rcsfs.toml"
+    config.write_text(
+        'conf = "calc"\n' + entry + "as = 0\n" + entry + "as = 1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["-c", str(config)])
+    assert exc.value.code == 2
+    assert list(tmp_path.iterdir()) == [config]
+
+
 def test_top_level_config_rejects_unmatched_split_inputs_before_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

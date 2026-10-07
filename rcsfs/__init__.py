@@ -722,6 +722,10 @@ def generate_disk_outputs_from_transcript(
     A sequence of at least two single-list transcripts generates their complete
     CSF union with exact de-duplication and a shared Peel layout.
 
+    Descriptor Parquet metadata records ``source_header_sha256`` for the exact
+    completed ``header_output`` bytes and ``source_header_filename`` for its
+    basename. Preserve those header bytes when publishing the staged outputs.
+
     This lower-level API intentionally writes only to caller-owned staging
     paths. The CLI uses it inside its output transaction before it publishes
     the CSF text, CSF Parquet, header and descriptor artifacts together.

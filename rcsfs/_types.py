@@ -122,6 +122,29 @@ class ActiveSpaceSplitStats(TypedDict):
     outputs: list[ActiveSpaceOutputStats]
 
 
+class JBlockOutputStats(TypedDict):
+    """One per-``2J`` output file from splitting a multi-block CSF list."""
+
+    output_file: str
+    #: Published ``.w`` orbital-file copy, when one was made.
+    w_file: str | None
+    block_index: int
+    #: Total ``2J`` of the block, e.g. ``8`` for ``J = 4``.
+    total_two_j: int
+    parity: Literal["even", "odd"]
+    csf_count: int
+
+
+class JBlockSplitStats(TypedDict):
+    """Statistics from splitting a CSF text file into per-block files."""
+
+    success: bool
+    input_file: str
+    input_csf_count: int
+    block_count: int
+    outputs: list[JBlockOutputStats]
+
+
 class CsfGenerationStageStats(TypedDict):
     """Coarse logical measurements for one disk-generation stage."""
 

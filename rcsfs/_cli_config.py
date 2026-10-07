@@ -23,6 +23,9 @@ CONFIG_SECTIONS = {
     "csfs-split": "csfs-split",
     "split-active": "csfs-split",
     "rcsfsplit": "csfs-split",
+    "jsplit": "jsplit",
+    "split-j": "jsplit",
+    "rasfsplit": "jsplit",
     "interacting": "interacting",
     "restore-csfs": "restore-csfs",
 }
@@ -90,6 +93,15 @@ _CONFIG_TEMPLATES = {
 # AS0 = "1s"
 # AS1 = "2s"
 # AS2 = "3s"
+""".lstrip(),
+    "jsplit": """
+
+# [jsplit]
+# input_csf = "generated.c"
+# prefix = "generated"
+# copy_w = true
+# overwrite = false
+# json = false
 """.lstrip(),
     "interacting": """
 
@@ -269,7 +281,10 @@ def _value(key: str, value: object, action: argparse.Action) -> object:
                 )
             entries.append(f"{label}={orbitals}")
         return entries
-    if action.nargs == 0 and cast(object, action.const) is True:
+    if action.nargs == 0 and isinstance(cast(object, action.const), bool):
+        # Covers both store_true and store_false flags (e.g. json,
+        # overwrite, copy_w): the TOML value must be the same bool the
+        # flag would set.
         if type(value) is not bool:
             raise ValueError(f"{key} must be a boolean")
         return value

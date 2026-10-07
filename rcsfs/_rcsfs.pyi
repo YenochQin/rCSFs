@@ -13,6 +13,7 @@ from ._types import (
     InteractionHamiltonian,
     InteractionMethod,
     InteractionStats,
+    JBlockSplitStats,
     ParquetInfo,
     PartitionStats,
 )
@@ -52,6 +53,14 @@ def split_csfs_by_active_spaces(
     header_path: str,
     targets: list[tuple[str, str]],
 ) -> ActiveSpaceSplitStats: ...
+def split_csfs_by_j(
+    input_csf: str,
+    output_dir: str | None = None,
+    prefix: str | None = None,
+    *,
+    copy_w: bool = True,
+    overwrite: bool = False,
+) -> JBlockSplitStats: ...
 def py_generate_descriptors_from_parquet(
     input_parquet: str,
     output_file: str,

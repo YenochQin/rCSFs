@@ -23,6 +23,7 @@ from . import (
     restore_csfs_from_descriptors,
     select_interacting_csfs,
     split_csfs_by_active_spaces,
+    split_csfs_by_j,
 )
 from ._types import InteractionHamiltonian, InteractionMethod
 from ._publication import PartialPublicationError, publish_outputs
@@ -86,6 +87,17 @@ class CsfsSplitArgs(Protocol):
     json: bool
 
 
+class JsplitArgs(Protocol):
+    """Parsed arguments for the J-block CSF split command."""
+
+    command: Literal["jsplit", "split-j", "rasfsplit"]
+    input_csf: Path
+    prefix: str | None
+    copy_w: bool
+    overwrite: bool
+    json: bool
+
+
 class CsfsGenerateArgs(Protocol):
     """Parsed arguments for the ``csfsgenerate`` subcommand."""
 
@@ -128,6 +140,7 @@ type CliArgs = (
     | InteractingArgs
     | RestoreCsfsArgs
     | CsfsSplitArgs
+    | JsplitArgs
 )
 
 
@@ -334,6 +347,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output filename prefix (default: input Parquet stem).",
     )
     _ = split_active.add_argument("--json", action="store_true")
+
+    jsplit = subparsers.add_parser(
+        "jsplit",
+        aliases=["split-j", "rasfsplit"],
+        help="Split a multi-block CSF list into one file per J block.",
+        description=(
+            "Split a CSF text file with several J^P symmetry blocks into one "
+            "single-block file per 2J, named <prefix>_<2J>.c (GRASP's "
+            "rasfsplit for the .c file). Outputs are written to the current "
+            "directory. A sibling <stem>.w orbital file next to the input is "
+            "copied beside every output when present."
+        ),
+    )
+    add_config_argument(jsplit)
+    _ = jsplit.add_argument("input_csf", type=Path)
+    _ = jsplit.add_argument(
+        "--prefix",
+        default=None,
+        help="Output filename prefix (default: input stem).",
+    )
+    _ = jsplit.add_argument(
+        "--no-copy-w",
+        dest="copy_w",
+        action="store_false",
+        help="Do not copy a sibling <stem>.w beside every output.",
+    )
+    _ = jsplit.add_argument(
+        "--overwrite", action="store_true", help="Replace existing output files."
+    )
+    _ = jsplit.add_argument("--json", action="store_true")
 
     csfsgenerate = subparsers.add_parser(
         "csfsgenerate",
@@ -794,6 +837,40 @@ def _run_csfs_split(args: CsfsSplitArgs) -> int:
     else:
         for output in stats["outputs"]:
             print(f"{output['output_file']}: {output['csf_count']} CSFs")
+    return 0
+
+
+def _run_jsplit(args: JsplitArgs) -> int:
+    try:
+        if not args.input_csf.is_file():
+            raise FileNotFoundError(f"CSF input does not exist: {args.input_csf}")
+        # Final outputs are fixed to the invocation directory, matching the
+        # shared CLI output-location policy; the input may live elsewhere.
+        stats = split_csfs_by_j(
+            args.input_csf,
+            output_dir=Path.cwd(),
+            prefix=args.prefix,
+            copy_w=args.copy_w,
+            overwrite=args.overwrite,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        if args.json:
+            json.dump({"success": False, "error": str(exc)}, sys.stdout, indent=2)
+            _ = sys.stdout.write("\n")
+        else:
+            print(f"J-block split failed: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        json.dump(stats, sys.stdout, indent=2)
+        _ = sys.stdout.write("\n")
+    else:
+        for output in stats["outputs"]:
+            w_file = output.get("w_file")
+            suffix = f" (+ {w_file})" if isinstance(w_file, str) else ""
+            print(
+                f"{output['output_file']}: {output['csf_count']} CSFs "
+                f"(2J={output['total_two_j']}, {output['parity']}){suffix}"
+            )
     return 0
 
 
@@ -1760,6 +1837,13 @@ def _run_parsed_command(args: CliArgs) -> int:
         return _run_csfs_split(args)
     if args.command == "rcsfsplit":
         return _run_csfs_split(args)
+
+    if args.command == "jsplit":
+        return _run_jsplit(args)
+    if args.command == "split-j":
+        return _run_jsplit(args)
+    if args.command == "rasfsplit":
+        return _run_jsplit(args)
 
     if args.command == "zero-first":
         return _run_zero_first(args)

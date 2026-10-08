@@ -34,7 +34,7 @@ _TEMPLATE_HEADER = """# rCSFs CLI configuration template.
 # Input paths are relative to the directory where you run rcsfs.
 # Final output filenames and temporary directories are always in that directory.
 # Command-line arguments override values in this file.
-# conf = "e1_vv1_"  # Shared filename stem, before as{number}raw.
+# conf = "e1_vv1"  # Shared filename stem; outputs use {conf}_as{number}raw.
 
 """
 _CONFIG_TEMPLATES = {
@@ -411,6 +411,12 @@ def _as_level(value: object) -> int:
     return value
 
 
+def raw_csf_name(conf: str, as_level: int) -> str:
+    """Join the shared stem and AS label, reusing a legacy trailing underscore."""
+    prefix = conf if conf.endswith("_") else f"{conf}_"
+    return f"{prefix}as{as_level}raw.c"
+
+
 def _split_source_paths(
     root: Mapping[str, object], conf: str
 ) -> tuple[Path, Path] | None:
@@ -429,7 +435,7 @@ def _split_source_paths(
             raise ValueError("rcsfs_out must be a path string")
         csf = Path(raw_output)
     elif "as" in values:
-        csf = Path(f"{conf}as{_as_level(values['as'])}raw.c")
+        csf = Path(raw_csf_name(conf, _as_level(values["as"])))
     else:
         return None
     raw_parquet = values.get("rcsfs_parquet")
@@ -571,7 +577,9 @@ def _load_config(
             _ = converted.setdefault("descriptor", Path(f"{conf}_desc.parquet"))
         if as_level is not None:
             if conf is not None:
-                _ = converted.setdefault("rcsfs_out", Path(f"{conf}as{as_level}raw.c"))
+                _ = converted.setdefault(
+                    "rcsfs_out", Path(raw_csf_name(conf, as_level))
+                )
             elif "rcsfs_out" not in converted:
                 raise ValueError("as requires top-level conf or an explicit rcsfs_out")
     elif section == "csfs-split" and conf is not None:

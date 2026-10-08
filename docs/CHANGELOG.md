@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### 共享 `conf` 与 AS 文件名连接符（2026-10-08）
+
+- CSF 默认生成名、拆分输入推导和拆分输出统一在 `conf` 与 `as` 之间加入 `_`：
+  `conf = "e1_cv1"` 对应 `e1_cv1_as0raw.c`、`e1_cv1_as6raw.parquet` 及配套 header。
+- 兼容原有 `conf = "e1_cv1_"`，复用尾部 `_`，避免生成双下划线；显式文件名继续优先。
+- 更新配置模板、使用示例，增加多次内存生成与 AS0–AS6 拆分的回归测试。
+
 ### J 块拆分默认覆盖输出（2026-10-07）
 
 - `split_csfs_by_j`、原生 Python 绑定及 `rcsfs jsplit` 默认覆盖已有 `.c`

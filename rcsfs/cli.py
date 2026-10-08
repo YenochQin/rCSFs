@@ -33,6 +33,7 @@ from ._cli_config import (
     configured_commands,
     create_default_config,
     parse_cli_args,
+    raw_csf_name,
 )
 
 #: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
@@ -771,7 +772,7 @@ def _split_targets(args: CsfsSplitArgs) -> dict[Path, str]:
                 raise ValueError(
                     f"active-space label {label!r} must be AS0, AS1, ... when conf names outputs"
                 )
-            name = f"{conf}as{int(match.group(1))}raw.c"
+            name = raw_csf_name(conf, int(match.group(1)))
         else:
             name = f"{prefix}{label}.c"
         targets[Path(name)] = orbitals

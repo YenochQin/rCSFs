@@ -439,7 +439,7 @@ filenames. For example, this complete configuration writes
 writes `e1_vv1_as1raw.c` and `e1_vv1_as2raw.c`:
 
 ```toml
-conf = "e1_vv1_"
+conf = "e1_vv1"
 
 [csfsgenerate]
 as = 6
@@ -457,13 +457,15 @@ AS2 = "1s"
 
 `as` identifies the generated raw space in the filename; `active_space`
 remains the orbital list used for generation. `conf` is a filename stem and
-must be at the top level, before any table. It may include a trailing
-underscore, as shown. `as = 0` denotes the unexcited MR space. For split outputs,
+must be at the top level, before any table. An underscore joins `conf` and `as`:
+`conf = "e1_vv1"` produces `e1_vv1_as6raw.c`. A legacy trailing underscore
+(`conf = "e1_vv1_"`) is reused, so it produces the same raw filenames.
+`as = 0` denotes the unexcited MR space. For split outputs,
 labels must be `AS0`, `AS1`, `AS2`, etc.
 when `conf` supplies the names. Generated and split files go in the invocation
 directory. Explicit `rcsfs_out`, `rcsfs_parquet`, `split_csfs_parquet`, and
 `csfs_header` still take precedence for filenames and inputs.
-With `conf`, split filenames always use `asNraw.c`; `prefix` applies only when
+With `conf`, split filenames always use `{conf}_asNraw.c`; `prefix` applies only when
 `conf` is absent. With multiple `[[csfsgenerate]]` entries, an implicit split input
 comes from the last entry.
 

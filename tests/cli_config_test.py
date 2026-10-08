@@ -39,7 +39,7 @@ def test_init_config_creates_only_selected_command_template(
     assert tomllib.loads(contents) == {}
     assert f"# [{section}]" in contents
     if command == "csfsgenerate":
-        assert '# conf = "e1_vv1_"' in contents
+        assert '# conf = "e1_vv1"' in contents
         assert "# as = 6" in contents
         assert "# json = false" not in contents
     for other in (
@@ -481,10 +481,11 @@ def test_conf_naming_works_with_separate_commands(
     assert (tmp_path / "calc_as2raw.c").is_file()
 
 
-def test_conf_naming_respects_explicit_input_paths(tmp_path: Path) -> None:
+@pytest.mark.parametrize("conf", ["calc", "calc_"])
+def test_conf_naming_respects_explicit_input_paths(tmp_path: Path, conf: str) -> None:
     config = tmp_path / "rcsfs.toml"
     config.write_text(
-        'conf = "calc_"\n[csfsgenerate]\nas = 6\ninactive_core = 0\n'
+        f'conf = "{conf}"\n[csfsgenerate]\nas = 6\ninactive_core = 0\n'
         'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
         'j_min = 0\nj_max = 0\nexcitations = 0\nrcsfs_out = "custom.c"\n'
         '[csfs-split]\nactive_spaces = ["AS1=1s"]\n'

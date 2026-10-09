@@ -356,7 +356,11 @@ def test_cli_jsplit_batch_config_writes_to_cwd_and_copies_input_sibling_w(
         "cfg_5.w",
         "cfg_8.c",
         "cfg_8.w",
+        "rcsfs.log",
     ]
+    log = (destination / "rcsfs.log").read_text(encoding="utf-8")
+    assert '"block_count": 3' in log
+    assert all(f'"total_two_j": {two_j}' in log for two_j in (0, 5, 8))
     for output in stats["outputs"]:
         assert Path(output["output_file"]).parent == destination
         assert output["w_file"] is not None

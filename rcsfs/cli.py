@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal, Protocol, TextIO, cast
 
 from . import (
+    __version__,
     convert_csfs,
     estimate_disk_generation,
     generate_csfs_from_transcript,
@@ -31,10 +32,12 @@ from ._cli_config import (
     CONFIG_SECTIONS,
     DEFAULT_CONFIG,
     configured_commands,
+    configured_run_log,
     create_default_config,
     parse_cli_args,
     raw_csf_name,
 )
+from ._cli_log import RunLogError, capture_run, record_stats
 
 #: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
 _MAX_REFERENCE_CONFIGURATIONS = 100
@@ -669,6 +672,7 @@ def _run_interacting(args: InteractingArgs) -> int:
             print(f"Interaction selection failed: {exc}", file=sys.stderr)
         return 1
 
+    record_stats(stats)
     if args.json:
         json.dump(stats, sys.stdout, indent=2, sort_keys=True)
         _ = sys.stdout.write("\n")
@@ -735,6 +739,7 @@ def _run_zero_first(args: ZeroFirstArgs) -> int:
             publish_outputs([staged_output], [output_path], overwrite=True)
             stats["output_file"] = str(output_path)
 
+        record_stats(stats)
         if args.json:
             json.dump(stats, sys.stdout, indent=2, sort_keys=True)
             _ = sys.stdout.write("\n")
@@ -822,6 +827,7 @@ def _run_csfs_split(args: CsfsSplitArgs) -> int:
         else:
             print(f"Active-space split failed: {exc}", file=sys.stderr)
         return 1
+    record_stats(stats)
     if args.json:
         json.dump(stats, sys.stdout, indent=2)
         _ = sys.stdout.write("\n")
@@ -851,6 +857,7 @@ def _run_jsplit(args: JsplitArgs) -> int:
         else:
             print(f"J-block split failed: {exc}", file=sys.stderr)
         return 1
+    record_stats(stats)
     if args.json:
         json.dump(stats, sys.stdout, indent=2)
         _ = sys.stdout.write("\n")
@@ -1517,6 +1524,7 @@ def _run_csfsgenerate(args: CsfsGenerateArgs) -> int:
             )
             return 1
 
+    record_stats(stats)
     if args.json:
         json.dump(stats, sys.stdout, indent=2, sort_keys=True)
         _ = sys.stdout.write("\n")
@@ -1561,6 +1569,7 @@ def _run_restore_csfs(args: RestoreCsfsArgs) -> int:
             print(f"CSF restoration failed: {exc}", file=sys.stderr)
         return 1
 
+    record_stats(stats)
     if args.json:
         json.dump(stats, sys.stdout, indent=2, sort_keys=True)
         _ = sys.stdout.write("\n")
@@ -1589,6 +1598,7 @@ def _run_init_config(command: str) -> int:
 def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
     try:
         commands = configured_commands(path)
+        log_path, config_contents = configured_run_log(path)
     except ValueError as exc:
         parser.error(str(exc))
     steps = [
@@ -1670,7 +1680,12 @@ def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
                 parser.error(f"multiple [csfsgenerate] entries write {output}")
             claimed.add(resolved)
     config_path = path.resolve()
+    protected_log_paths = claimed | {path}
     for command, _, args in steps:
+        parameters = cast(dict[str, object], vars(args))
+        protected_log_paths.update(
+            value for value in parameters.values() if isinstance(value, Path)
+        )
         other_outputs: list[Path] = []
         if command == "gen-descriptors":
             descriptors = cast(GenDescriptorsArgs, args)
@@ -1697,17 +1712,40 @@ def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
             parser.error(
                 f"[{CONFIG_SECTIONS[command]}] output must not overwrite {path}"
             )
-    for command, config_index, args in steps:
-        label = (
-            f"{command} #{config_index + 1}"
-            if config_index is not None
-            else CONFIG_SECTIONS[command]
-        )
-        print(f"Running [{label}]...", file=sys.stderr)
-        result = _run_parsed_command(args)
-        if result != 0:
-            return result
-    return 0
+        protected_log_paths.update(other_outputs)
+    try:
+        if log_path.is_symlink():
+            parser.error(f"run log must not be a symbolic link: {log_path}")
+        for protected in protected_log_paths:
+            if log_path.resolve() == protected.resolve() or (
+                log_path.exists()
+                and protected.exists()
+                and log_path.samefile(protected)
+            ):
+                parser.error(
+                    f"run log {log_path} conflicts with input or output {protected}"
+                )
+        with log_path.open("a", encoding="utf-8", buffering=1) as stream:
+            print(f"Run log: {log_path}", file=sys.stderr)
+            with capture_run(stream, path, config_contents, __version__) as log:
+                for command, config_index, args in steps:
+                    label = (
+                        f"{command} #{config_index + 1}"
+                        if config_index is not None
+                        else CONFIG_SECTIONS[command]
+                    )
+                    print(f"Running [{label}]...", file=sys.stderr)
+                    result = log.run_step(
+                        label,
+                        cast(dict[str, object], vars(args)),
+                        lambda: _run_parsed_command(args),
+                    )
+                    if result != 0:
+                        return result
+                return 0
+    except (OSError, RunLogError) as exc:
+        print(f"Cannot write run log {log_path}: {exc}", file=sys.stderr)
+        return 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1793,6 +1831,7 @@ def _run_parsed_command(args: CliArgs) -> int:
         finally:
             if staging is not None:
                 shutil.rmtree(staging, ignore_errors=True)
+        record_stats(stats)
         if args.json:
             json.dump(stats, sys.stdout, indent=2, sort_keys=True)
             _ = sys.stdout.write("\n")

@@ -337,6 +337,15 @@ uv run cargo run --release --example generate_csfs -- \
 
 安装 `rcsfs` 会同时安装一个 `rcsfs` 命令行脚本（`uv run rcsfs ...`），提供五个子命令。
 
+使用 `rcsfs -c rcsfs.toml` 批量执行配置表时，会在当前运行目录自动追加
+`rcsfs_{conf}.log`：例如 `conf = "e1_vv"` 对应 `rcsfs_e1_vv.log`；
+未设置 `conf` 时使用 `rcsfs.log`，无需修改现有 TOML。每次运行保存原始配置、
+各步骤实际参数、CLI 摘要及错误、完整返回统计（CSF/块数量、各 AS 拆分数量、
+可用的生成阶段耗时和资源统计）、开始/结束时间、步骤及总耗时、退出状态。
+原生 Rust 进度消息仍显示在终端。重复运行保留之前的日志。
+配置预检通过后才打开日志；日志与输入/输出冲突时拒绝运行，日志不可写时在处理前报错。
+单独执行子命令时不会创建此批处理日志。
+
 ### `rcsfs csfsgenerate` —— 生成新的 CSF 列表
 
 除了交互式问答外，也可以使用 TOML 配置进行可复现的批处理。默认只生成 CSF 文本；将 `generate_descriptors` 设为 `true` 后，还会生成 CSF Parquet、header TOML、描述符 Parquet 和描述符 TOML sidecar。CSV 描述符输出不再支持。TOML/config 描述符运行默认使用 disk backend，直接写出可逆的 **V2 描述符**。可在 `[generate]` 中设置 `memory_budget_mib`，或使用 `--memory-budget-mib`，限制受管内存预算。使用 `--json` 时还会返回阶段耗时、逻辑字节数和资源统计。交互式 memory 路径也统一生成 V2 描述符。V1 生成及原 `normalize` 选项已移除。

@@ -1,130 +1,43 @@
-# Repository Guidelines
+# rCSFs Guidelines
 
-## Project Structure & Module Organization
-`rCSFs` is a high-performance Rust/Python hybrid library for processing Configuration State Function (CSF) data from atomic-physics calculations such as GRASP. It provides CSF-to-Parquet conversion, reversible V2 descriptors for ML workflows, and CSF restoration and splitting.
+## Ownership and interfaces
 
-Key implementation details:
+`rCSFs` owns CSF conversion, generation, V2 descriptors, restoration, and splitting. Rust code is in `src/`, the Python API in `rcsfs/`, and maintained tests in `tests/`. The public package is `rcsfs`; the compiled extension is `rcsfs._rcsfs`.
 
-- Rust edition: 2024.
-- Python support: 3.14 only (`requires-python = ">=3.14"`).
-- Cargo package: `rCSFs`.
-- Rust library / compiled file: `_rcsfs`.
-- Python install target: `rcsfs._rcsfs`.
-- Public Python package: `rcsfs`.
-- Build system: Maturin/PyO3 using the shared uv environment at `../graspkit-tools/.venv`.
+- Keep PyO3 bindings in `src/lib.rs` thin and put algorithms in Rust modules.
+- Public Python functions and types are defined by `rcsfs/__init__.py` and `rcsfs/_rcsfs.pyi`; update them together. Internal Rust types are not automatically Python exports.
+- Preserve `pathlib.Path` support and validate external inputs at the Python boundary.
+- Use `src/descriptor_schema.rs` for the V2 contract and `src/descriptor_v2.rs` for encoding, decoding, and restoration. Consult these files when changing formats rather than reproducing their schema elsewhere.
 
-Rust backend code lives in `src/`:
+## Environment and build routing
 
-- `src/lib.rs`: PyO3 module entry point registering `convert_csfs`, `get_parquet_info`, and the descriptor submodule.
-- `src/csfs_conversion.rs`: CSF-to-Parquet conversion, parallelized with rayon and streaming batches.
-- `src/csfs_descriptor.rs`: descriptor parsing core and batch `generate_descriptors_from_parquet_parallel()`.
-- `src/descriptor_schema.rs` and `src/descriptor_v2.rs`: V2 layout, validation, encoding/decoding, and CSF restoration.
+Use only `../graspkit-tools/.venv` for project Python execution and activate it before Cargo so PyO3 finds Python 3.14. Do not run `uv venv`, `uv sync`, or `uv run` in this repository or create a local environment.
 
-The Python frontend lives in `rcsfs/`. `rcsfs/__init__.py` is the public API wrapper and supports `pathlib.Path`; `rcsfs/py.typed` marks the package as typed. Tests live in `tests/`, including Rust integration tests, Python API checks, speed tests, and fixtures such as `tests/fixtures/sample.csf`. Treat `dist/` and `target/` as build output unless a release task explicitly requires them.
-
-## Build, Test, and Development Commands
-All Python execution for this repository uses `../graspkit-tools/.venv`, created and synchronized by running `uv sync` in `graspkit-tools/`, because every consumer of this package lives in the parent workspace. Do not run `uv venv`, `uv sync`, or `uv run` here, and do not create, activate, or use `rCSFs/.venv`. Keep Rust sources and build artifacts in this repository, and activate the Tools environment before invoking test tools.
-
-```bash
-# After a Rust change: refresh the in-tree extension that pytest imports
+```sh
 source ../graspkit-tools/.venv/bin/activate
-cargo build --release --features pyo3/extension-module
-cp target/release/lib_rcsfs.so rcsfs/_rcsfs.cpython-314-x86_64-linux-gnu.so
-pytest
 ```
 
-Because `[tool.maturin] python-source = "."` makes the repository root the package root, anything run from this directory imports the in-tree `rcsfs/` and shadows the copy installed in the shared environment. That gives two separate rebuild targets:
+Choose the build output the task actually uses:
 
-- `cargo build --release --features pyo3/extension-module` then copy `target/release/lib_rcsfs.so` over `rcsfs/_rcsfs.cpython-314-x86_64-linux-gnu.so` (adjust the ABI tag per platform): **refreshes what this repository's `pytest` imports.** Needs no Maturin and writes nothing into the shared environment.
-- `cd ../graspkit-tools && uv sync`: **refreshes what parent-workspace code imports.** `graspkit-tools` consumes this repository as a Maturin-backed path dependency and `[tool.uv] cache-keys` lists `src/**/*.rs`, so this rebuilds the wheel under PEP 517 build isolation (release profile) and reinstalls it. Build isolation supplies Maturin itself, so Maturin is intentionally absent from the shared environment — **do not add it there, and do not run `maturin develop`**, which installs Maturin plus this repository's dev dependencies into the active environment and turns the `rcsfs` wheel install into an editable one. Recover with `uv sync` in `graspkit-tools/`.
-- `uvx --from 'maturin>=1.14,<2.0' maturin build --release --interpreter ../graspkit-tools/.venv/bin/python`: produce a redistributable wheel in `target/wheels/`. Wheel packaging is the only task scoped to this repository alone, which is why Maturin is declared only in this repository's `dev` group; running it via `uvx` keeps a second virtual environment from appearing.
-- `cargo test`: run Rust unit and integration tests after activating the Tools venv so PyO3 links against its Python 3.14 runtime. Needs no wheel build.
-- `cargo test test_descriptor_generator_parse_csf_basic`: run a single Rust test by name.
-- `pytest`: run all Python tests. Rebuild the in-tree extension first if Rust sources changed, otherwise the tests import a stale extension.
-- `pytest tests/rcsfs_test.py`: run the canonical Python API tests.
-- `pytest --speed`: run tests with speed benchmarking.
-- `ruff check .`: lint Python code.
-- `ruff format .`: format Python code.
-- `basedpyright rcsfs/`: type-check the Python wrapper.
+- Rust algorithms: `cargo test` or a relevant test-name filter needs no wheel build.
+- Tools consumers: run `uv sync --extra cpu` from `../graspkit-tools` after Rust changes (`--extra gpu` on CUDA hosts). Source cache keys in this repository's `pyproject.toml` trigger rebuilding the installed wheel.
+- Python tests here: pytest's `pythonpath = ["."]` selects the in-tree `rcsfs/` package. Refresh its extension after Rust changes; syncing Tools alone does not update it.
+- Distributable wheel: use isolated Maturin with the shared Python as the explicit target interpreter.
 
-Always activate the Tools venv and use `maturin build --release` for production. The development build from `maturin develop` skips LTO.
+For the latter two cases, read [development.md](docs/development.md). Keep Maturin out of the shared runtime and avoid `maturin develop`, which changes the intended wheel installation to an editable one. Isolated build/tool environments are packaging implementation details, not additional project runtimes.
 
-## Public Python API
-`tests/rcsfs_test.py` exercises the canonical API exported from `rcsfs/__init__.py`.
+## Format invariants
 
-| Symbol | Description |
-|--------|-------------|
-| `convert_csfs(input_path, output_path, ...)` | Convert CSF text to Parquet, parallelized with rayon. |
-| `get_parquet_info(input_path)` | Return Parquet file metadata. |
-| `generate_descriptors_from_parquet(input, output, peel_subshells, ...)` | Generate descriptor arrays from Parquet input. |
-| `read_peel_subshells(header_path)` | Extract the subshell list from a `*_header.toml` file. |
-| `split_csfs_by_j(input_csf, output_dir=None, prefix=None, *, copy_w=True, overwrite=True)` | Split a multi-block CSF text file into one single-block file per `2J` (`<prefix>_<2J>.c`, GRASP `rasfsplit` for `.c`); copies a sibling `.w` beside each output when present and replaces existing outputs by default. |
-| `ConversionStats` | TypedDict for `convert_csfs` results. |
-| `DescriptorGenerationStats` | TypedDict for descriptor-generation results. |
-| `JBlockSplitStats` | TypedDict for `split_csfs_by_j` results. |
+V2 descriptors store raw `Int32` channels and source-header metadata. Preserve row order, header association, parity, and the distinction between missing printed values (`-1`) and printed zero. V1 generation and the Python/CLI `normalize` option are removed; ML feature scaling belongs to the consuming pipeline.
 
-`rcsfs` exposes function-based Python APIs only. `CSFProcessor` and `CSFDescriptorGenerator` are internal Rust types and are not importable from `rcsfs._rcsfs`.
+J is encoded as integer **2J**: text `3/2` becomes `3`, while `4` or `4-` becomes `8`; parity is stored separately. CSF records have three lines after the five-line header. Test changes to parsing, conversion, restoration, or splitting against realistic fixtures.
 
-## Data Flow & File Format
-CSF conversion streams a CSF file in `chunk_size`-line batches. The default is 3 million lines, or 1 million CSFs. The first five lines are extracted as header metadata and saved as `{input_stem}_header.toml` in the output directory. Remaining lines are processed in parallel with rayon and written to uncompressed Parquet with schema `idx: UInt64`, `line1: Utf8`, `line2: Utf8`, `line3: Utf8`.
+## Validation and temporary work
 
-Descriptor generation uses a three-stage pipeline: reader thread -> rayon workers -> writer thread. It reads Parquet in 65,536-row batches and writes V2 named `Int32` columns: `sub{i}_n`, `sub{i}_2j`, `sub{i}_v`, `sub{i}_2k`, followed by `total_two_j` and `parity`. Missing printed values use `-1`, distinct from printed zero. ZSTD level 3 is the default; output order is preserved through a `BTreeMap` in the writer thread.
+The maintained suite covers this repository's algorithms, APIs, CLI, and formats. It must be self-contained and must not require an external GRASP checkout/executable or private baseline dataset. Stored fixtures may encode expected compatibility behavior.
 
-V2 is the only descriptor generation format, for both memory and disk backends. V1 generation and its normalization module have been removed. The Python/CLI `normalize` option is unavailable; any ML feature scaling belongs to the consuming pipeline.
+Put exploratory probes and one-off external comparisons under ignored `temp/`, outside Cargo/pytest discovery. Maintained tests can use ordinary temporary directories for I/O. Keep stable small fixtures in `tests/fixtures/` and add regression coverage for changed public behavior.
 
-CSF files use this structure:
+Run affected Rust or Python tests; run both when crossing the binding or file-format boundary. Use `python -m pytest tests/rcsfs_test.py` for API checks, `ruff check <changed-paths>` for Python lint, and `basedpyright rcsfs/` for wrapper typing. Use `pytest --speed` only for relevant performance work. Expand to full suites when the affected contract is shared; documentation-only changes need example/link checks.
 
-```text
-Line 1-5:  Header metadata, saved as {stem}_header.toml
-Line 6+:   CSF entries, 3 lines per CSF
-  Line 1: orbital configs, e.g. "  5s ( 2)  4d-( 4)  4d ( 6)"
-  Line 2: intermediate J,  e.g. "                   3/2      "
-  Line 3: final coupling,  e.g. "                        4-  "
-```
-
-J-value encoding stores 2J as an integer. Fractional `"3/2"` becomes `3`; integer `"4"` and parity-marked `"4-"` both become `8`.
-
-## Coding Style & Naming Conventions
-Follow Rust 2024 idioms: 4-space indentation, `snake_case` for modules and functions, `CamelCase` for types, and small focused modules. Keep PyO3 bindings in `src/lib.rs` thin; push heavy logic into Rust modules. In Python, use PEP 8 naming and type hints for public APIs. Keep package exports aligned with `rcsfs/_rcsfs.pyi` when that stub is present. Prefer clear test filenames such as `*_test.rs`, and avoid committing exploratory notebooks or ad hoc scripts to the root.
-
-Release builds use:
-
-```toml
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-```
-
-Keep version changes aligned between `Cargo.toml` and packaging metadata, and document release-facing behavior in `docs/CHANGELOG.md` when appropriate.
-
-## Testing Guidelines
-
-The maintained test suite is responsible only for this repository's own code:
-its Rust algorithms, Python APIs, CLI behavior, and file formats. Tests must be
-self-contained, using repository fixtures and normal project dependencies; they
-must not require an external GRASP source checkout, executable, or private
-baseline dataset. Stored fixtures may encode expected compatibility behavior.
-
-Put temporary test code, exploratory probes, and one-off external comparisons
-under `temp/`, not `tests/`, `src/`, or `examples/`. Temporary code is outside the
-maintained suite and must not be added to Cargo or pytest test discovery. Keep
-local inputs and generated outputs there untracked. This rule concerns temporary
-test code; maintained tests may still use standard temporary directories for I/O.
-Add Rust coverage for core parsing, conversion, descriptors, restoration, and splitting in `tests/`. Add Python regression tests when changing the public package API or file I/O behavior. Name Rust tests `*_test.rs`; keep Python tests under `tests/` and start functions with `test_`. Reuse `tests/fixtures/` for stable sample data.
-
-Run both Rust and Python checks before opening a PR:
-
-```bash
-source ../graspkit-tools/.venv/bin/activate
-cargo test
-pytest
-ruff check .
-basedpyright rcsfs/
-```
-
-## Commit & Pull Request Guidelines
-Recent history favors short, imperative commit subjects such as `update linux build` or `create win artifact`. Keep subjects brief and descriptive, and expand in the body when needed. PRs should explain the user-visible change, list validation commands run, and link related issues or docs. Include sample output or screenshots only when CLI/API behavior, generated files, or documentation rendering changes.
-
-## Security & Configuration Tips
-Do not commit generated build outputs, local data, credentials, virtual environments, or machine-specific paths. Do not create a local Python environment; use only `graspkit-tools/.venv`. Treat CSF inputs as external data and validate file paths at the Python boundary. Build wheels intentionally with `maturin build --release` after activating the Tools venv; do not rely on development artifacts for release validation.
+Use release artifacts for release validation and read build settings from `Cargo.toml`. Keep version metadata consistent and update `docs/CHANGELOG.md` for release-facing changes. Exclude build outputs, local datasets, credentials, and machine paths from commits; follow the workspace's two-layer commit workflow when requested.

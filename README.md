@@ -405,6 +405,18 @@ the batch runner generates these automatically from a matching earlier
 `[csfsgenerate]` entry, without requesting descriptor output. For a standalone
 generation, set `generate_parquet = true` or pass `--generate-parquet` to write
 only the CSF Parquet and header alongside the CSF text.
+
+Batch runs (`rcsfs -c rcsfs.toml`) automatically append to `rcsfs_{conf}.log`
+in the invocation directory, for example `rcsfs_e1_vv.log` for
+`conf = "e1_vv"`; without `conf`, the filename is `rcsfs.log`. Each run records
+the original TOML, effective step parameters, Python CLI summaries/errors,
+complete returned statistics (CSF/block counts, AS split counts, and available
+generation timing/resource statistics), start/end times, step/total elapsed
+time, and exit status. Native Rust progress messages remain on the console.
+Previous runs are retained. Validation happens before the log is opened; a log
+that aliases an input/output is rejected, and an unwritable log prevents the
+batch from starting. Standalone subcommands do not create this batch log.
+
 Every CLI command writes final outputs in the directory where it is invoked.
 Output arguments specify filenames; paths to other output directories are
 rejected. Input paths may point to other directories. Processing commands replace

@@ -39,6 +39,10 @@ uv.lock
 .DS_Store
 .omo
 
+# Local batch run logs (include configuration snapshots and local paths)
+rcsfs.log
+rcsfs_*.log
+
 # Temporary test code, local inputs, and probe outputs
 /temp/*
 !/temp/README.md

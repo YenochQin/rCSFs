@@ -35,6 +35,7 @@ _TEMPLATE_HEADER = """# rCSFs CLI configuration template.
 # Final output filenames and temporary directories are always in that directory.
 # Command-line arguments override values in this file.
 # conf = "e1_vv1"  # Shared filename stem; outputs use {conf}_as{number}raw.
+# Batch runs (rcsfs -c FILE) append to rcsfs_{conf}.log, or rcsfs.log without conf.
 
 """
 _CONFIG_TEMPLATES = {
@@ -192,6 +193,17 @@ def configured_commands(path: Path) -> list[tuple[str, int | None]]:
     if not commands:
         raise ValueError(f"{path} has no active command tables")
     return commands
+
+
+def configured_run_log(path: Path) -> tuple[Path, str]:
+    """Return the local log filename and original config snapshot for a batch."""
+    try:
+        contents = path.read_text(encoding="utf-8")
+        root = _table(tomllib.loads(contents), "config")
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+    conf = _conf_prefix(root)
+    return Path(f"rcsfs_{conf}.log" if conf is not None else "rcsfs.log"), contents
 
 
 _GENERATION_KEYS = frozenset(

@@ -1,0 +1,19 @@
+#!/bin/sh
+# Keep human co-authors; reject automatic AI attribution.
+set -eu
+
+if ! awk '
+{
+    line = tolower($0)
+    if (line ~ /^co-authored-by:[[:space:]]*(claude|sisyphus|codex|gemini|copilot|github copilot|openai)([[:space:]]|<)/ ||
+        (line ~ /^co-authored-by:/ && line ~ /<(noreply@anthropic\.com|clio-agent@sisyphuslabs\.ai)>/) ||
+        line ~ /^(🤖[[:space:]]*)?generated with .*\[?(claude code|codex|sisyphus)/ ||
+        line ~ /^ultraworked with .*\[?(sisyphus|omo)/) {
+        found = 1
+    }
+}
+END { exit found ? 1 : 0 }
+' "$1"; then
+    echo "Remove AI co-author trailers and generated-with/ultraworked-with footers before committing." >&2
+    exit 1
+fi

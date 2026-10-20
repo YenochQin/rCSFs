@@ -108,3 +108,9 @@ Recent history favors short, imperative commit subjects such as `update linux bu
 
 ## Security & Configuration Tips
 Do not commit generated build outputs, local data, credentials, virtual environments, or machine-specific paths. Treat CSF inputs as external data and validate file paths at the Python boundary. Build wheels intentionally with `uv run maturin build --release`; do not rely on development artifacts for release validation.
+
+## Commit attribution
+
+Use the contributor's configured Git identity for author and committer. Include only human contributors in `Co-authored-by` trailers; omit AI co-author trailers and generated-with or ultraworked-with footers. This applies to every coding agent, including Claude, Sisyphus, and Codex.
+
+Enable the repository's commit-message check in each clone with `git config --local core.hooksPath .githooks`. The hook rejects known AI attribution while preserving human co-authors. Project Claude settings also disable automatic commit attribution.

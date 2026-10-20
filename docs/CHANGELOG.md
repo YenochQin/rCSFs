@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### 手动 PyPI 发布配置（2026-10-20）
+
+- 新增仅手动触发的 `publish.yml`，限定 `main` 和源码中的准确版本号。
+- 默认仅构建和校验；明确勾选 `publish` 后，才通过 `pypi` 环境使用 Trusted Publishing。
+- 复用跨平台构建，汇总三个 wheel 和一份 Linux 源码包，拒绝缺失平台、混合版本和错误 ABI。
+- 上传独立 job 仅使用本次运行中已验证的产物，不重新构建；未配置自动上传触发器。
+
 ### Windows 发布构建修复（2026-10-20）
 
 - 将非 Unix 平台的 `process_cpu_millis` 回退函数设为 crate 内可见，与 Unix 分支一致，

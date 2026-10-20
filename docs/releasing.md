@@ -2,7 +2,8 @@
 
 The prepared version is **1.3.1**, read from `Cargo.toml` by Maturin. The
 in-tree fallback in `rcsfs/__init__.py` must match it when the version changes.
-This preparation does not upload to TestPyPI/PyPI, create tags, commit or push.
+The local build commands do not upload files or create Git tags. The separate
+manual publishing workflow is described near the end of this guide.
 
 ## Local build in the paired workspace
 
@@ -47,8 +48,9 @@ Use the build-only workflow for the intended distribution baseline:
 The workflow builds from the source archive, installs the produced wheel and
 its public dependencies on the runner, runs archive and functional checks,
 and retains GitHub Actions artifacts. It runs by manual dispatch or by an
-explicit push to a `codex/release-build-check-*` branch, and contains no PyPI
-upload job, credentials or OIDC publishing permission.
+explicit push to a `codex/release-build-check-*` branch. It is also reusable
+through `workflow_call`, so the publishing workflow builds the same commit.
+The build workflow contains no PyPI upload job, credentials or OIDC permission.
 The matrix is a validation target, not a claim that unrun platforms passed.
 Intel macOS, Linux ARM, musl, free-threaded Python and future Python versions
 are outside this initial wheel matrix. Without a matching wheel, pip may build
@@ -118,10 +120,66 @@ Before a separately authorized publication:
 3. Run the build matrix on that commit and review archive contents/hashes.
    Public package archives disclose their included sources regardless of
    Git repository visibility. Check public documentation access separately.
-4. Test TestPyPI installation only after upload authorization. Configure a
-   separate Trusted Publishing job for later production publication.
+4. Test TestPyPI installation only after upload authorization. Configure the
+   production Trusted Publisher below before using the manual publishing job.
 5. Tag the approved release; publish only artifacts built from that commit.
    Do not rebuild different code under an already published version.
 
 References: [Maturin distribution](https://www.maturin.rs/distribution.html),
 [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/).
+
+## Manual PyPI publishing
+
+`.github/workflows/publish.yml` is named **Publish to PyPI** in GitHub Actions.
+It has only a `workflow_dispatch` trigger. Pushing commits, tags, or completing
+an ordinary build does not start it. It accepts two inputs:
+
+- `version`: the exact version in the source, currently `1.3.1`.
+- `publish`: a checkbox, **false by default**. Leave it unchecked for a dry run.
+
+Only `main` is accepted. Preflight checks the requested version before the
+existing three-platform build matrix runs. The assembler validates every
+platform's package name, filename/metadata version and Python/platform tags,
+then retains one canonical Linux source archive. GraspKit keeps only the Linux
+copy of its universal wheel; rCSFs keeps all three platform wheels. This avoids
+silently overwriting duplicate filenames from different runners.
+
+The prepared archives are stored in the **pypi-distributions** Actions artifact;
+the job summary lists their SHA-256 hashes and source commit. Preparation and
+build jobs have no OIDC permission. Only the final, separately gated `publish`
+job uses the `pypi` environment and `id-token: write`. That job downloads the
+prepared artifact and invokes `pypa/gh-action-pypi-publish`; it does not rebuild.
+When `publish` is false, the upload job is skipped entirely. The workflow group
+serializes publication attempts. It neither bumps versions nor creates tags.
+
+### Configure authorization in the browser
+
+1. In this GitHub repository, open **Settings → Environments → New environment**
+   and create an environment named exactly **pypi**. No PyPI token or environment
+   secret is needed. You can restrict its deployment branches to `main`.
+2. Log in to [PyPI Publishing](https://pypi.org/manage/account/publishing/).
+   Under **Add a new pending publisher**, choose **GitHub** and enter:
+
+   | PyPI field | Value |
+   | --- | --- |
+   | PyPI Project Name | `rcsfs` |
+   | Owner | `YenochQin` |
+   | Repository name | `rCSFs` |
+   | Workflow name | `publish.yml` |
+   | Environment name | `pypi` |
+
+   Enter only `publish.yml`, without `.github/workflows/`. The owner is the
+   GitHub account name, not the PyPI username. Add the pending publisher. This
+   does not upload files, create the project or reserve its name; the project
+   is created on the first successful publication. If you already own an
+   existing project with this name, add the publisher in that project's
+   Publishing settings instead.
+3. For a rehearsal, choose **Actions → Publish to PyPI → Run workflow**, select
+   `main`, enter `1.3.1` and leave **publish unchecked**. All builds and
+   package checks run, and the upload job is skipped. A dry run does not test
+   the PyPI OIDC exchange because it never enters the publishing job.
+4. Only when publication is authorized, run the same workflow from `main` with
+   the exact version and **publish checked**. Then install that version from
+   PyPI to verify it. TestPyPI is not a destination in this production workflow.
+
+The pending-publisher setup follows the [PyPI guide](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).

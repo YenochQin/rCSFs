@@ -2,3 +2,9 @@
 pixi.lock merge=binary linguist-language=YAML linguist-generated=true
 # SCM syntax highlighting & preventing 3-way merges
 pixi.lock merge=binary linguist-language=YAML linguist-generated=true -diff
+
+# Keep the dependency-notice fingerprint identical on every release platform.
+Cargo.lock text eol=lf
+licenses/** text eol=lf
+# Preserve whitespace inside upstream license notices in this generated bundle.
+licenses/RUST-DEPENDENCIES.txt whitespace=-blank-at-eol

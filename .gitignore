@@ -2,8 +2,7 @@
 .pixi/
 !.pixi/config.toml
 pixi.lock
-# Added by cargo
-Cargo.lock
+# Keep Cargo.lock versioned for repeatable release builds.
 # 编译产物
 /target/
 /dist/

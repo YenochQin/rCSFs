@@ -44,9 +44,12 @@ Rust-only tests use `cargo test` with the shared environment activated and do no
 For an explicit packaging task, use an isolated tool environment while targeting the shared interpreter:
 
 ```sh
-uvx --python ../graspkit-tools/.venv/bin/python --from 'maturin>=1.14,<2.0' maturin build --release --interpreter ../graspkit-tools/.venv/bin/python
+uvx --python ../graspkit-tools/.venv/bin/python --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --compatibility pypi --interpreter ../graspkit-tools/.venv/bin/python
 ```
 
 Use the shared `Scripts/python.exe` path on Windows. Wheels are written under `target/wheels/`. This command does not refresh the in-tree extension or install the wheel into Tools. Keep the Maturin version constraint aligned with `pyproject.toml` when updating build dependencies.
 
 Avoid `maturin develop` for this workspace: its editable extension installation differs from Tools' declared built path dependency. Restore that installation through a Tools sync with the selected extra when needed.
+
+For source-archive rebuilding, release manifests, license notices and the
+build-only platform matrix, follow [the release guide](releasing.md).

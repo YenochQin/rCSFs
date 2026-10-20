@@ -29,6 +29,7 @@ FIXTURE_DIRECTORY = REPO_ROOT / "tests" / "fixtures"
 #: pre-planning baseline that the 2026-09-22 matrix supersedes, and the two
 #: `rcsfgenerate_*` ones come from a different script that needs a GRASP
 #: checkout and is documented as not reproducible from this repository alone.
+#: Exclude these only from source-identity checks; other report checks still apply.
 LEGACY_REPORTS = {
     "v2_disk_generation_p0b_b1_20260921.json",
     "v2_disk_generation_p0b_b2_20260921.json",
@@ -135,12 +136,16 @@ def test_environment_identifies_the_source_and_the_binary() -> None:
 
 
 @pytest.mark.parametrize(
-    "report", sorted(BENCHMARK_DIRECTORY.glob("*.json")), ids=lambda path: path.name
+    "report",
+    [
+        report
+        for report in sorted(BENCHMARK_DIRECTORY.glob("*.json"))
+        if report.name not in LEGACY_REPORTS
+    ],
+    ids=lambda path: path.name,
 )
 def test_registered_report_names_its_source(report: Path) -> None:
-    """Every registered report records the revision and the binary it measured."""
-    if report.name in LEGACY_REPORTS:
-        pytest.skip("measured before source identity was captured")
+    """Every non-legacy report records the revision and the binary it measured."""
     document = json.loads(report.read_text(encoding="utf-8"))
     git = document["environment"]["git"]
     assert git["tree"], f"{report.name} does not record the source tree"

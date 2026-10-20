@@ -35,23 +35,26 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 
 `rcsfs` 当前要求 Python `3.14+`。
 
-从源码构建：
+使用 Rust 工具链从源码构建 wheel，再安装到兼容的 Python 环境：
 
 ```bash
 git clone https://github.com/YenochQin/rCSFs.git
 cd rCSFs
-uv sync
-uv run maturin develop --release
+uvx --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --compatibility pypi
+pip install target/wheels/rcsfs-*.whl
 ```
 
-如果按仓库的开发流程使用，也可以执行：
+Maturin 仅在隔离的打包工具环境中运行。完整 GraspKit 工作区使用 Tools 的共享环境：
 
 ```bash
-uv sync --group dev --group lint
-uv run maturin develop
+cd ../graspkit-tools
+uv sync --extra cpu
+source .venv/bin/activate
 ```
 
-`maturin` 安装在 uv 管理的 Python 环境中。请使用 `uv run maturin ...`，或者先激活 `.venv` 后再运行裸 `maturin`。
+CUDA 主机改用 `--extra gpu`。不要在 rCSFs 中创建另一套 `.venv`，
+也不要用 `maturin develop` 替换 Tools 声明的 wheel 安装。
+发布构建及独立验证见[发布指南](docs/releasing.md)。
 
 ## 快速开始
 
@@ -484,3 +487,9 @@ Cargo 测试也应通过 `uv run` 运行，这样 PyO3 会链接到项目 uv 环
 MIT，详见 [LICENSE](LICENSE)。
 
 `uv run rcsfs csfsgenerate` 默认输出到 `rcsf.out`；输出路径可省略。
+
+## 发布准备与第三方署名
+
+构建、平台范围和 wheel 验证见[发布指南](docs/releasing.md)。正式发布到 PyPI 后，
+可使用 `python -m pip install rcsfs` 安装；有匹配 wheel 时无须在用户机器上编译 Rust。
+GRASP 来源说明及其 MIT 许可文本见[第三方声明](licenses/GRASP-MIT.txt)。

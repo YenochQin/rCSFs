@@ -34,12 +34,13 @@ It helps you:
 
 `rcsfs` currently targets Python `3.14+`.
 
-Build a wheel from source and install it wherever you need it:
+Build a wheel from source with a Rust toolchain and install it in a compatible
+Python environment:
 
 ```bash
 git clone https://github.com/YenochQin/rCSFs.git
 cd rCSFs
-uvx --from 'maturin>=1.14,<2.0' maturin build --release
+uvx --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --compatibility pypi
 pip install target/wheels/rcsfs-*.whl
 ```
 
@@ -56,7 +57,7 @@ environment — `[tool.uv] cache-keys` tracks `src/**/*.rs`, so Rust edits are
 picked up automatically:
 
 ```bash
-cd ../graspkit-tools && uv sync
+cd ../graspkit-tools && uv sync --extra cpu
 source .venv/bin/activate
 ```
 
@@ -878,6 +879,15 @@ Run Cargo tests through `uv run` so PyO3 links against the project Python 3.14 e
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). GRASP-derived tables and behavior are attributed
+in [the bundled GRASP notice](licenses/GRASP-MIT.txt). Locked Rust dependency
+notices are included in [RUST-DEPENDENCIES.txt](licenses/RUST-DEPENDENCIES.txt).
 
 `uv run rcsfs csfsgenerate` defaults to `rcsf.out`; the output path is optional.
+
+## Release preparation
+
+See [the release guide](docs/releasing.md) for the build-only platform matrix,
+source archive checks and wheel smoke tests. Once published on PyPI, install
+with `python -m pip install rcsfs`; a matching wheel avoids compiling Rust
+on the user's machine.

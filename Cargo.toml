@@ -5,7 +5,24 @@ version = "1.3.1"
 
 edition = "2024"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/YenochQin/rCSFs"
 description = "Rust-powered Python library for converting atomic-physics CSF data to Parquet and generating ML-ready descriptors"
+# Keep local reports, datasets, old wheels and agent files out of source releases.
+include = [
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/build.rs",
+    "/pyproject.toml",
+    "/LICENSE",
+    "/licenses/*.txt",
+    "/README.md",
+    "/README.zh-CN.md",
+    "/src/**/*.rs",
+    "/rcsfs/*.py",
+    "/rcsfs/*.pyi",
+    "/rcsfs/py.typed",
+]
 
 [features]
 default = ["python"]

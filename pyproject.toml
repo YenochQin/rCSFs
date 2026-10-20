@@ -1,36 +1,41 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.14,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "rcsfs"
 description = "Rust-powered Python library for converting atomic-physics CSF data to Parquet and generating ML-ready descriptors"
 requires-python = ">=3.14"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "licenses/*.txt"]
+keywords = ["GRASP", "atomic physics", "CSF", "Parquet", "Rust"]
 authors = [
-    {name = "YenochQin", email = "yenochqin@hotmail.com"},
+    {name = "Yi (Yenoch) Qin", email = "yenochqin@hotmail.com"},
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Information Technology",
-    "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: Unix",
-    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Intended Audience :: Science/Research",
     "Environment :: Console",
-    "Environment :: MacOS X",
+    "Topic :: Scientific/Engineering :: Physics",
     "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: Internet",
 ]
-dynamic = ["license", "readme", "version"]
+dynamic = ["version"]
 dependencies = [
     "polars>=1.36.1",
 ]
 
 [project.scripts]
 rcsfs = "rcsfs.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/YenochQin/rCSFs"
+Source = "https://github.com/YenochQin/rCSFs"
+Issues = "https://github.com/YenochQin/rCSFs/issues"
 
 [dependency-groups]
 dev = [
@@ -53,6 +58,14 @@ lint = [
 python-source = "."
 module-name = "rcsfs._rcsfs"
 features = ["pyo3/extension-module", "pyo3/generate-import-lib"]
+strip = true
+# The source archive is a buildable release, not the development workspace.
+include = [
+    { path = "docs/releasing.md", format = "sdist" },
+    { path = "scripts/check_release.py", format = "sdist" },
+    { path = "tests/fixtures/sample.csf", format = "sdist" },
+]
+exclude = ["**/__pycache__/**", "**/*.pyc"]
 
 [tool.uv]
 # Local wheel consumers must rebuild when Python or Rust sources change,
@@ -61,12 +74,14 @@ cache-keys = [
     { file = "pyproject.toml" },
     { file = "Cargo.toml" },
     { file = "Cargo.lock" },
+    { file = "build.rs" },
     { file = "src/**/*.rs" },
     { file = "rcsfs/**/*.py" },
     { file = "rcsfs/**/*.pyi" },
     { file = "rcsfs/py.typed" },
     { file = "README.md" },
     { file = "LICENSE" },
+    { file = "licenses/*.txt" },
 ]
 
 [tool.basedpyright]

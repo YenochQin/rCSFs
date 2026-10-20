@@ -40,4 +40,10 @@ Put exploratory probes and one-off external comparisons under ignored `temp/`, o
 
 Run affected Rust or Python tests; run both when crossing the binding or file-format boundary. Use `python -m pytest tests/rcsfs_test.py` for API checks, `ruff check <changed-paths>` for Python lint, and `basedpyright rcsfs/` for wrapper typing. Use `pytest --speed` only for relevant performance work. Expand to full suites when the affected contract is shared; documentation-only changes need example/link checks.
 
+## Commit attribution
+
+Use the contributor's configured Git identity for author and committer. Include only human contributors in `Co-authored-by` trailers; omit AI co-author trailers and generated-with or ultraworked-with footers. This applies to every coding agent, including Claude, Sisyphus, and Codex.
+
+Enable the repository's commit-message check in each clone with `git config --local core.hooksPath .githooks`. The hook rejects known AI attribution while preserving human co-authors. Project Claude settings also disable automatic commit attribution.
+
 Use release artifacts for release validation and read build settings from `Cargo.toml`. Keep version metadata consistent and update `docs/CHANGELOG.md` for release-facing changes. Exclude build outputs, local datasets, credentials, and machine paths from commits; follow the workspace's two-layer commit workflow when requested.

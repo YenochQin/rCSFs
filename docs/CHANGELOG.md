@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### Windows 发布构建修复（2026-10-20）
+
+- 将非 Unix 平台的 `process_cpu_millis` 回退函数设为 crate 内可见，与 Unix 分支一致，
+  修复最终编码阶段导入该函数时出现的 Rust `E0603` 编译错误。
+- Windows 的 CPU 计时仍返回 `None`；不改变 CSF 生成结果或文件格式。
+
 ### PyPI 发布准备（2026-10-20）
 
 - 统一 Maturin 构建版本要求，补齐标准包元数据、项目链接和科学计算分类。

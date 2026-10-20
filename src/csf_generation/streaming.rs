@@ -125,7 +125,7 @@ pub(crate) fn process_cpu_millis() -> Option<u128> {
 }
 
 #[cfg(not(unix))]
-fn process_cpu_millis() -> Option<u128> {
+pub(crate) fn process_cpu_millis() -> Option<u128> {
     None
 }
 

@@ -1,0 +1,41 @@
+name: Draft GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Successful Publish to PyPI dry-run ID (publish must have been off)"
+        required: true
+        type: string
+      tag:
+        description: "Version tag matching that run, for example v1.3.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  draft:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Validate the source run and create a Release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python -B scripts/github_release.py --run-id "$SOURCE_RUN_ID" --tag "$RELEASE_TAG"

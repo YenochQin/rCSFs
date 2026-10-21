@@ -183,3 +183,33 @@ serializes publication attempts. It neither bumps versions nor creates tags.
    PyPI to verify it. TestPyPI is not a destination in this production workflow.
 
 The pending-publisher setup follows the [PyPI guide](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
+
+## GitHub Release drafts from a successful rehearsal
+
+Open **Actions → Draft GitHub Release → Run workflow** and select `main`.
+Fill in `run_id` with the numeric ID from a successful **Publish to PyPI**
+rehearsal URL (`/actions/runs/NUMBER`), and `tag` with `v1.3.1` (or the
+version of that rehearsal). The selected run must have `publish` unchecked:
+`preflight`, all three builds and `prepare` must pass, and `publish` must be
+skipped. Runs from forks, other workflows or branches are rejected.
+
+The workflow downloads that run's unexpired `pypi-distributions` artifact,
+checks its GitHub SHA-256 digest, and verifies package names, metadata versions
+and the expected wheel platforms. It reuses the exact archives without
+installing dependencies or rebuilding. The script uses Python's standard
+library and the GitHub CLI supplied by the hosted runner.
+
+The resulting **draft** contains the wheel(s), source archive and `SHA256SUMS`.
+Its notes record the source commit, run URL, artifact ID and per-file hashes.
+The Release target is the rehearsal's commit, even if `main` has moved since.
+An existing tag must resolve to that commit; an existing Release for the tag
+(including a draft) causes a failure instead of overwriting it. Failed partial
+drafts are retained for inspection. If an artifact has expired, run a new
+rehearsal and use its run ID.
+
+This workflow always creates a draft: it has no formal-publication switch and
+no PyPI job or OIDC permission. It needs only the built-in `GITHUB_TOKEN` with
+`actions: read` and `contents: write`, not a personal token or PyPI secret.
+Review the draft in **Releases**; publishing it later requires a separate
+manual action. If the tag does not exist yet, GitHub may defer creating it
+until the draft is published; the draft retains the exact target commit.

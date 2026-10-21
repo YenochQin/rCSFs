@@ -50,7 +50,7 @@ uv run rcsfs --help
 已有 uv 项目使用 Python 3.14 或更新版本时，直接在其目录运行 `uv add rcsfs`。
 该命令会将依赖写入 `pyproject.toml`，更新 `uv.lock`，并安装到项目的 `.venv` 中。
 运行自己的分析脚本时使用 `uv run python analysis.py`，无需手动激活环境。
-需要固定版本时，使用 `uv add "rcsfs==1.3.1"`。
+需要固定版本时，使用 `uv add "rcsfs==1.3.2"`。
 
 也可以手动将依赖加入已有的 `pyproject.toml`：
 
@@ -60,7 +60,7 @@ name = "csf-analysis"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
-    "rcsfs==1.3.1",
+    "rcsfs==1.3.2",
 ]
 ```
 
@@ -75,7 +75,7 @@ dependencies = [
 python -m pip install rcsfs
 ```
 
-需要固定版本时，使用 `python -m pip install "rcsfs==1.3.1"`。
+需要固定版本时，使用 `python -m pip install "rcsfs==1.3.2"`。
 两种安装方式提供相同的 Python API 和 `rcsfs` 命令。
 
 当前版本提供 CPython 3.14 的预编译 wheel，覆盖 Linux x86_64（glibc 2.28+）、

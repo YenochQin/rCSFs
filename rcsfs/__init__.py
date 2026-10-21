@@ -96,7 +96,7 @@ from ._types import (
 try:
     __version__ = version("rcsfs")
 except PackageNotFoundError:
-    __version__ = "1.3.1"
+    __version__ = "1.3.2"
 
 from ._rcsfs import (
     convert_csfs as _convert_csfs,

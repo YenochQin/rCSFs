@@ -1,6 +1,6 @@
 # Preparing an rcsfs release
 
-The prepared version is **1.3.1**, read from `Cargo.toml` by Maturin. The
+The prepared version is **1.3.2**, read from `Cargo.toml` by Maturin. The
 in-tree fallback in `rcsfs/__init__.py` must match it when the version changes.
 The local build commands do not upload files or create Git tags. The separate
 manual publishing workflow is described near the end of this guide.
@@ -112,7 +112,7 @@ Review newly introduced license terms and any additional bundled native librarie
 
 Before a separately authorized publication:
 
-1. Confirm ownership/availability of the `rcsfs` PyPI name and that 1.3.1 is
+1. Confirm ownership/availability of the `rcsfs` PyPI name and that 1.3.2 is
    unused. A missing project page does not establish name availability.
 2. Review the exact release commit and all changes since the prior release.
    `docs/CHANGELOG.md` retains the development history; finalize its release
@@ -134,7 +134,7 @@ References: [Maturin distribution](https://www.maturin.rs/distribution.html),
 It has only a `workflow_dispatch` trigger. Pushing commits, tags, or completing
 an ordinary build does not start it. It accepts two inputs:
 
-- `version`: the exact version in the source, currently `1.3.1`.
+- `version`: the exact version in the source, currently `1.3.2`.
 - `publish`: a checkbox, **false by default**. Leave it unchecked for a dry run.
 
 Only `main` is accepted. Preflight checks the requested version before the
@@ -175,7 +175,7 @@ serializes publication attempts. It neither bumps versions nor creates tags.
    existing project with this name, add the publisher in that project's
    Publishing settings instead.
 3. For a rehearsal, choose **Actions → Publish to PyPI → Run workflow**, select
-   `main`, enter `1.3.1` and leave **publish unchecked**. All builds and
+   `main`, enter `1.3.2` and leave **publish unchecked**. All builds and
    package checks run, and the upload job is skipped. A dry run does not test
    the PyPI OIDC exchange because it never enters the publishing job.
 4. Only when publication is authorized, run the same workflow from `main` with
@@ -188,7 +188,7 @@ The pending-publisher setup follows the [PyPI guide](https://docs.pypi.org/trust
 
 Open **Actions → Draft GitHub Release → Run workflow** and select `main`.
 Fill in `run_id` with the numeric ID from a successful **Publish to PyPI**
-rehearsal URL (`/actions/runs/NUMBER`), and `tag` with `v1.3.1` (or the
+rehearsal URL (`/actions/runs/NUMBER`), and `tag` with `v1.3.2` (or the
 version of that rehearsal). The selected run must have `publish` unchecked:
 `preflight`, all three builds and `prepare` must pass, and `publish` must be
 skipped. Runs from forks, other workflows or branches are rejected.

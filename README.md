@@ -52,7 +52,7 @@ For an existing uv project using Python 3.14 or newer, run `uv add rcsfs` in its
 directory. This records the dependency in `pyproject.toml`, updates `uv.lock`,
 and installs it in the project's `.venv`. Run your own script with
 `uv run python analysis.py`; manual environment activation is not required.
-To pin a particular release, use `uv add "rcsfs==1.3.1"`.
+To pin a particular release, use `uv add "rcsfs==1.3.2"`.
 
 You can also add the dependency to an existing `pyproject.toml` manually:
 
@@ -62,7 +62,7 @@ name = "csf-analysis"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
-    "rcsfs==1.3.1",
+    "rcsfs==1.3.2",
 ]
 ```
 
@@ -78,7 +78,7 @@ To install into an existing Python environment:
 python -m pip install rcsfs
 ```
 
-For a fixed release, use `python -m pip install "rcsfs==1.3.1"`.
+For a fixed release, use `python -m pip install "rcsfs==1.3.2"`.
 Both installation methods provide the same Python API and `rcsfs` command.
 
 The current release provides CPython 3.14 wheels for Linux x86_64

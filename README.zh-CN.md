@@ -21,7 +21,7 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 - 在转换过程中保持原始 CSF 顺序。
 - 从自动生成的头信息 TOML 中提取 `peel subshells`。
 - 基于转换后的 CSF 数据生成描述符 Parquet 文件。
-- 为机器学习下游流程生成可选归一化的描述符数据。
+- 生成保留原始整数的可逆 V2 描述符，特征缩放由下游 ML 流程负责。
 
 ## 为什么用 rCSFs
 
@@ -33,30 +33,65 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 
 ## 安装
 
-`rcsfs` 当前要求 Python `3.14+`。
+使用 Python 3.14 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
+分发包名、Python 导入名和命令行入口都叫 `rcsfs`。
 
-使用 Rust 工具链从源码构建 wheel，再安装到兼容的 Python 环境：
-
-```bash
-git clone https://github.com/YenochQin/rCSFs.git
-cd rCSFs
-uvx --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --compatibility pypi
-pip install target/wheels/rcsfs-*.whl
-```
-
-Maturin 仅在隔离的打包工具环境中运行。完整 GraspKit 工作区使用 Tools 的共享环境：
+### 使用 pip
 
 ```bash
-cd ../graspkit-tools
-uv sync --extra cpu
-source .venv/bin/activate
+python -m pip install rcsfs
 ```
 
-CUDA 主机改用 `--extra gpu`。不要在 rCSFs 中创建另一套 `.venv`，
-也不要用 `maturin develop` 替换 Tools 声明的 wheel 安装。
-发布构建及独立验证见[发布指南](docs/releasing.md)。
+需要固定为当前发布版本时：
+
+```bash
+python -m pip install "rcsfs==1.3.1"
+```
+
+当前版本提供 CPython 3.14 的预编译 wheel，覆盖 Linux x86_64（glibc 2.28+）、
+Windows x86_64 和 macOS Apple Silicon（macOS 11+）。匹配 wheel 时无需 Rust 编译器。
+其他 Python/平台组合可能回退到源码构建，需要 Rust 工具链和兼容的链接器；
+具体步骤见[开发指南](docs/development.md)。
+
+### 在 pyproject.toml 中声明依赖
+
+将依赖加入你自己项目已有的 `[project].dependencies`。最小示例如下：
+
+```toml
+[project]
+name = "csf-analysis"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "rcsfs==1.3.1",
+]
+```
+
+在你的使用项目目录中安装项目及其依赖：
+
+```bash
+python -m pip install .
+```
+
+如果还需要 GraspKit 的加载器或绘图功能，可在同一依赖列表中另加
+`"graspkit-atomic==3.4.1"`（待该新 PyPI 名称首次发布后使用）。
+
+### 检查安装
+
+```bash
+python -c "import rcsfs; print(rcsfs.__version__)"
+rcsfs --help
+```
+
+请使用安装该包的 Python 环境对应的终端。命令行也可通过
+`python -m rcsfs.cli --help` 调用。
+源码构建及完整 GraspKit 工作区的开发环境见[开发指南](docs/development.md)，
+发布维护步骤见[发布指南](docs/releasing.md)。
 
 ## 快速开始
+
+将 `input_csf` 指向你已有的 GRASP CSF 计算文件。末尾可选的相互作用筛选示例
+还需要另行提供 `reference.csf` 和 `candidates.csf`。
 
 ```python
 from pathlib import Path
@@ -71,7 +106,7 @@ from rcsfs import (
     select_interacting_csfs,
 )
 
-input_csf = Path("tests/fixtures/sample.csf")
+input_csf = Path("input.c")
 csf_parquet = Path("sample.parquet")
 desc_parquet = Path("sample_descriptors.parquet")
 
@@ -277,10 +312,11 @@ info = get_parquet_info("output.parquet")
 
 开发中的 `complete_csf` API 可以将完整的 GRASP CSF 文件读入紧凑的内存整数结构。与机器学习描述符不同，该结构会保留子壳层占据、显式写出的零状态、seniority、实际打印出的中间耦合、总 `2J`、宇称、block 边界和 CSF 顺序。
 
-可以用往返工具验证一个 CSF 文件：
+在源码目录中，按[开发指南](docs/development.md)激活开发环境后，
+可以用 Rust 往返示例验证一个 CSF 文件：
 
 ```bash
-uv run cargo run --release --example roundtrip_csf -- \
+cargo run --release --example roundtrip_csf -- \
   /path/to/input.c \
   /path/to/output.c
 ```
@@ -330,7 +366,7 @@ fn main() -> anyhow::Result<()> {
 ### 6. 从单个固定相对论占据组态生成 CSF（Rust 开发接口）
 
 ```bash
-uv run cargo run --release --example generate_csfs -- \
+cargo run --release --example generate_csfs -- \
   examples/fixed_configuration.toml /path/to/new-output.c
 ```
 
@@ -338,7 +374,7 @@ uv run cargo run --release --example generate_csfs -- \
 
 ## 命令行工具
 
-安装 `rcsfs` 会同时安装一个 `rcsfs` 命令行脚本（`uv run rcsfs ...`），提供五个子命令。
+安装 `rcsfs` 会同时安装 `rcsfs` 命令行入口，使用 `rcsfs --help` 查看子命令。
 
 使用 `rcsfs -c rcsfs.toml` 批量执行配置表时，会在当前运行目录自动追加
 `rcsfs_{conf}.log`：例如 `conf = "e1_vv"` 对应 `rcsfs_e1_vv.log`；
@@ -371,7 +407,7 @@ parquet = "out.parquet"
 descriptor_parquet = "out_descriptors.parquet"
 ```
 
-运行：`uv run rcsfs csfsgenerate --config generation.toml`。
+运行：`rcsfs csfsgenerate --config generation.toml`。
 
 现代 `[csfsgenerate]` 配置若有顶层 `conf`，只需设置 `generate_descriptors = true`，
 描述符默认输出为 `{conf}_desc.parquet`，并自动生成 CSF Parquet/header 和记录 header 哈希。
@@ -383,7 +419,7 @@ descriptor_parquet = "out_descriptors.parquet"
 
 ```bash
 # V2（默认）
-uv run rcsfs gen-descriptors csf.parquet descriptors.parquet --header csf_header.toml
+rcsfs gen-descriptors csf.parquet descriptors.parquet --header csf_header.toml
 ```
 
 可选的 `--descriptor-version 2` 只接受 V2。原 `--normalize` 参数和 TOML `normalize`
@@ -393,11 +429,11 @@ uv run rcsfs gen-descriptors csf.parquet descriptors.parquet --header csf_header
 ### `rcsfs restore-csfs` —— 从 V2 描述符还原 CSF 文本文件
 
 ```bash
-uv run rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
+rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
   --output restored.c
 
 # 只还原指定索引的子集，按给定顺序
-uv run rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
+rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
   --output subset.c --indices 0 5 12
 ```
 
@@ -409,7 +445,7 @@ uv run rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.
 对应 GRASP2018 的 `rcsfzerofirst`：在每个对称性分块内，零级参考 CSF 固定在块首，随后追加一级补集。
 
 ```bash
-uv run rcsfs zero-first zero.csf full.csf out.csf
+rcsfs zero-first zero.csf full.csf out.csf
 ```
 
 ### `rcsfs interacting` —— 生成相互作用候选上界
@@ -423,10 +459,10 @@ CLI 默认写入 `rcsf.out`，并使用 8 个 worker 线程。可通过 `--outpu
 和 `--threads N` 覆盖这两个默认值。
 
 ```bash
-uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc
+rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc
 
 # 可选覆盖项
-uv run rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
+rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
   --threads 4 --output selected.csf
 ```
 
@@ -471,25 +507,26 @@ rCSFs 期望的 CSF 文本结构如下：
 
 ## 开发命令
 
-本地常用命令：
+贡献者在完整工作区中开发时，先按[开发指南](docs/development.md)准备共享环境，
+并在运行 Python 测试前更新源码目录内的扩展。然后在 `rCSFs/` 中执行：
 
 ```bash
-uv run cargo test
-uv run pytest
-uv run ruff check .
-uv run basedpyright rcsfs/
+source ../graspkit-tools/.venv/bin/activate
+cargo test
+python -m pytest tests/
+ruff check .
+basedpyright rcsfs/
 ```
 
-Cargo 测试也应通过 `uv run` 运行，这样 PyO3 会链接到项目 uv 环境中的 Python 3.14。裸 `cargo test` 可能会发现系统 Python，例如 macOS 上 Xcode 的 Python 3.9，并在链接阶段报 `library 'python3.9' not found`。
+先激活共享环境，确保 PyO3 使用预期的 Python 解释器。上述贡献者命令需要源码目录。
 
 ## 许可证
 
 MIT，详见 [LICENSE](LICENSE)。
 
-`uv run rcsfs csfsgenerate` 默认输出到 `rcsf.out`；输出路径可省略。
+`rcsfs csfsgenerate` 默认输出到 `rcsf.out`；输出路径可省略。
 
 ## 发布准备与第三方署名
 
-构建、平台范围和 wheel 验证见[发布指南](docs/releasing.md)。正式发布到 PyPI 后，
-可使用 `python -m pip install rcsfs` 安装；有匹配 wheel 时无须在用户机器上编译 Rust。
+构建、平台范围、wheel 验证和手动发布工作流见[发布指南](docs/releasing.md)。
 GRASP 来源说明及其 MIT 许可文本见[第三方声明](licenses/GRASP-MIT.txt)。

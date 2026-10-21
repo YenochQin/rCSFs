@@ -32,39 +32,70 @@ It helps you:
 
 ## Installation
 
-`rcsfs` currently targets Python `3.14+`.
+Install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.14 or newer.
+The distribution name, Python import name and command-line entry point are all
+`rcsfs`.
 
-Build a wheel from source with a Rust toolchain and install it in a compatible
-Python environment:
-
-```bash
-git clone https://github.com/YenochQin/rCSFs.git
-cd rCSFs
-uvx --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --compatibility pypi
-pip install target/wheels/rcsfs-*.whl
-```
-
-Maturin is only required for this packaging step, so running it with `uvx` avoids
-adding a virtual environment to the checkout. Any PEP 517 front end works too —
-`pip install .` fetches Maturin into an isolated build environment on its own.
-
-### Inside the GraspKit workspace
-
-When this repository sits beside `graspkit-tools/`, it is consumed as a
-Maturin-backed path dependency and there is a single shared environment at
-`../graspkit-tools/.venv`. Rebuild and reinstall the extension by syncing that
-environment — `[tool.uv] cache-keys` tracks `src/**/*.rs`, so Rust edits are
-picked up automatically:
+### With pip
 
 ```bash
-cd ../graspkit-tools && uv sync --extra cpu
-source .venv/bin/activate
+python -m pip install rcsfs
 ```
 
-Do not create `rCSFs/.venv`, and do not install Maturin into the shared
-environment; build isolation provides it.
+To reproduce the current release exactly:
+
+```bash
+python -m pip install "rcsfs==1.3.1"
+```
+
+The current release provides CPython 3.14 wheels for Linux x86_64
+(glibc 2.28+), Windows x86_64 and macOS Apple Silicon (macOS 11+).
+A matching wheel installs without a Rust compiler. Other Python/platform
+combinations may fall back to a source build and need a Rust toolchain and
+compatible linker; see [development.md](docs/development.md).
+
+### In pyproject.toml
+
+Add the dependency to your own project's existing `[project].dependencies`.
+A minimal example is:
+
+```toml
+[project]
+name = "csf-analysis"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "rcsfs==1.3.1",
+]
+```
+
+From your consuming project's directory, install the project and its dependencies:
+
+```bash
+python -m pip install .
+```
+
+If your project also uses GraspKit's loaders or plotting functions, add
+`"graspkit-atomic==3.4.1"` to the same dependency list after its first release
+under the new PyPI name.
+
+### Check the installation
+
+```bash
+python -c "import rcsfs; print(rcsfs.__version__)"
+rcsfs --help
+```
+
+Use the terminal for the environment where you installed the package. You can
+also invoke the CLI as `python -m rcsfs.cli --help`.
+Source builds and development inside the paired GraspKit workspace are described
+in [development.md](docs/development.md); release maintenance is covered by
+[the release guide](docs/releasing.md).
 
 ## Quick Start
+
+Set `input_csf` to an existing GRASP CSF file from your calculation. The optional
+interaction example at the end also needs `reference.csf` and `candidates.csf`.
 
 ```python
 from pathlib import Path
@@ -79,7 +110,7 @@ from rcsfs import (
     select_interacting_csfs,
 )
 
-input_csf = Path("tests/fixtures/sample.csf")
+input_csf = Path("input.c")
 csf_parquet = Path("sample.parquet")
 desc_parquet = Path("sample_descriptors.parquet")
 
@@ -293,10 +324,12 @@ subshell occupations, explicitly printed zero states, seniority labels, the
 printed intermediate couplings, total `2J`, parity, block boundaries, and record
 order.
 
-Use the round-trip tool to validate a CSF file:
+From a source checkout with the development environment activated
+(see [development.md](docs/development.md)), use the Rust round-trip example
+to validate a CSF file:
 
 ```bash
-uv run cargo run --release --example roundtrip_csf -- \
+cargo run --release --example roundtrip_csf -- \
   /path/to/input.c \
   /path/to/output.c
 ```
@@ -368,7 +401,7 @@ implemented yet.
 ### 6. Generate CSFs for a single fixed relativistic configuration (Rust dev API)
 
 ```bash
-uv run cargo run --release --example generate_csfs -- \
+cargo run --release --example generate_csfs -- \
   examples/fixed_configuration.toml /path/to/new-output.c
 ```
 
@@ -381,13 +414,13 @@ below for generating a full CSF list from Python.
 
 ## Command Line Interface
 
-Installing `rcsfs` also installs an `rcsfs` console script (`uv run rcsfs ...`)
-with six processing subcommands (`csfs-split` also accepts the older `split-active` and
+Installing `rcsfs` also installs the `rcsfs` console script. Run `rcsfs --help`
+to list its subcommands (`csfs-split` also accepts the older `split-active` and
 `rcsfsplit` spellings).
 
 ### Shared CLI configuration
 
-All six commands accept `-c/--config`. For `csfsgenerate`, running without
+The processing commands accept `-c/--config`. For `csfsgenerate`, running without
 that flag always starts the interactive dialog, even when `rcsfs.toml` exists.
 After a successful run, it writes the dialog inputs and CLI options to
 `./rcsfs.toml`, replacing any existing file. Use `rcsfs csfsgenerate -c` or
@@ -607,7 +640,7 @@ in the original dialog — output path, descriptor export, thread
 count — are plain CLI flags instead:
 
 ```text
-$ uv run rcsfs csfsgenerate out.c
+$ rcsfs csfsgenerate out.c
 Default, reverse, symmetry or user specified ordering? (*/r/s/u) *
 Select core
  0  No core
@@ -662,7 +695,7 @@ descriptor_parquet = "calculation_descriptors.parquet"
 Run it with:
 
 ```bash
-uv run rcsfs csfsgenerate --config calculation.toml
+rcsfs csfsgenerate --config calculation.toml
 ```
 
 
@@ -691,7 +724,7 @@ parquet = "out.parquet"
 descriptor_parquet = "out_descriptors.parquet"
 ```
 
-Run it with `uv run rcsfs csfsgenerate --config generation.toml`. By default
+Run it with `rcsfs csfsgenerate --config generation.toml`. By default
 only the CSF text is written. With `generate_parquet = true`, it also writes
 the CSF Parquet and header TOML without descriptor output. With
 `generate_descriptors = true`, it writes both of those plus descriptor Parquet
@@ -710,7 +743,7 @@ Both the interactive memory backend and the disk backend emit reversible V2 desc
 
 ```bash
 # V2 (default)
-uv run rcsfs gen-descriptors csf.parquet descriptors.parquet --header csf_header.toml
+rcsfs gen-descriptors csf.parquet descriptors.parquet --header csf_header.toml
 ```
 
 `--descriptor-version 2` is optional; V2 is the only supported generation format.
@@ -721,11 +754,11 @@ and subshell list, for tools that read TOML without opening the Parquet file.
 ### `rcsfs restore-csfs` — rebuild a CSF text file from V2 descriptors
 
 ```bash
-uv run rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
+rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
   --output restored.c
 
 # Restore only a subset, in a given order
-uv run rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
+rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
   --output subset.c --indices 0 5 12
 ```
 
@@ -740,7 +773,7 @@ zero-order reference CSFs are locked to the head, followed by the
 first-order complement.
 
 ```bash
-uv run rcsfs zero-first zero.csf full.csf out.csf
+rcsfs zero-first zero.csf full.csf out.csf
 ```
 
 ### `rcsfs interacting` — conservative interaction candidates
@@ -854,13 +887,16 @@ rCSFs expects CSF text files in this layout:
 
 ## Development
 
-Useful local commands:
+For contributors working in the paired workspace, follow
+[development.md](docs/development.md) to prepare the shared environment and
+refresh the in-tree extension before Python tests. Then, from `rCSFs/`:
 
 ```bash
-uv run cargo test
-uv run pytest
-uv run ruff check .
-uv run basedpyright rcsfs/
+source ../graspkit-tools/.venv/bin/activate
+cargo test
+python -m pytest tests/
+ruff check .
+basedpyright rcsfs/
 ```
 
 The maintained test suite is responsible only for this repository's own code:
@@ -875,7 +911,8 @@ maintained suite and must not be added to Cargo or pytest test discovery. Keep
 local inputs and generated outputs there untracked. This rule concerns temporary
 test code; maintained tests may still use standard temporary directories for I/O.
 
-Run Cargo tests through `uv run` so PyO3 links against the project Python 3.14 environment. Bare `cargo test` can pick up a system Python and fail at link time, for example with `library 'python3.9' not found` on macOS.
+Activate the shared environment before Cargo so PyO3 uses the intended Python
+interpreter. These contributor commands require a source checkout.
 
 ## License
 
@@ -883,11 +920,9 @@ MIT. See [LICENSE](LICENSE). GRASP-derived tables and behavior are attributed
 in [the bundled GRASP notice](licenses/GRASP-MIT.txt). Locked Rust dependency
 notices are included in [RUST-DEPENDENCIES.txt](licenses/RUST-DEPENDENCIES.txt).
 
-`uv run rcsfs csfsgenerate` defaults to `rcsf.out`; the output path is optional.
+`rcsfs csfsgenerate` defaults to `rcsf.out`; the output path is optional.
 
 ## Release preparation
 
 See [the release guide](docs/releasing.md) for the build-only platform matrix,
-source archive checks and wheel smoke tests. Once published on PyPI, install
-with `python -m pip install rcsfs`; a matching wheel avoids compiling Rust
-on the user's machine.
+source archive checks, wheel smoke tests and manual publishing workflow.

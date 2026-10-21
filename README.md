@@ -36,28 +36,25 @@ Install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.14 or n
 The distribution name, Python import name and command-line entry point are all
 `rcsfs`.
 
-### With pip
+### With uv
+
+Use [uv](https://docs.astral.sh/uv/getting-started/installation/) to manage the
+environment and dependencies of your own analysis project. For a new project:
 
 ```bash
-python -m pip install rcsfs
+uv init --python 3.14 csf-analysis
+cd csf-analysis
+uv add rcsfs
+uv run rcsfs --help
 ```
 
-To reproduce the current release exactly:
+For an existing uv project using Python 3.14 or newer, run `uv add rcsfs` in its
+directory. This records the dependency in `pyproject.toml`, updates `uv.lock`,
+and installs it in the project's `.venv`. Run your own script with
+`uv run python analysis.py`; manual environment activation is not required.
+To pin a particular release, use `uv add "rcsfs==1.3.1"`.
 
-```bash
-python -m pip install "rcsfs==1.3.1"
-```
-
-The current release provides CPython 3.14 wheels for Linux x86_64
-(glibc 2.28+), Windows x86_64 and macOS Apple Silicon (macOS 11+).
-A matching wheel installs without a Rust compiler. Other Python/platform
-combinations may fall back to a source build and need a Rust toolchain and
-compatible linker; see [development.md](docs/development.md).
-
-### In pyproject.toml
-
-Add the dependency to your own project's existing `[project].dependencies`.
-A minimal example is:
+You can also add the dependency to an existing `pyproject.toml` manually:
 
 ```toml
 [project]
@@ -69,27 +66,42 @@ dependencies = [
 ]
 ```
 
-From your consuming project's directory, install the project and its dependencies:
+Then run `uv sync` in that project's directory to resolve dependencies and
+synchronize its environment. Commit `pyproject.toml` and `uv.lock` alongside
+your analysis code to record the dependency choices.
+
+### With pip
+
+To install into an existing Python environment:
 
 ```bash
-python -m pip install .
+python -m pip install rcsfs
 ```
 
-If your project also uses GraspKit's loaders or plotting functions, add
-`"graspkit-atomic==3.4.1"` to the same dependency list after its first release
-under the new PyPI name.
+For a fixed release, use `python -m pip install "rcsfs==1.3.1"`.
+Both installation methods provide the same Python API and `rcsfs` command.
+
+The current release provides CPython 3.14 wheels for Linux x86_64
+(glibc 2.28+), Windows x86_64 and macOS Apple Silicon (macOS 11+).
+A matching wheel installs without a Rust compiler. Other Python/platform
+combinations may fall back to a source build and need a Rust toolchain and
+compatible linker; see [development.md](docs/development.md).
 
 ### Check the installation
 
+For a uv-managed project:
+
 ```bash
-python -c "import rcsfs; print(rcsfs.__version__)"
-rcsfs --help
+uv run python -c "import rcsfs; print(rcsfs.__version__)"
+uv run rcsfs --help
 ```
 
-Use the terminal for the environment where you installed the package. You can
-also invoke the CLI as `python -m rcsfs.cli --help`.
-Source builds and development inside the paired GraspKit workspace are described
-in [development.md](docs/development.md); release maintenance is covered by
+In the CLI examples below, use `uv run rcsfs` in place of `rcsfs` when working
+in a uv project. For a pip installation, run `python` and `rcsfs` directly in
+the environment where you installed the package. The CLI can also be invoked
+as `python -m rcsfs.cli --help` (prefix with `uv run` in a uv project).
+Source builds and contributor setup are described in
+[development.md](docs/development.md); release maintenance is covered by
 [the release guide](docs/releasing.md).
 
 ## Quick Start
@@ -887,32 +899,9 @@ rCSFs expects CSF text files in this layout:
 
 ## Development
 
-For contributors working in the paired workspace, follow
-[development.md](docs/development.md) to prepare the shared environment and
-refresh the in-tree extension before Python tests. Then, from `rCSFs/`:
-
-```bash
-source ../graspkit-tools/.venv/bin/activate
-cargo test
-python -m pytest tests/
-ruff check .
-basedpyright rcsfs/
-```
-
-The maintained test suite is responsible only for this repository's own code:
-its Rust algorithms, Python APIs, CLI behavior, and file formats. Tests must be
-self-contained, using repository fixtures and normal project dependencies; they
-must not require an external GRASP source checkout, executable, or private
-baseline dataset. Stored fixtures may encode expected compatibility behavior.
-
-Put temporary test code, exploratory probes, and one-off external comparisons
-under `temp/`, not `tests/`, `src/`, or `examples/`. Temporary code is outside the
-maintained suite and must not be added to Cargo or pytest test discovery. Keep
-local inputs and generated outputs there untracked. This rule concerns temporary
-test code; maintained tests may still use standard temporary directories for I/O.
-
-Activate the shared environment before Cargo so PyO3 uses the intended Python
-interpreter. These contributor commands require a source checkout.
+Source builds, extension setup and contributor checks are described in
+[development.md](docs/development.md). The Rust examples above require a
+source checkout; they are not part of the installed Python CLI.
 
 ## License
 

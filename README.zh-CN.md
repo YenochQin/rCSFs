@@ -36,26 +36,23 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 使用 Python 3.14 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
 分发包名、Python 导入名和命令行入口都叫 `rcsfs`。
 
-### 使用 pip
+### 使用 uv 管理项目
+
+可以用 [uv](https://docs.astral.sh/uv/getting-started/installation/) 管理你自己的分析项目环境和依赖。新建项目时：
 
 ```bash
-python -m pip install rcsfs
+uv init --python 3.14 csf-analysis
+cd csf-analysis
+uv add rcsfs
+uv run rcsfs --help
 ```
 
-需要固定为当前发布版本时：
+已有 uv 项目使用 Python 3.14 或更新版本时，直接在其目录运行 `uv add rcsfs`。
+该命令会将依赖写入 `pyproject.toml`，更新 `uv.lock`，并安装到项目的 `.venv` 中。
+运行自己的分析脚本时使用 `uv run python analysis.py`，无需手动激活环境。
+需要固定版本时，使用 `uv add "rcsfs==1.3.1"`。
 
-```bash
-python -m pip install "rcsfs==1.3.1"
-```
-
-当前版本提供 CPython 3.14 的预编译 wheel，覆盖 Linux x86_64（glibc 2.28+）、
-Windows x86_64 和 macOS Apple Silicon（macOS 11+）。匹配 wheel 时无需 Rust 编译器。
-其他 Python/平台组合可能回退到源码构建，需要 Rust 工具链和兼容的链接器；
-具体步骤见[开发指南](docs/development.md)。
-
-### 在 pyproject.toml 中声明依赖
-
-将依赖加入你自己项目已有的 `[project].dependencies`。最小示例如下：
+也可以手动将依赖加入已有的 `pyproject.toml`：
 
 ```toml
 [project]
@@ -67,26 +64,38 @@ dependencies = [
 ]
 ```
 
-在你的使用项目目录中安装项目及其依赖：
+编辑后，在该项目目录运行 `uv sync`，完成依赖解析和环境同步。
+将 `pyproject.toml` 和 `uv.lock` 随分析代码一起保存到版本控制中，便于记录依赖版本。
+
+### 使用 pip
+
+安装到已有的 Python 环境：
 
 ```bash
-python -m pip install .
+python -m pip install rcsfs
 ```
 
-如果还需要 GraspKit 的加载器或绘图功能，可在同一依赖列表中另加
-`"graspkit-atomic==3.4.1"`（待该新 PyPI 名称首次发布后使用）。
+需要固定版本时，使用 `python -m pip install "rcsfs==1.3.1"`。
+两种安装方式提供相同的 Python API 和 `rcsfs` 命令。
+
+当前版本提供 CPython 3.14 的预编译 wheel，覆盖 Linux x86_64（glibc 2.28+）、
+Windows x86_64 和 macOS Apple Silicon（macOS 11+）。匹配 wheel 时无需 Rust 编译器。
+其他 Python/平台组合可能回退到源码构建，需要 Rust 工具链和兼容的链接器；
+具体步骤见[开发指南](docs/development.md)。
 
 ### 检查安装
 
+使用 uv 管理项目时：
+
 ```bash
-python -c "import rcsfs; print(rcsfs.__version__)"
-rcsfs --help
+uv run python -c "import rcsfs; print(rcsfs.__version__)"
+uv run rcsfs --help
 ```
 
-请使用安装该包的 Python 环境对应的终端。命令行也可通过
-`python -m rcsfs.cli --help` 调用。
-源码构建及完整 GraspKit 工作区的开发环境见[开发指南](docs/development.md)，
-发布维护步骤见[发布指南](docs/releasing.md)。
+在 uv 项目中使用下文的 CLI 示例时，将 `rcsfs` 替换为 `uv run rcsfs` 即可。
+使用 pip 安装时，在安装该包的环境中直接运行 `python` 和 `rcsfs`。
+也可通过 `python -m rcsfs.cli --help` 调用命令行（uv 项目中在前面加 `uv run`）。
+源码构建和贡献者环境见[开发指南](docs/development.md)，发布维护步骤见[发布指南](docs/releasing.md)。
 
 ## 快速开始
 
@@ -505,20 +514,10 @@ rCSFs 期望的 CSF 文本结构如下：
 - `chunk_size=3_000_000` 是当前默认值，除非你已经测量出更合适的参数，否则建议先保持默认。
 - 如果输入文件中存在特别长的 CSF 行，并且你不希望被截断，可以适当增大 `max_line_len`。
 
-## 开发命令
+## 开发说明
 
-贡献者在完整工作区中开发时，先按[开发指南](docs/development.md)准备共享环境，
-并在运行 Python 测试前更新源码目录内的扩展。然后在 `rCSFs/` 中执行：
-
-```bash
-source ../graspkit-tools/.venv/bin/activate
-cargo test
-python -m pytest tests/
-ruff check .
-basedpyright rcsfs/
-```
-
-先激活共享环境，确保 PyO3 使用预期的 Python 解释器。上述贡献者命令需要源码目录。
+源码构建、扩展准备和贡献者检查见[开发指南](docs/development.md)。
+上文的 Rust 示例需要源码目录，不属于已安装 Python 包的 CLI。
 
 ## 许可证
 

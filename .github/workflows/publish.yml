@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: Publish packages
 
 on:
   workflow_dispatch:
@@ -7,17 +7,27 @@ on:
         description: "Exact package version to publish (1.3.2)"
         required: true
         type: string
-      publish:
-        description: "Upload to PyPI after all checks pass (leave off for a dry run)"
+      publish_pypi:
+        description: "Upload validated packages to PyPI"
         required: true
         default: false
+        type: boolean
+      github_release:
+        description: "Create a GitHub Release with the same validated packages"
+        required: true
+        default: false
+        type: boolean
+      draft:
+        description: "Keep the GitHub Release as a draft (turn off to publish it)"
+        required: true
+        default: true
         type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: pypi-publish-${{ github.repository }}
+  group: package-publish-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -44,6 +54,8 @@ jobs:
               raise SystemExit(f"Requested version must match the source version: {expected}")
           print(f"Preparing rcsfs {expected} from {os.environ['GITHUB_SHA']}")
           PYTHON
+      - name: Check GitHub Release publishing behavior offline
+        run: python -B tests/test_github_release.py
 
   build:
     needs: preflight
@@ -77,9 +89,9 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  publish:
+  publish_pypi:
     needs: prepare
-    if: ${{ inputs.publish && github.ref == 'refs/heads/main' }}
+    if: ${{ inputs.publish_pypi && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-22.04
     environment:
       name: pypi
@@ -96,3 +108,24 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  github_release:
+    needs: prepare
+    if: ${{ inputs.github_release && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Create a GitHub Release from this run's validated packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_DRAFT: ${{ inputs.draft }}
+        run: python -B scripts/github_release.py --version "$RELEASE_VERSION" --draft "$RELEASE_DRAFT"

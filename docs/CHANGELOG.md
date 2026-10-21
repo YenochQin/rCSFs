@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### 一次构建、双目标发布工作流（2026-10-21）
+
+- `publish.yml` 统一为 Publish packages，PyPI 与 GitHub Release 两个选项默认关闭，Release 默认草稿。
+- 两个上传任务复用本次运行中同一份已验证产物，各自依赖 prepare，互不阻塞。
+- GitHub Release 自动使用本次运行和版本标签；移除需要手动 run_id 的独立草稿工作流。
+- 保留来源、摘要和标签冲突检查；仅明确关闭 draft 时正式发布 GitHub Release。
+
 ### 1.3.2 发布准备（2026-10-21）
 
 - 将 Cargo 包、锁文件中的本包版本及 Python 版本回退值同步为 1.3.2。

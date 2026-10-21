@@ -1,4 +1,4 @@
-"""Promote a successful PyPI dry run to a GitHub Release draft; never publish."""
+"""Create a GitHub Release from this run's validated packages, as a draft by default."""
 
 from __future__ import annotations
 
@@ -47,20 +47,32 @@ def require(condition: bool, message: str) -> None:
 
 
 def validate_run(
-    run: dict[str, Any], jobs: list[dict[str, Any]], repository: str
+    run: dict[str, Any], jobs: list[dict[str, Any]], repository: str,
+    expected_sha: str, expected_attempt: int,
 ) -> str:
     require(run["repository"]["full_name"].lower() == repository.lower(), "Wrong repository.")
     require(run["head_repository"]["full_name"].lower() == repository.lower(), "Fork runs are not accepted.")
-    require(run["path"] == ".github/workflows/publish.yml", "Use a publish.yml run.")
+    require(run["path"] == ".github/workflows/publish.yml", "Use the publish.yml workflow.")
     require(run["event"] == "workflow_dispatch" and run["head_branch"] == "main", "Use a manual main run.")
-    require(run["status"] == "completed" and run["conclusion"] == "success", "The source run must have succeeded.")
-    for name, conclusion in (("preflight", "success"), ("prepare", "success"), ("publish", "skipped")):
+    # This job is still running. The independent PyPI job may be running,
+    # skipped or failed; only the shared build/validation prerequisites matter.
+    require(run["status"] == "in_progress", "Use the current, active workflow run.")
+    require(run["run_attempt"] == expected_attempt, "Workflow attempt mismatch.")
+    # A retry of only the failed upload job keeps prerequisite results from
+    # earlier attempts. Use each job's newest execution across this run.
+    latest: dict[str, dict[str, Any]] = {}
+    for job in jobs:
+        name = job["name"]
+        if name not in latest or job["id"] > latest[name]["id"]:
+            latest[name] = job
+    jobs = list(latest.values())
+    for name in ("preflight", "prepare"):
         matches = [job for job in jobs if job["name"] == name]
-        require(len(matches) == 1 and matches[0]["conclusion"] == conclusion, f"Expected {name}: {conclusion}; use a successful dry run.")
+        require(len(matches) == 1 and matches[0]["conclusion"] == "success", f"Expected {name}: success.")
     builds = [job for job in jobs if job["name"].startswith("build /")]
     require(len(builds) == 3 and all(job["conclusion"] == "success" for job in builds), "All three platform builds must succeed.")
     sha = run["head_sha"]
-    require(re.fullmatch(r"[0-9a-f]{40}", sha) is not None, "Invalid source commit.")
+    require(re.fullmatch(r"[0-9a-f]{40}", sha) is not None and sha == expected_sha, "Source commit mismatch.")
     return sha
 
 
@@ -132,14 +144,17 @@ def validate_files(files: list[Path], version: str) -> None:
         require(len(platforms) == 3 and "manylinux_2_28_x86_64" in platforms and "win_amd64" in platforms and any(p.startswith("macosx_") for p in platforms), "Missing native platform wheel.")
 
 
-def create_draft(repository: str, run_id: str, tag: str) -> str:
+def create_release(
+    repository: str, run_id: str, version: str, *,
+    expected_sha: str, expected_attempt: int, draft: bool = True,
+) -> str:
     require(re.fullmatch(r"[1-9]\d*", run_id) is not None, "Run ID must be a positive integer.")
-    require(re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", tag) is not None, "Use a tag such as v1.2.3.")
+    require(re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version) is not None, "Use a stable version such as 1.2.3.")
+    tag = f"v{version}"
     run = api(repository, f"actions/runs/{run_id}")
-    jobs = [job for page in pages(repository, f"actions/runs/{run_id}/jobs?filter=latest") for job in page["jobs"]]
-    sha = validate_run(run, jobs, repository)
-    version = source_version(repository, sha)
-    require(tag == f"v{version}", "Tag must match the source version of the selected run.")
+    jobs = [job for page in pages(repository, f"actions/runs/{run_id}/jobs?filter=all") for job in page["jobs"]]
+    sha = validate_run(run, jobs, repository, expected_sha, expected_attempt)
+    require(version == source_version(repository, sha), "Requested version must match the source version of this run.")
     releases = [release for page in pages(repository, "releases") for release in page]
     require(not any(release["tag_name"] == tag for release in releases), "A release already exists for this tag; nothing was changed.")
     validate_tag(repository, tag, sha)
@@ -162,22 +177,35 @@ def create_draft(repository: str, run_id: str, tag: str) -> str:
         checksum = directory / "SHA256SUMS"
         checksum.write_text(hashes)
         notes = directory / "release-notes.md"
-        notes.write_text(f"{PACKAGE} {version}\n\nSource commit: `{sha}`\n\nValidated dry run: https://github.com/{repository}/actions/runs/{run_id}\n\nArtifact ID: `{artifact['id']}`\n\nThese files are reused without rebuilding. This workflow does not upload to PyPI.\n\n```text\n{hashes}```\n")
-        url = gh("release", "create", tag, *map(str, files), str(checksum), "--repo", repository, "--target", sha, "--draft", "--title", f"{PACKAGE} {version}", "--notes-file", str(notes)).decode().strip()
+        notes.write_text(f"{PACKAGE} {version}\n\nSource commit: `{sha}`\n\nValidated build run: https://github.com/{repository}/actions/runs/{run_id}\n\nArtifact ID: `{artifact['id']}`\n\nThese files are reused without rebuilding. PyPI upload is controlled independently by the publish_pypi option.\n\n```text\n{hashes}```\n")
+        command = [
+            "release", "create", tag, *map(str, files), str(checksum),
+            "--repo", repository, "--target", sha,
+            "--title", f"{PACKAGE} {version}", "--notes-file", str(notes),
+        ]
+        if draft:
+            command.append("--draft")
+        url = gh(*command).decode().strip()
     return url
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-id", required=True)
-    parser.add_argument("--tag", required=True)
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--draft", choices=("true", "false"), default="true")
     args = parser.parse_args()
     require(os.environ.get("GITHUB_REF") == "refs/heads/main", "Run this workflow from main.")
-    url = create_draft(os.environ["GITHUB_REPOSITORY"], args.run_id, args.tag)
-    print(f"Created draft: {url}")
+    draft = args.draft == "true"
+    url = create_release(
+        os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_RUN_ID"], args.version,
+        expected_sha=os.environ["GITHUB_SHA"],
+        expected_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]), draft=draft,
+    )
+    state = "draft" if draft else "published release"
+    print(f"Created {state}: {url}")
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with Path(summary).open("a") as stream:
-            stream.write(f"Created GitHub Release **draft**: {url}\n\nPyPI upload and formal Release publication were not performed.\n")
+            stream.write(f"Created GitHub Release **{state}**: {url}\n\nPyPI upload is controlled independently by publish_pypi.\n")
 
 
 if __name__ == "__main__":

@@ -128,88 +128,107 @@ Before a separately authorized publication:
 References: [Maturin distribution](https://www.maturin.rs/distribution.html),
 [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/).
 
-## Manual PyPI publishing
+## Manual publishing to PyPI and GitHub
 
-`.github/workflows/publish.yml` is named **Publish to PyPI** in GitHub Actions.
-It has only a `workflow_dispatch` trigger. Pushing commits, tags, or completing
-an ordinary build does not start it. It accepts two inputs:
+`.github/workflows/publish.yml` is named **Publish packages** in GitHub Actions.
+It runs only through **Run workflow**, from `main`. Pushing commits, tags, or
+completing a build does not start a publication. Its inputs are:
 
-- `version`: the exact version in the source, currently `1.3.2`.
-- `publish`: a checkbox, **false by default**. Leave it unchecked for a dry run.
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `version` | Required | Exact source version, currently `1.3.2`. |
+| `publish_pypi` | Off | Upload the validated packages to PyPI. |
+| `github_release` | Off | Create a GitHub Release using the same packages. |
+| `draft` | On | Keep the GitHub Release as a draft; turn off only for formal publication. |
 
-Only `main` is accepted. Preflight checks the requested version before the
-existing three-platform build matrix runs. The assembler validates every
-platform's package name, filename/metadata version and Python/platform tags,
-then retains one canonical Linux source archive. GraspKit keeps only the Linux
-copy of its universal wheel; rCSFs keeps all three platform wheels. This avoids
-silently overwriting duplicate filenames from different runners.
+Open **Actions → Publish packages → Run workflow**, select `main`, enter the
+source version, and select the destinations you intend to use:
 
-The prepared archives are stored in the **pypi-distributions** Actions artifact;
-the job summary lists their SHA-256 hashes and source commit. Preparation and
-build jobs have no OIDC permission. Only the final, separately gated `publish`
-job uses the `pypi` environment and `id-token: write`. That job downloads the
-prepared artifact and invokes `pypa/gh-action-pypi-publish`; it does not rebuild.
-When `publish` is false, the upload job is skipped entirely. The workflow group
-serializes publication attempts. It neither bumps versions nor creates tags.
+| PyPI | GitHub Release | Result |
+| --- | --- | --- |
+| Off | Off | Build and validate only; no publication. |
+| On | Off | Build, validate and upload to PyPI. |
+| Off | On | Build, validate and create a GitHub Release (draft by default). |
+| On | On | Build and validate once, then upload the same files to both destinations. |
 
-### Configure authorization in the browser
+A prior dry run is optional. No separate workflow, run ID or tag input is
+needed. The GitHub tag is derived as `v{version}`, for example `v1.3.2`.
+The `draft` option has no effect when `github_release` is off.
 
-1. In this GitHub repository, open **Settings → Environments → New environment**
-   and create an environment named exactly **pypi**. No PyPI token or environment
-   secret is needed. You can restrict its deployment branches to `main`.
-2. Log in to [PyPI Publishing](https://pypi.org/manage/account/publishing/).
-   Under **Add a new pending publisher**, choose **GitHub** and enter:
+### One build, two independent destinations
+
+Preflight checks the requested version against the source before the existing
+Linux/Windows/macOS build matrix runs. The assembler checks package names,
+filename/metadata versions and Python/platform tags across the full matrix.
+It retains one Linux source archive, plus one universal wheel for GraspKit or
+three native wheels for rCSFs. The canonical files are stored in the
+**pypi-distributions** Actions artifact with SHA-256 hashes in the job summary.
+
+Both upload jobs depend directly on the successful `prepare` job. They each
+consume that same artifact and do not rebuild. Neither upload job depends on
+the other: a PyPI failure does not block GitHub Release creation, and vice versa.
+If an upload fails before creating a Release or accepting files, retrying that
+failed job reuses the run's existing validated artifact. Resolve any existing
+file/Release conflict before retrying; successful uploads are not overwritten.
+The workflow has no rollback across services; inspect each job's result.
+The concurrency group serializes runs of this publishing workflow.
+
+A dry run (both destination options off) does not exercise PyPI authorization.
+PyPI uploads only work for filenames that have not already been used. For a
+new release of modified package contents, update the source version and enter
+that version in the workflow; do not try to overwrite an existing release.
+
+### GitHub Release behavior
+
+The Release job automatically reads this run's ID, attempt and source commit
+from GitHub. It confirms that preflight, all three builds and preparation have
+succeeded; it does not require the whole workflow or the PyPI job to finish.
+It checks the downloaded artifact's GitHub SHA-256 digest, package metadata and
+wheel platforms before creating a Release. These checks run with Python's
+standard library and the GitHub CLI supplied by the hosted runner.
+
+The Release contains the wheel(s), source archive and `SHA256SUMS`. Its notes
+record the exact source commit, build-run URL, artifact ID and per-file hashes.
+An existing tag must resolve to that commit; an existing Release for the same
+tag, including a draft, causes a failure instead of being overwritten. Partial
+drafts are retained for inspection. Review drafts in the repository's
+**Releases** page. When a tag does not exist yet, GitHub may defer creating it
+until the draft is published; the draft retains the exact target commit.
+
+The default is a **draft**. Formal GitHub publication happens only when
+`github_release` is on and `draft` is explicitly off. The Release job uses the
+built-in `GITHUB_TOKEN` with `actions: read` and `contents: write`; it needs no
+personal access token, PyPI credential or OIDC permission.
+
+### PyPI authorization
+
+Only the `publish_pypi` job uses the `pypi` environment and `id-token: write`.
+It downloads the prepared artifact and invokes `pypa/gh-action-pypi-publish`.
+The workflow filename is still `publish.yml`; changing its display name to
+**Publish packages** does not change the Trusted Publisher identity.
+
+1. In this GitHub repository, open **Settings → Environments** and ensure an
+   environment named exactly `pypi` exists. No PyPI API token is needed.
+2. For an existing PyPI project you own, open its **Publishing** settings and
+   add or verify the GitHub Trusted Publisher. For a new project, use
+   [account Publishing](https://pypi.org/manage/account/publishing/) to add a
+   pending publisher instead:
 
    | PyPI field | Value |
    | --- | --- |
-   | PyPI Project Name | `rcsfs` |
+   | PyPI Project Name (pending publisher only) | `rcsfs` |
    | Owner | `YenochQin` |
    | Repository name | `rCSFs` |
    | Workflow name | `publish.yml` |
    | Environment name | `pypi` |
 
-   Enter only `publish.yml`, without `.github/workflows/`. The owner is the
-   GitHub account name, not the PyPI username. Add the pending publisher. This
-   does not upload files, create the project or reserve its name; the project
-   is created on the first successful publication. If you already own an
-   existing project with this name, add the publisher in that project's
-   Publishing settings instead.
-3. For a rehearsal, choose **Actions → Publish to PyPI → Run workflow**, select
-   `main`, enter `1.3.2` and leave **publish unchecked**. All builds and
-   package checks run, and the upload job is skipped. A dry run does not test
-   the PyPI OIDC exchange because it never enters the publishing job.
-4. Only when publication is authorized, run the same workflow from `main` with
-   the exact version and **publish checked**. Then install that version from
-   PyPI to verify it. TestPyPI is not a destination in this production workflow.
+   Enter only the workflow filename, without `.github/workflows/`. A pending
+   publisher does not reserve the project name; the first successful use
+   creates the project. Authorization for another PyPI project does not
+   automatically authorize this one.
+3. To rehearse, leave **publish_pypi** and **github_release** unchecked. To upload
+   to PyPI when authorized, enable **publish_pypi**. Enable **github_release**
+   too if you also want the same files on GitHub, leaving **draft** checked
+   unless a formal Release is intended. This workflow has no TestPyPI target.
 
-The pending-publisher setup follows the [PyPI guide](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
-
-## GitHub Release drafts from a successful rehearsal
-
-Open **Actions → Draft GitHub Release → Run workflow** and select `main`.
-Fill in `run_id` with the numeric ID from a successful **Publish to PyPI**
-rehearsal URL (`/actions/runs/NUMBER`), and `tag` with `v1.3.2` (or the
-version of that rehearsal). The selected run must have `publish` unchecked:
-`preflight`, all three builds and `prepare` must pass, and `publish` must be
-skipped. Runs from forks, other workflows or branches are rejected.
-
-The workflow downloads that run's unexpired `pypi-distributions` artifact,
-checks its GitHub SHA-256 digest, and verifies package names, metadata versions
-and the expected wheel platforms. It reuses the exact archives without
-installing dependencies or rebuilding. The script uses Python's standard
-library and the GitHub CLI supplied by the hosted runner.
-
-The resulting **draft** contains the wheel(s), source archive and `SHA256SUMS`.
-Its notes record the source commit, run URL, artifact ID and per-file hashes.
-The Release target is the rehearsal's commit, even if `main` has moved since.
-An existing tag must resolve to that commit; an existing Release for the tag
-(including a draft) causes a failure instead of overwriting it. Failed partial
-drafts are retained for inspection. If an artifact has expired, run a new
-rehearsal and use its run ID.
-
-This workflow always creates a draft: it has no formal-publication switch and
-no PyPI job or OIDC permission. It needs only the built-in `GITHUB_TOKEN` with
-`actions: read` and `contents: write`, not a personal token or PyPI secret.
-Review the draft in **Releases**; publishing it later requires a separate
-manual action. If the tag does not exist yet, GitHub may defer creating it
-until the draft is published; the draft retains the exact target commit.
+See the [PyPI Trusted Publishing guide](https://docs.pypi.org/trusted-publishers/).

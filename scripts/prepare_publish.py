@@ -58,8 +58,8 @@ def prepare(artifacts: Path, outdir: Path, version: str) -> list[Path]:
             valid = all(str(tag) == "py3-none-any" for tag in tags)
         else:
             valid = all(
-                tag.interpreter == "cp314"
-                and tag.abi == "cp314"
+                tag.interpreter == "cp315"
+                and tag.abi == "cp315"
                 and re.fullmatch(platform, tag.platform)
                 for tag in tags
             )

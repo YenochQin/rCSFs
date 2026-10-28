@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          python-version: "3.15"
       - name: Check branch and requested version
         env:
           RELEASE_VERSION: ${{ inputs.version }}
@@ -68,7 +68,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          python-version: "3.15"
       - uses: actions/download-artifact@v7
         with:
           pattern: rcsfs-*
@@ -122,7 +122,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          python-version: "3.15"
       - name: Create a GitHub Release from this run's validated packages
         env:
           GH_TOKEN: ${{ github.token }}

@@ -11,20 +11,22 @@
 
 ## Environment and build routing
 
-Use only `../graspkit-tools/.venv` for project Python execution and activate it before Cargo so PyO3 finds Python 3.14. Do not run `uv venv`, `uv sync`, or `uv run` in this repository or create a local environment.
+This subrepository uses its own Python 3.15 `.venv`, independently of the paired workspace's Tools environment. Run setup and synchronization here, then activate it before Cargo so PyO3 finds the intended interpreter.
 
 ```sh
-source ../graspkit-tools/.venv/bin/activate
+uv sync --python 3.15 --no-editable --group lint
+source .venv/bin/activate
 ```
 
 Choose the build output the task actually uses:
 
 - Rust algorithms: `cargo test` or a relevant test-name filter needs no wheel build.
-- Tools consumers: run `uv sync --extra cpu` from `../graspkit-tools` after Rust changes (`--extra gpu` on CUDA hosts). Source cache keys in this repository's `pyproject.toml` trigger rebuilding the installed wheel.
-- Python tests here: pytest's `pythonpath = ["."]` selects the in-tree `rcsfs/` package. Refresh its extension after Rust changes; syncing Tools alone does not update it.
-- Distributable wheel: use isolated Maturin with the shared Python as the explicit target interpreter.
+- Local installed wheel: `uv sync --no-editable --group lint` rebuilds the package when its source cache keys change.
+- Python tests here: pytest's `pythonpath = ["."]` selects the in-tree `rcsfs/` package. Refresh its extension after Rust changes; syncing the environment alone does not update it.
+- Distributable wheel: target `.venv/bin/python` explicitly with Maturin.
+- Tools consumers: this checkout requires Python 3.15. Keep Tools on its declared released dependency until its environment and dependency constraints have been migrated separately.
 
-For the latter two cases, read [development.md](docs/development.md). Keep Maturin out of the shared runtime and avoid `maturin develop`, which changes the intended wheel installation to an editable one. Isolated build/tool environments are packaging implementation details, not additional project runtimes.
+For in-tree tests and distributable wheels, read [development.md](docs/development.md). Use wheel installation for this environment; avoid `maturin develop`, which replaces it with an editable installation.
 
 ## Format invariants
 

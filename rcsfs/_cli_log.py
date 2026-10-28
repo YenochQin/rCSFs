@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import TextIOBase
 from pathlib import Path
 from time import perf_counter
@@ -104,7 +104,7 @@ def capture_run(
     log = RunLog(stream)
     started = perf_counter()
     log.write(
-        f"\n=== rCSFs run ===\nstarted_at: {datetime.now(timezone.utc).isoformat()}\n"
+        f"\n=== rCSFs run ===\nstarted_at: {datetime.now(UTC).isoformat()}\n"
         f"rcsfs_version: {version}\nconfig: {config.resolve()}\n"
         f"working_directory: {Path.cwd()}\n\n--- configuration ---\n"
         f"{contents.rstrip()}\n--- end configuration ---\n"
@@ -127,7 +127,7 @@ def capture_run(
     finally:
         _ACTIVE_LOG.reset(token)
         log.write(
-            f"\nfinished_at: {datetime.now(timezone.utc).isoformat()}\n"
+            f"\nfinished_at: {datetime.now(UTC).isoformat()}\n"
             f"status: {status}\nexit_code: {log.exit_code}\n"
             f"elapsed_seconds: {perf_counter() - started:.6f}\n=== end run ===\n"
         )

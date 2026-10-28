@@ -33,6 +33,10 @@ It helps you:
 ## Installation
 
 Install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.14 or newer.
+
+The development checkout now targets Python 3.15 and uses its own `.venv`;
+see [source development](docs/development.md). The instructions below describe
+the published 1.3.2 release, which has not been replaced by this migration.
 The distribution name, Python import name and command-line entry point are all
 `rcsfs`.
 

@@ -1,10 +1,10 @@
 """Build an isolated, instrumented copy of the frozen rcsfgenerate sources."""
 
 import argparse
-from pathlib import Path
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 MODULE = """module benchmark_profile
   use iso_fortran_env, only: int64, real64
@@ -48,11 +48,11 @@ def wrap_calls(text: str, sections: dict[str, int]) -> str:
     while i < len(lines):
         statement = lines[i]
         i += 1
-        if re.match(r"\s*call\b", statement, re.I):
+        if re.match(r"\s*call\b", statement, re.IGNORECASE):
             while statement.rstrip().endswith("&"):
                 statement += lines[i]
                 i += 1
-            name = re.match(r"\s*call\s+(\w+)", statement.replace("&", " "), re.I)
+            name = re.match(r"\s*call\s+(\w+)", statement.replace("&", " "), re.IGNORECASE)
             section = sections.get(name[1].lower()) if name else None
             if section is not None:
                 result.append(f"      call bench_begin({section})\n")
@@ -193,7 +193,7 @@ def main() -> None:
     source = output / "source"
     source.mkdir()
     names = re.findall(
-        r"^\s+(\S+\.f90)\s*$", (original / "CMakeLists.txt").read_text(), re.M
+        r"^\s+(\S+\.f90)\s*$", (original / "CMakeLists.txt").read_text(), re.MULTILINE
     )
     if not names:
         raise ValueError("missing rcsfgenerate CMake source list")

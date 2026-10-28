@@ -5,20 +5,20 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
-from email.parser import BytesParser
 import hashlib
 import io
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import tarfile
 import tempfile
 import tomllib
+import zipfile
+from email.parser import BytesParser
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
-import zipfile
 
 PACKAGE = "rcsfs"
 
@@ -124,7 +124,7 @@ def validate_files(files: list[Path], version: str) -> None:
     platforms = set()
     for path in files:
         if path.suffix == ".whl":
-            match = re.fullmatch(re.escape(prefix) + r"-(py3-none-any|cp314-cp314-(manylinux_2_28_x86_64|win_amd64|macosx_\d+_\d+_arm64))\.whl", path.name)
+            match = re.fullmatch(re.escape(prefix) + r"-(py3-none-any|cp315-cp315-(manylinux_2_28_x86_64|win_amd64|macosx_\d+_\d+_arm64))\.whl", path.name)
             require(match is not None, f"Unexpected wheel name or ABI: {path.name}")
             platforms.add(match[2] or "any")
             with zipfile.ZipFile(path) as wheel:

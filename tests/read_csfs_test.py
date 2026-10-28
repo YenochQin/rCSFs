@@ -1,5 +1,5 @@
-from pathlib import Path
 import tomllib
+from pathlib import Path
 from typing import get_type_hints
 
 import polars as pl

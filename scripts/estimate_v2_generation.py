@@ -25,20 +25,20 @@ from pathlib import Path
 # editable package so the estimate describes the source under test.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rcsfs import estimate_disk_generation
-
 from benchmark_support import (
     DEFAULT_MANIFEST,
     add_source_identity_arguments,
     environment,
-    finalize_report,
     filesystem_metadata,
+    finalize_report,
     load_manifest,
     require_clean_source,
     sha256_file,
     source_identity,
     verify_registered_transcript,
 )
+
+from rcsfs import estimate_disk_generation
 
 REPORT_SCHEMA = "rcsfs-v2-generation-capacity/1"
 

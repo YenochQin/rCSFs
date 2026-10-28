@@ -34,6 +34,10 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 ## 安装
 
 使用 Python 3.14 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
+
+开发中的源码已切换到 Python 3.15，并使用本仓库的独立 `.venv`，详见
+[源码开发说明](docs/development.md)。以下安装说明仍对应已发布的 1.3.2；
+此次迁移尚未替换 PyPI 上的发行版。
 分发包名、Python 导入名和命令行入口都叫 `rcsfs`。
 
 ### 使用 uv 管理项目

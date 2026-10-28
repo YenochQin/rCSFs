@@ -1,28 +1,30 @@
 # Preparing an rcsfs release
 
-The prepared version is **1.3.2**, read from `Cargo.toml` by Maturin. The
-in-tree fallback in `rcsfs/__init__.py` must match it when the version changes.
+The current source version is **1.3.2**, read from `Cargo.toml` by Maturin.
+The Python 3.15 migration is unreleased; choose a new version before publishing
+changed artifacts because the 1.3.2 release already exists. The in-tree fallback
+in `rcsfs/__init__.py` must match it when the version changes.
 The local build commands do not upload files or create Git tags. The separate
 manual publishing workflow is described near the end of this guide.
 
 ## Local build in the paired workspace
 
-Use `../graspkit-tools/.venv` (Python 3.14). Set it up only from Tools with
-`uv sync --extra cpu`, or `--extra gpu` on a CUDA host. A Rust toolchain and
+Use this repository's `.venv` (Python 3.15), set up with
+`uv sync --python 3.15 --no-editable --group lint`. A Rust toolchain and
 platform linker are required. From `rCSFs/`, choose an empty output directory:
 
 ```bash
-source ../graspkit-tools/.venv/bin/activate
-uvx --python ../graspkit-tools/.venv/bin/python --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --sdist --compatibility pypi --interpreter ../graspkit-tools/.venv/bin/python --out dist
-python -m twine check --strict dist/*
+source .venv/bin/activate
+uvx --python .venv/bin/python --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --sdist --compatibility pypi --interpreter .venv/bin/python --out dist
+uvx --python .venv/bin/python --from 'twine>=6.2' twine check --strict dist/*
 python scripts/check_release.py dist --smoke
 ```
 
 `--sdist` builds the wheel from the source archive, checking that it is
 self-contained. `--locked` uses the versioned Cargo.lock; update the lockfile
 intentionally with dependency changes. Maturin and patchelf live in an isolated
-tool environment, not the shared runtime. The Windows interpreter path is
-`../graspkit-tools/.venv/Scripts/python.exe`; initialize the compiler/linker
+tool environment. The Windows interpreter path is
+`.venv/Scripts/python.exe`; initialize the compiler/linker
 before building. These commands neither install the new wheel into Tools nor
 replace the in-tree extension. See [development.md](https://github.com/YenochQin/rCSFs/blob/HEAD/docs/development.md) for those
 separate workflows. Build tools must have access to their package registries.
@@ -41,9 +43,9 @@ Use the build-only workflow for the intended distribution baseline:
 
 | Runner / architecture | Wheel target | Interpreter |
 | --- | --- | --- |
-| Linux x86_64 | manylinux_2_28 (glibc >= 2.28) | CPython 3.14 |
-| Windows x86_64 | win_amd64 | CPython 3.14 |
-| macOS Apple Silicon | macosx arm64 | CPython 3.14 |
+| Linux x86_64 | manylinux_2_28 (glibc >= 2.28) | CPython 3.15 |
+| Windows x86_64 | win_amd64 | CPython 3.15 |
+| macOS Apple Silicon | macosx arm64 | CPython 3.15 |
 
 The workflow builds from the source archive, installs the produced wheel and
 its public dependencies on the runner, runs archive and functional checks,
@@ -77,7 +79,7 @@ SHA-256 hashes and rejects mixed versions, plain Linux wheels, debug symbols
 and multiple/stale native extensions. The smoke test unpacks a compatible
 wheel into a temporary directory and uses a separate interpreter to check
 import origins, Python/native versions, CSF conversion, V2 descriptors and
-the console entry point. Locally it uses runtime dependencies already in Tools;
+the console entry point. Locally it uses runtime dependencies in this repository's environment;
 CI separately verifies dependency installation on fresh runners.
 
 The source archive contains only build inputs, public readmes, license files,
@@ -105,7 +107,7 @@ python scripts/collect_licenses.py
 python scripts/collect_licenses.py --check
 ```
 
-The collector itself is offline. Four crates omit their license texts from the
+The collector itself is offline. Some crates omit their license texts from the
 published crate archives; their notices are preserved under `licenses/upstream/`
 with exact upstream commit URLs. Update these overrides when those crates change.
 Review newly introduced license terms and any additional bundled native libraries.

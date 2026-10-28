@@ -4,13 +4,13 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import platform
 import re
 import statistics
 import subprocess
 import time
 import tomllib
+from pathlib import Path
 
 
 def digest(path: Path) -> str:
@@ -27,7 +27,7 @@ def time_metrics(text: str) -> dict[str, float | int]:
         }
         values = {}
         for key, label in fields.items():
-            match = re.search(rf"^\s*(\d+)\s+{label}$", text, re.M)
+            match = re.search(rf"^\s*(\d+)\s+{label}$", text, re.MULTILINE)
             if not match:
                 raise ValueError(f"missing {label} in system time output")
             values[key] = int(match[1])
@@ -68,8 +68,7 @@ def run_once(
             ["/usr/bin/time", *time_flags, *command],
             cwd=work,
             stdin=stdin,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=True,
             timeout=timeout,
         )

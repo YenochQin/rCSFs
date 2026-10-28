@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import base64
 import copy
-from contextlib import redirect_stdout
 import hashlib
 import importlib.util
 import io
 import json
-from pathlib import Path
 import os
 import sys
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
 import zipfile
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location(
     "github_release", Path(__file__).resolve().parents[1] / "scripts/github_release.py"
@@ -35,8 +35,8 @@ def distributions() -> dict[str, bytes]:
     prefix = f"{release.PACKAGE.replace('-', '_')}-{VERSION}"
     metadata = f"Name: {release.PACKAGE}\nVersion: {VERSION}\n".encode()
     tags = (["py3-none-any"] if release.PACKAGE == "graspkit-atomic" else [
-        "cp314-cp314-manylinux_2_28_x86_64", "cp314-cp314-win_amd64",
-        "cp314-cp314-macosx_11_0_arm64",
+        "cp315-cp315-manylinux_2_28_x86_64", "cp315-cp315-win_amd64",
+        "cp315-cp315-macosx_11_0_arm64",
     ])
     files = {}
     for tag in tags:
@@ -262,9 +262,11 @@ class GitHubReleaseTests(unittest.TestCase):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w") as archive:
             archive.writestr("../escape.whl", b"bad")
-        with tempfile.TemporaryDirectory() as temporary:
-            with self.assertRaisesRegex(ValueError, "Unexpected artifact"):
-                release.unpack_artifact(stream.getvalue(), Path(temporary))
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            self.assertRaisesRegex(ValueError, "Unexpected artifact"),
+        ):
+            release.unpack_artifact(stream.getvalue(), Path(temporary))
 
 
 if __name__ == "__main__":

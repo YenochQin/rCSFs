@@ -48,14 +48,15 @@ from benchmark_support import (
     DEFAULT_MANIFEST,
     add_source_identity_arguments,
     environment,
-    finalize_report,
     filesystem_metadata,
+    finalize_report,
     load_manifest,
     require_clean_source,
     sha256_file,
     source_identity,
     verify_registered_transcript,
 )
+
 from rcsfs import generate_disk_outputs_from_transcript
 
 REPORT_SCHEMA = "rcsfs-v2-generation-benchmark/1"

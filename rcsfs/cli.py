@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Literal, Protocol, TextIO, cast
 
@@ -26,8 +27,6 @@ from . import (
     split_csfs_by_active_spaces,
     split_csfs_by_j,
 )
-from ._types import InteractionHamiltonian, InteractionMethod
-from ._publication import PartialPublicationError, publish_outputs
 from ._cli_config import (
     CONFIG_SECTIONS,
     DEFAULT_CONFIG,
@@ -38,6 +37,8 @@ from ._cli_config import (
     raw_csf_name,
 )
 from ._cli_log import RunLogError, capture_run, record_stats
+from ._publication import PartialPublicationError, publish_outputs
+from ._types import InteractionHamiltonian, InteractionMethod
 
 #: Maximum reference configurations accepted, matching GRASP's `rcsfgenerate`.
 _MAX_REFERENCE_CONFIGURATIONS = 100
@@ -1599,7 +1600,7 @@ def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
     try:
         commands = configured_commands(path)
         log_path, config_contents = configured_run_log(path)
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         parser.error(str(exc))
     steps = [
         (
@@ -1738,7 +1739,7 @@ def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
                     result = log.run_step(
                         label,
                         cast(dict[str, object], vars(args)),
-                        lambda: _run_parsed_command(args),
+                        partial(_run_parsed_command, args),
                     )
                     if result != 0:
                         return result

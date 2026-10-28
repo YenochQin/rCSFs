@@ -46,11 +46,11 @@ def matrix(root: Path, publisher: ModuleType) -> Path:
         if platform == "any":
             tag = "py3-none-any"
         elif "manylinux" in platform:
-            tag = "cp314-cp314-manylinux_2_28_x86_64"
+            tag = "cp315-cp315-manylinux_2_28_x86_64"
         elif "win_amd64" in platform:
-            tag = "cp314-cp314-win_amd64"
+            tag = "cp315-cp315-win_amd64"
         else:
-            tag = "cp314-cp314-macosx_11_0_arm64"
+            tag = "cp315-cp315-macosx_11_0_arm64"
         (directory / f"{package}-1.0.0-{tag}.whl").write_text(f"wheel from {artifact}")
         (directory / f"{package}-1.0.0.tar.gz").write_text(f"source from {artifact}")
     return artifacts
@@ -105,11 +105,14 @@ def test_matching_filename_cannot_hide_a_metadata_version_mismatch(
     assert not (tmp_path / "dist").exists()
 
 
-def test_wrong_python_abi_is_rejected(tmp_path: Path, publisher: ModuleType) -> None:
+@pytest.mark.parametrize("abi", ["cp313-cp313", "cp314-cp314", "cp315-cp315t"])
+def test_wrong_python_abi_is_rejected(
+    tmp_path: Path, publisher: ModuleType, abi: str
+) -> None:
     artifacts = matrix(tmp_path, publisher)
     wheel = next(artifacts.rglob("*.whl"))
     prefix = publisher.NAME.replace("-", "_")
-    wheel.rename(wheel.with_name(f"{prefix}-1.0.0-cp313-cp313-win_amd64.whl"))
+    wheel.rename(wheel.with_name(f"{prefix}-1.0.0-{abi}-win_amd64.whl"))
     with pytest.raises(ValueError, match="Unexpected platform or Python ABI"):
         publisher.prepare(artifacts, tmp_path / "dist", "1.0.0")
     assert not (tmp_path / "dist").exists()

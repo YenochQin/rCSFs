@@ -243,11 +243,11 @@ def test_generated_descriptors_match_text_pipeline(
     tmp_path: Path, transcript: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import tomllib
+    from unittest.mock import patch
 
     import polars as pl
 
     from rcsfs import cli
-    from unittest.mock import patch
 
     for storage in ("memory", "disk"):
         work = tmp_path / storage

@@ -368,7 +368,7 @@ def _generation_lists(table: dict[str, object]) -> dict[str, object]:
         raise ValueError("csfsgenerate requires inactive_core for multiple lists")
     lists = table.get("lists")
     if not isinstance(lists, list):
-        raise ValueError("lists must contain at least two tables")
+        raise TypeError("lists must contain at least two tables")
     items = cast(list[object], lists)
     if len(items) < 2:
         raise ValueError("lists must contain at least two tables")
@@ -402,7 +402,7 @@ def _generation_lists(table: dict[str, object]) -> dict[str, object]:
 
 def _table(value: object, label: str) -> dict[str, object]:
     if not isinstance(value, dict):
-        raise ValueError(f"{label} must be a TOML table")
+        raise TypeError(f"{label} must be a TOML table")
     return cast(dict[str, object], value)
 
 
@@ -637,7 +637,7 @@ def parse_cli_args(
                 explicit=explicit,
                 config_index=config_index,
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             parser.error(str(exc))
     merged = defaults | config | supplied
     missing = sorted(key for key in required if merged.get(key) is None)

@@ -85,9 +85,8 @@ def _absolute_paths(value: object, path: str = "") -> list[str]:
     found: list[str] = []
     if isinstance(value, str):
         if (
-            value.startswith("/")
+            value.startswith(("/", "\\\\"))
             or WINDOWS_ABSOLUTE.match(value)
-            or value.startswith("\\\\")
         ):
             found.append(f"{path}={value}")
     elif isinstance(value, dict):
@@ -288,17 +287,17 @@ def test_a_file_inside_an_untracked_directory_changes_the_fingerprint(
     source = new_directory / "a.rs"
     source.write_text("fn a() {}\n")
 
-    entries = support._source_entries()  # noqa: SLF001 - the fingerprint is the unit
+    entries = support._source_entries()
     assert [path for _status, path, _origin in entries] == ["newdir/a.rs"]
     before = support._dirty_fingerprint(entries)
 
     source.write_text("fn a() { /* edited */ }\n")
-    entries = support._source_entries()  # noqa: SLF001
+    entries = support._source_entries()
     after = support._dirty_fingerprint(entries)
     assert before != after, "editing a file inside an untracked directory must show up"
 
     # And the same content hashes the same way, so the fingerprint is stable.
-    assert support._dirty_fingerprint(support._source_entries()) == after  # noqa: SLF001
+    assert support._dirty_fingerprint(support._source_entries()) == after
 
 
 def test_a_directory_entry_is_fingerprinted_recursively(
@@ -311,12 +310,12 @@ def test_a_directory_entry_is_fingerprinted_recursively(
     (nested / "one.rs").write_text("fn one() {}\n")
     entries = [("??", "dir", None)]
 
-    before = support._dirty_fingerprint(entries)  # noqa: SLF001
+    before = support._dirty_fingerprint(entries)
     (nested / "two.rs").write_text("fn two() {}\n")
-    assert support._dirty_fingerprint(entries) != before  # noqa: SLF001
+    assert support._dirty_fingerprint(entries) != before
 
     (nested / "one.rs").write_text("fn one() { /* edited */ }\n")
-    assert support._dirty_fingerprint(entries) not in (None, before)  # noqa: SLF001
+    assert support._dirty_fingerprint(entries) not in (None, before)
 
 
 def test_an_unreadable_untracked_path_is_refused(
@@ -325,10 +324,10 @@ def test_an_unreadable_untracked_path_is_refused(
     """A constant placeholder would make two different trees fingerprint alike."""
     repository = _temporary_repository(tmp_path, monkeypatch)
     (repository / "gone.rs").write_text("fn gone() {}\n")
-    entries = support._source_entries()  # noqa: SLF001
+    entries = support._source_entries()
     (repository / "gone.rs").unlink()
     with pytest.raises(SystemExit, match="cannot fingerprint"):
-        support._dirty_fingerprint(entries)  # noqa: SLF001
+        support._dirty_fingerprint(entries)
 
 
 def test_an_untracked_symlink_is_fingerprinted_as_a_link(
@@ -345,14 +344,14 @@ def test_an_untracked_symlink_is_fingerprinted_as_a_link(
     link = repository / "linked.rs"
     link.symlink_to(first)
 
-    entries = support._source_entries()  # noqa: SLF001
-    before = support._dirty_fingerprint(entries)  # noqa: SLF001
+    entries = support._source_entries()
+    before = support._dirty_fingerprint(entries)
     first.write_text("external edit\n", encoding="utf-8")
-    assert support._dirty_fingerprint(entries) == before  # noqa: SLF001
+    assert support._dirty_fingerprint(entries) == before
 
     link.unlink()
     link.symlink_to(second)
-    assert support._dirty_fingerprint(entries) != before  # noqa: SLF001
+    assert support._dirty_fingerprint(entries) != before
 
 
 def test_recursive_directory_fingerprinting_never_follows_a_symlink(
@@ -366,11 +365,11 @@ def test_recursive_directory_fingerprinting_never_follows_a_symlink(
     (directory / "cycle").symlink_to(".")
     entries = [("??", "newdir", None)]
 
-    first = support._dirty_fingerprint(entries)  # noqa: SLF001
-    assert support._dirty_fingerprint(entries) == first  # noqa: SLF001
+    first = support._dirty_fingerprint(entries)
+    assert support._dirty_fingerprint(entries) == first
     (directory / "cycle").unlink()
     (directory / "cycle").symlink_to("..")
-    assert support._dirty_fingerprint(entries) != first  # noqa: SLF001
+    assert support._dirty_fingerprint(entries) != first
 
 
 def test_an_unreadable_descendant_of_a_directory_entry_is_refused(
@@ -390,7 +389,7 @@ def test_an_unreadable_descendant_of_a_directory_entry_is_refused(
 
     monkeypatch.setattr(support.os, "scandir", refused_scandir)
     with pytest.raises(SystemExit, match="cannot fingerprint newdir/private"):
-        support._dirty_fingerprint([("??", "newdir", None)])  # noqa: SLF001
+        support._dirty_fingerprint([("??", "newdir", None)])
 
 
 def test_git_status_warning_refuses_the_source_identity(
@@ -405,7 +404,7 @@ def test_git_status_warning_refuses_the_source_identity(
     )
     monkeypatch.setattr(support.subprocess, "run", lambda *_args, **_kwargs: completed)
     with pytest.raises(SystemExit, match="cannot inspect the source tree"):
-        support._source_entries()  # noqa: SLF001
+        support._source_entries()
 
 
 def test_git_status_failure_does_not_masquerade_as_a_clean_tree(
@@ -414,7 +413,7 @@ def test_git_status_failure_does_not_masquerade_as_a_clean_tree(
     """An unavailable Git answer must fail closed before benchmarking."""
     monkeypatch.setattr(support, "_run_git", lambda *_args, **_kwargs: None)
     with pytest.raises(SystemExit, match="git status failed"):
-        support._source_entries()  # noqa: SLF001
+        support._source_entries()
 
 
 def test_strategy_agreement_compares_content_not_only_file_lengths() -> None:
@@ -439,7 +438,7 @@ def test_strategy_agreement_compares_content_not_only_file_lengths() -> None:
         {**common, "deduplication": "exact", "header_sha256": "header-b"},
     ]
     with pytest.raises(SystemExit, match="de-duplication strategies disagree"):
-        generation_benchmark._check_strategy_agreement(measurements)  # noqa: SLF001
+        generation_benchmark._check_strategy_agreement(measurements)
 
 
 def test_each_benchmark_measurement_has_an_isolated_rss_scope(tmp_path: Path) -> None:
@@ -497,7 +496,26 @@ def test_status_parsing_handles_awkward_paths(
     raw: str, expected: list[tuple[str, str, str | None]]
 ) -> None:
     """`-z` is what keeps quoted, renamed and newline-bearing names intact."""
-    assert support._parse_status_z(raw) == expected  # noqa: SLF001 - the parser is the unit
+    assert support._parse_status_z(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        ('transcript = "invalid"\n', "non-list transcript table"),
+        ('transcript = ["invalid"]\n', "non-table transcript entry"),
+        ('[[transcript]]\nfile = 42\n', "without a file name"),
+        ('[[transcript]]\nrecords = 1\n', "without a file name"),
+    ],
+)
+def test_manifest_rejects_invalid_entry_types(
+    tmp_path: Path, contents: str, message: str
+) -> None:
+    manifest = tmp_path / "transcripts.toml"
+    manifest.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(TypeError, match=message):
+        support.load_manifest(manifest)
 
 
 def test_every_registered_fixture_matches_the_manifest() -> None:

@@ -4,14 +4,14 @@ Run from rCSFs with uv run python scripts/benchmark_single_j_generation.py.
 Writes the dated benchmark report and raw measurements under docs/benchmarks.
 """
 
-from pathlib import Path
-import subprocess
-import tempfile
-import os
 import hashlib
 import json
-import statistics
+import os
 import platform
+import statistics
+import subprocess
+import tempfile
+from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 

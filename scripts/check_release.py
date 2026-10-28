@@ -1,7 +1,7 @@
 """Check release archives and exercise the compatible wheel without installing it.
 
 Dependencies: packaging plus the project's runtime dependencies for --smoke.
-Run with the shared Tools interpreter in the workspace.
+Run with this repository's Python 3.15 interpreter.
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ def check_metadata(raw: bytes) -> str:
     assert metadata["Name"] == NAME, metadata["Name"]
     version = Version(str(metadata["Version"]))
     assert not version.is_prerelease and not version.is_devrelease, version
-    assert str(metadata["Requires-Python"]).replace(" ", "") == ">=3.14"
+    assert str(metadata["Requires-Python"]).replace(" ", "") == ">=3.15"
     assert metadata["License-Expression"] == LICENSE
     assert metadata["Author-email"] and metadata["Description-Content-Type"]
     assert len(str(metadata.get_payload()).strip()) > 100, "Missing project description"

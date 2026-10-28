@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### Python CLI、脚本与测试检查项修复（2026-10-28）
+
+- 配置中的错误容器类型使用 `TypeError`，CLI 单命令与批处理入口均将其转换为退出码 2 的参数错误，保持原有用户提示。
+- 日志使用 `datetime.UTC`，批处理回调通过 `functools.partial` 绑定当前命令参数。
+- 整理导入与发布测试上下文管理器，补充非法 TOML 容器类型的 CLI 回归测试。
+- 清理 `scripts/` 和 `tests/` 中剩余 40 条 Ruff 检查项；补充基准清单与描述符比较工具的输入类型测试，保留有效数据处理行为。
+
+### Python 3.15 环境与绑定升级（2026-10-28）
+
+- 将源码的 Python 下限、分类标签和类型检查目标调整为 3.15；本仓库使用独立 `.venv`，与 Tools 的环境分开同步。
+- 升级 PyO3 至 0.30.1、pyo3-arrow 至 0.20.0，并配套升级 Arrow/Parquet 59，更新 Cargo 锁文件及依赖许可汇总。
+- 将 Polars 下限提高到已验证的 2.1.0，修复旧版 Series 方法分派在 Python 3.15 下返回 `None` 的兼容问题；补充独立测试环境所需的 PyArrow 26 开发依赖。
+- 构建与发布校验改为普通 `cp315-cp315` wheel，增加旧 ABI 和自由线程 ABI 的拒绝测试。
+- 同步开发与发布说明；本次是未发布的迁移，发布前仍需递增包版本。
+
 ### 一次构建、双目标发布工作流（2026-10-21）
 
 - `publish.yml` 统一为 Publish packages，PyPI 与 GitHub Release 两个选项默认关闭，Release 默认草稿。

@@ -967,6 +967,58 @@ def test_multiple_generation_lists_reject_root_level_list_parameters(
     assert exc.value.code == 2
 
 
+@pytest.mark.parametrize("batch", [False, True])
+@pytest.mark.parametrize(
+    ("command", "contents", "message"),
+    [
+        ("jsplit", 'jsplit = "invalid"\n', "jsplit must be a TOML table"),
+        (
+            "csfsgenerate",
+            '[csfsgenerate]\ninactive_core = 0\nlists = "invalid"\n',
+            "lists must contain at least two tables",
+        ),
+        (
+            "csfsgenerate",
+            "[csfsgenerate]\ninactive_core = 0\nlists = [1, 2]\n",
+            "csfsgenerate.lists[1] must be a TOML table",
+        ),
+    ],
+)
+def test_invalid_table_types_remain_cli_usage_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    batch: bool,
+    command: str,
+    contents: str,
+    message: str,
+) -> None:
+    config = tmp_path / "invalid.toml"
+    config.write_text(contents, encoding="utf-8")
+    argv = ["-c", str(config)]
+    if not batch:
+        argv.insert(0, command)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+
+    assert exc.value.code == 2
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "rcsfs.log").exists()
+
+
+def test_batch_rejects_non_table_generation_entries_as_usage_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / "invalid.toml"
+    config.write_text('csfsgenerate = ["invalid"]\n', encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["-c", str(config)])
+
+    assert exc.value.code == 2
+    assert "csfsgenerate[1] must be a TOML table" in capsys.readouterr().err
+
+
 def test_previous_flat_and_split_tables_still_parse(tmp_path: Path) -> None:
     previous = tmp_path / "previous.toml"
     previous.write_text(

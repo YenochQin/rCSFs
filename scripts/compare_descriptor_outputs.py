@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Compare two descriptor parquet outputs.
 
 Example:
@@ -41,7 +40,7 @@ def read_peel_subshells(header_path: Path | None) -> list[str] | None:
 
     peel_line = header_lines[3]
     if not isinstance(peel_line, str):
-        raise ValueError(
+        raise TypeError(
             f"header_info.header_lines[3] is not a string in {header_path}"
         )
 
@@ -155,7 +154,7 @@ def main() -> int:
     args = parse_args()
 
     try:
-        import polars as polars
+        import polars
     except ModuleNotFoundError as exc:
         if exc.name == "polars":
             print("This script requires polars: pip install polars", file=sys.stderr)

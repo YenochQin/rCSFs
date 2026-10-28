@@ -65,14 +65,14 @@ def load_manifest(path: Path) -> dict[str, dict[str, Any]]:
         document = tomllib.load(handle)
     entries = document.get("transcript", [])
     if not isinstance(entries, list):
-        raise ValueError(f"{path} has a non-list transcript table")
+        raise TypeError(f"{path} has a non-list transcript table")
     registered: dict[str, dict[str, Any]] = {}
     for entry in entries:
         if not isinstance(entry, dict):
-            raise ValueError(f"{path} has a non-table transcript entry")
+            raise TypeError(f"{path} has a non-table transcript entry")
         file_name = entry.get("file")
         if not isinstance(file_name, str):
-            raise ValueError(f"{path} has a transcript entry without a file name")
+            raise TypeError(f"{path} has a transcript entry without a file name")
         registered[file_name] = entry
     return registered
 
@@ -221,12 +221,11 @@ def _parse_status_z(raw: str) -> list[tuple[str, str, str | None]]:
             continue
         status, path = field[:2], field[3:]
         origin: str | None = None
-        if "R" in status or "C" in status:
+        if ("R" in status or "C" in status) and index < len(fields) and fields[index]:
             # This entry names the destination; the next field names where the
             # content came from.
-            if index < len(fields) and fields[index]:
-                origin = fields[index]
-                index += 1
+            origin = fields[index]
+            index += 1
         entries.append((status, path, origin))
     return entries
 

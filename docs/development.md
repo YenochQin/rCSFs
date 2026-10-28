@@ -1,23 +1,24 @@
-# Building the extension in the paired workspace
+# Building the extension with Python 3.15
 
-Run commands from the `rCSFs/` root unless stated otherwise. The only project Python runtime is `../graspkit-tools/.venv`; synchronize it from Tools with the selected CPU/GPU extra when setup requires it. Activate that environment before Cargo so PyO3 links to its Python 3.14 runtime. On Windows initialize the compiler/linker environment first and use the shared venv's Windows activation script.
+Run commands from the `rCSFs/` root unless stated otherwise. This subrepository uses its own Python 3.15 `.venv`. On Windows initialize the compiler/linker environment first and use `.venv/Scripts/activate` and `.venv/Scripts/python.exe` in the commands below.
 
-## Installed wheel used by Tools
-
-From `graspkit-tools/`:
+## Local environment and installed wheel
 
 ```sh
-uv sync --extra cpu
+uv sync --python 3.15 --no-editable --group lint
+source .venv/bin/activate
 ```
 
-Use `--extra gpu` on CUDA hosts. This repository's `pyproject.toml` declares Maturin as the build backend and tracks Rust/Python source files in uv cache keys. Sync rebuilds and reinstalls the wheel when those inputs change. Build isolation provides Maturin; it does not need to be installed into the shared runtime.
+This repository's `pyproject.toml` declares Maturin as the build backend and tracks Rust/Python source files in uv cache keys. Sync rebuilds and reinstalls the wheel when those inputs change. `--no-editable` preserves wheel installation. The `dev` dependency group includes Maturin for explicit local builds.
+
+The paired Tools environment remains separate. Its current Python 3.14 runtime cannot install this checkout, whose metadata requires Python 3.15. Migrate Tools and its dependency constraints separately before testing it against this source.
 
 ## In-tree extension used by this repository's Python tests
 
 Pytest adds the repository root to its import path. Its `rcsfs/` package can therefore load a different extension from the installed wheel. For native builds using the default Cargo target directory:
 
 ```sh
-source ../graspkit-tools/.venv/bin/activate
+source .venv/bin/activate
 cargo build --release --features pyo3/extension-module,pyo3/generate-import-lib
 python - <<'COPY_EXTENSION'
 from pathlib import Path
@@ -35,21 +36,21 @@ COPY_EXTENSION
 python -c 'import rcsfs._rcsfs as extension; print(extension.__file__)'
 ```
 
-The copy derives the ABI suffix from the shared interpreter and handles Linux/macOS/Windows library filenames. The shell block uses POSIX syntax; on Windows run the same Python copy logic with the activated shared interpreter. Adjust the source path if Cargo uses a custom target directory or target triple; do not copy a library built for another interpreter or architecture. Then run the affected tests, for example `python -m pytest tests/rcsfs_test.py`.
+The copy derives the ABI suffix from the local interpreter and handles Linux/macOS/Windows library filenames. The shell block uses POSIX syntax; on Windows run the same Python copy logic with the activated local interpreter. Adjust the source path if Cargo uses a custom target directory or target triple; do not copy a library built for another interpreter or architecture. Then run the affected tests, for example `python -m pytest tests/rcsfs_test.py`.
 
-Rust-only tests use `cargo test` with the shared environment activated and do not require this extension copy.
+Rust tests use `cargo test --release --locked` with the local environment activated and do not require this extension copy.
 
 ## Distributable wheels
 
-For an explicit packaging task, use an isolated tool environment while targeting the shared interpreter:
+For an explicit packaging task, use an isolated tool environment while targeting the local interpreter:
 
 ```sh
-uvx --python ../graspkit-tools/.venv/bin/python --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --compatibility pypi --interpreter ../graspkit-tools/.venv/bin/python
+uvx --python .venv/bin/python --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --compatibility pypi --interpreter .venv/bin/python
 ```
 
-Use the shared `Scripts/python.exe` path on Windows. Wheels are written under `target/wheels/`. This command does not refresh the in-tree extension or install the wheel into Tools. Keep the Maturin version constraint aligned with `pyproject.toml` when updating build dependencies.
+Use `.venv/Scripts/python.exe` on Windows. Wheels are written under `target/wheels/`. This command does not refresh the in-tree extension or install the wheel into the environment. Keep the Maturin version constraint aligned with `pyproject.toml` when updating build dependencies.
 
-Avoid `maturin develop` for this workspace: its editable extension installation differs from Tools' declared built path dependency. Restore that installation through a Tools sync with the selected extra when needed.
+Avoid `maturin develop`: its editable extension installation differs from the intended wheel installation. Restore the local installation with `uv sync --no-editable --group lint` when needed.
 
 For source-archive rebuilding, release manifests, license notices and the
 build-only platform matrix, follow [the release guide](releasing.md).

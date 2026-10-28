@@ -42,9 +42,13 @@ Use the build-only workflow for the intended distribution baseline:
 
 | Runner / architecture | Wheel target | Interpreter |
 | --- | --- | --- |
-| Linux x86_64 | manylinux_2_28 (glibc >= 2.28) | CPython 3.15 |
-| Windows x86_64 | win_amd64 | CPython 3.15 |
-| macOS Apple Silicon | macosx arm64 | CPython 3.15 |
+| `ubuntu-24.04` / Linux x86_64 | manylinux_2_28 (glibc >= 2.28) | CPython 3.15 |
+| `windows-2022` / Windows x86_64 | win_amd64 | CPython 3.15 |
+| `macos-15` / Apple Silicon | macosx arm64 | CPython 3.15 |
+
+Linux builds continue to use the `manylinux_2_28` container; changing the host
+runner does not change the configured wheel compatibility target. Preflight,
+artifact assembly and publishing jobs also use `ubuntu-24.04`.
 
 The workflow builds from the source archive, installs the produced wheel and
 its public dependencies on the runner, runs archive and functional checks,

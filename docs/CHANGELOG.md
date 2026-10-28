@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### 更新 GitHub 托管 runner（2026-10-28）
+
+- 将 macOS 构建从 `macos-14` 迁移到 `macos-15`，目标仍为 Apple Silicon。
+- 将 Linux 构建、预检、产物汇总和发布任务统一迁移到 `ubuntu-24.04`。
+- 保留 `windows-2022`、CPython 3.15 和 Linux `manylinux_2_28` wheel 目标；新 runner 的实际构建结果需由后续 CI 验证。
+
 ### 2.0.1 版本准备（2026-10-28）
 
 - 将 Cargo 包版本、锁文件中的本包版本和 Python 版本回退值统一为 2.0.1。

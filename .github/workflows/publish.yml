@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   preflight:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -63,7 +63,7 @@ jobs:
 
   prepare:
     needs: build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -92,7 +92,7 @@ jobs:
   publish_pypi:
     needs: prepare
     if: ${{ inputs.publish_pypi && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     environment:
       name: pypi
       url: https://pypi.org/project/rcsfs/
@@ -112,7 +112,7 @@ jobs:
   github_release:
     needs: prepare
     if: ${{ inputs.github_release && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: write

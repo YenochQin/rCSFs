@@ -33,11 +33,11 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 
 ## 安装
 
-使用 Python 3.14 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
+使用 Python 3.15 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
 
-开发中的源码已切换到 Python 3.15，并使用本仓库的独立 `.venv`，详见
-[源码开发说明](docs/development.md)。以下安装说明仍对应已发布的 1.3.2；
-此次迁移尚未替换 PyPI 上的发行版。
+本仓库正在准备 **2.0.1**，使用独立的 Python 3.15 `.venv`，详见
+[源码开发说明](docs/development.md)。下方固定版本安装示例需等 2.0.1
+发布到 PyPI 后使用；推送源码不会自动发布安装包。
 分发包名、Python 导入名和命令行入口都叫 `rcsfs`。
 
 ### 使用 uv 管理项目
@@ -45,16 +45,16 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 可以用 [uv](https://docs.astral.sh/uv/getting-started/installation/) 管理你自己的分析项目环境和依赖。新建项目时：
 
 ```bash
-uv init --python 3.14 csf-analysis
+uv init --python 3.15 csf-analysis
 cd csf-analysis
 uv add rcsfs
 uv run rcsfs --help
 ```
 
-已有 uv 项目使用 Python 3.14 或更新版本时，直接在其目录运行 `uv add rcsfs`。
+已有 uv 项目使用 Python 3.15 或更新版本时，直接在其目录运行 `uv add rcsfs`。
 该命令会将依赖写入 `pyproject.toml`，更新 `uv.lock`，并安装到项目的 `.venv` 中。
 运行自己的分析脚本时使用 `uv run python analysis.py`，无需手动激活环境。
-需要固定版本时，使用 `uv add "rcsfs==1.3.2"`。
+需要固定版本时，使用 `uv add "rcsfs==2.0.1"`。
 
 也可以手动将依赖加入已有的 `pyproject.toml`：
 
@@ -62,9 +62,9 @@ uv run rcsfs --help
 [project]
 name = "csf-analysis"
 version = "0.1.0"
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 dependencies = [
-    "rcsfs==1.3.2",
+    "rcsfs==2.0.1",
 ]
 ```
 
@@ -79,11 +79,12 @@ dependencies = [
 python -m pip install rcsfs
 ```
 
-需要固定版本时，使用 `python -m pip install "rcsfs==1.3.2"`。
+需要固定版本时，使用 `python -m pip install "rcsfs==2.0.1"`。
 两种安装方式提供相同的 Python API 和 `rcsfs` 命令。
 
-当前版本提供 CPython 3.14 的预编译 wheel，覆盖 Linux x86_64（glibc 2.28+）、
-Windows x86_64 和 macOS Apple Silicon（macOS 11+）。匹配 wheel 时无需 Rust 编译器。
+发布工作流的目标是 CPython 3.15 wheel，覆盖 Linux x86_64（glibc 2.28+）、
+Windows x86_64 和 macOS Apple Silicon。这是构建矩阵，不代表所有平台已验证；
+详见[发布指南](docs/releasing.md)。匹配 wheel 时无需 Rust 编译器。
 其他 Python/平台组合可能回退到源码构建，需要 Rust 工具链和兼容的链接器；
 具体步骤见[开发指南](docs/development.md)。
 

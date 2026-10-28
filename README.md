@@ -32,11 +32,12 @@ It helps you:
 
 ## Installation
 
-Install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.14 or newer.
+Install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.15 or newer.
 
-The development checkout now targets Python 3.15 and uses its own `.venv`;
-see [source development](docs/development.md). The instructions below describe
-the published 1.3.2 release, which has not been replaced by this migration.
+This checkout prepares version **2.0.1** and uses its own Python 3.15 `.venv`;
+see [source development](docs/development.md). The pinned installation examples
+below apply once 2.0.1 has been published to PyPI; pushing the source does not
+publish a package.
 The distribution name, Python import name and command-line entry point are all
 `rcsfs`.
 
@@ -46,17 +47,17 @@ Use [uv](https://docs.astral.sh/uv/getting-started/installation/) to manage the
 environment and dependencies of your own analysis project. For a new project:
 
 ```bash
-uv init --python 3.14 csf-analysis
+uv init --python 3.15 csf-analysis
 cd csf-analysis
 uv add rcsfs
 uv run rcsfs --help
 ```
 
-For an existing uv project using Python 3.14 or newer, run `uv add rcsfs` in its
+For an existing uv project using Python 3.15 or newer, run `uv add rcsfs` in its
 directory. This records the dependency in `pyproject.toml`, updates `uv.lock`,
 and installs it in the project's `.venv`. Run your own script with
 `uv run python analysis.py`; manual environment activation is not required.
-To pin a particular release, use `uv add "rcsfs==1.3.2"`.
+To pin a particular release, use `uv add "rcsfs==2.0.1"`.
 
 You can also add the dependency to an existing `pyproject.toml` manually:
 
@@ -64,9 +65,9 @@ You can also add the dependency to an existing `pyproject.toml` manually:
 [project]
 name = "csf-analysis"
 version = "0.1.0"
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 dependencies = [
-    "rcsfs==1.3.2",
+    "rcsfs==2.0.1",
 ]
 ```
 
@@ -82,11 +83,13 @@ To install into an existing Python environment:
 python -m pip install rcsfs
 ```
 
-For a fixed release, use `python -m pip install "rcsfs==1.3.2"`.
+For a fixed release, use `python -m pip install "rcsfs==2.0.1"`.
 Both installation methods provide the same Python API and `rcsfs` command.
 
-The current release provides CPython 3.14 wheels for Linux x86_64
-(glibc 2.28+), Windows x86_64 and macOS Apple Silicon (macOS 11+).
+The release workflow targets CPython 3.15 wheels for Linux x86_64
+(glibc 2.28+), Windows x86_64 and macOS Apple Silicon. This is the build
+matrix, not a claim that all platforms have passed validation; see
+[the release guide](docs/releasing.md).
 A matching wheel installs without a Rust compiler. Other Python/platform
 combinations may fall back to a source build and need a Rust toolchain and
 compatible linker; see [development.md](docs/development.md).

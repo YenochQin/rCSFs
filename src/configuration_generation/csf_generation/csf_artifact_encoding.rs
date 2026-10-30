@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use super::streaming::{
+use super::disk_csf_generation_pipeline::{
     DeduplicatedSegments, SurvivorBitset, grouped_segments, process_cpu_millis,
 };
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
@@ -221,16 +221,19 @@ pub(crate) fn build_final_outputs_from_segments(
     header_path: &Path,
     threads: Option<usize>,
 ) -> Result<FinalEncodingStats> {
-    super::planning::run_parallel(threads, || {
-        build_final_outputs_from_segments_inner(
-            deduplicated,
-            header_lines,
-            descriptor_output,
-            csf_output,
-            csf_parquet_output,
-            header_path,
-        )
-    })
+    crate::configuration_generation::shared_generation::generation_task_planning::run_parallel(
+        threads,
+        || {
+            build_final_outputs_from_segments_inner(
+                deduplicated,
+                header_lines,
+                descriptor_output,
+                csf_output,
+                csf_parquet_output,
+                header_path,
+            )
+        },
+    )
 }
 
 fn build_final_outputs_from_segments_inner(

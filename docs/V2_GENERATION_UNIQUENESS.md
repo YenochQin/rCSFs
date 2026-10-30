@@ -35,7 +35,7 @@
 零占据的子壳层不出现。
 
 **遍历（traversal）**：生成器的一次状态选择 + 耦合取值的完整组合，即
-`Generator`（`src/csf_generation/mod.rs`）从 `selected` 到 `cumulative` 的一条完整路径。
+`Generator`（`src/configuration_generation/shared_generation/angular_coupling_generator.rs`）从 `selected` 到 `cumulative` 的一条完整路径。
 
 **记录（record，可观测量）**：写出到输出、能被解码回来的全部内容——有占据子壳层的
 `(subshell_index, occupation, state)`、GRASP 打印的中间耦合 `(boundary, two_j)`、
@@ -49,7 +49,7 @@
 
 ### 3.1 L1：占据键与占据向量互为确定
 
-`occupations.rs::split_configuration`/`split_branches` 为每个非闭合字段枚举
+`electron_occupation_enumeration.rs::split_configuration`/`split_branches` 为每个非闭合字段枚举
 `split_occupation` 给出的 `(lower, upper)` 对，并写 key 位 `(occupation, upper, lower)`；
 `lower ≤ 2l`、`upper ≤ 2l+2` 且二者之和等于该轨道的非相对论占据，所以 `(lower, upper)`
 与该轨道两个相对论伙伴的电子数**一一对应**（`l = 0` 时只有一个伙伴，`upper` 恒为 0）。
@@ -81,8 +81,8 @@
 
 ### 3.3 L3：态表在 `(2J, seniority)` 上单射
 
-`states.rs::subshell_states` 是生成器唯一的态来源（`prepare_configuration` 用它填
-`choices`）。`states.rs` 的维护测试 `state_tables_are_injective_and_cover_the_documented_set`
+`subshell_state_catalog.rs::subshell_states` 是生成器唯一的态来源（`prepare_configuration` 用它填
+`choices`）。`subshell_state_catalog.rs` 的维护测试 `state_tables_are_injective_and_cover_the_documented_set`
 穷举**所有可达的** `2j_max`（`capacity = 2|kappa|`、`1 ≤ |kappa| ≤ 11` ⇒ 全部奇数 `2j_max ≤ 21`）
 与**所有**电子数，断言：
 
@@ -95,7 +95,7 @@
 
 ### 3.4 L4：一次遍历最多产出一条记录
 
-`Generator::select_states`/`couple`（`src/csf_generation/mod.rs`）在每个
+`Generator::select_states`/`couple`（`src/configuration_generation/shared_generation/angular_coupling_generator.rs`）在每个
 `(状态选择, 中间耦合取值串)` 上只调用一次 `emit`：单子壳层时直接比较目标，
 多子壳层时在末级判断可达性后调用一次。因此产出次数等于遍历数，不会有一次遍历写两行。
 
@@ -191,7 +191,7 @@ boundary 落在 `2..occupied-1` 的 `2K`（其余为 `MISSING`），以及全局
   对注册 fixture 断言了这一点），因此内部路径不会遇到；但直接调用公开 `generate_csfs`
   的调用方如果自己造出零占据项，本结论不覆盖它。
 - **V1 与旧内存路径**不在此范围。
-- **依赖的代码位置**：L1（`occupations.rs` 的 key 构造）、L3（`states.rs` 的表）、
+- **依赖的代码位置**：L1（`electron_occupation_enumeration.rs` 的 key 构造）、L3（`subshell_state_catalog.rs` 的表）、
   L4/L5（`mod.rs` 的 `emit`/`couple`/`FIRST` 逻辑）、L2（`descriptor_v2.rs` 的通道布局）、
   L6（`descriptor_schema.rs` 的 `validate_record`）。这些位置的改动会让本文件失效，
   而回归测试只会在**覆盖到的**家族上失败——这正是 P6b 必须保留精确路径作为安全网的原因。

@@ -1870,10 +1870,10 @@ mod tests {
     /// state tables (as `tests/fixtures/complete.csf` predates
     /// `validate_record` and does not).
     fn generate_one_record_text(
-        configuration: Vec<crate::csf_generation::SubshellOccupation>,
+        configuration: Vec<crate::configuration_generation::SubshellOccupation>,
         two_j: u16,
     ) -> (Vec<String>, String, String, String) {
-        use crate::csf_generation::{GenerationRequest, generate_csfs};
+        use crate::configuration_generation::{GenerationRequest, generate_csfs};
 
         let request = GenerationRequest {
             core_subshells: Vec::new(),
@@ -1897,7 +1897,7 @@ mod tests {
 
     #[test]
     fn parse_csf_into_basic_six_orbitals() {
-        use crate::csf_generation::SubshellOccupation;
+        use crate::configuration_generation::SubshellOccupation;
 
         let (subshells, line1, line2, line3) = generate_one_record_text(
             vec![
@@ -2069,7 +2069,9 @@ mod tests {
         // outside GRASP's real state tables (see descriptor_v2.rs test
         // comments), so build a physically legal multi-record file with the
         // generator instead, then compare the two V2 producers row for row.
-        use crate::csf_generation::{GenerationRequest, SubshellOccupation, generate_csfs};
+        use crate::configuration_generation::{
+            GenerationRequest, SubshellOccupation, generate_csfs,
+        };
         let request = GenerationRequest {
             core_subshells: Vec::new(),
             configuration: vec![

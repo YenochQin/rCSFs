@@ -1,5 +1,5 @@
 //! Regression test for the shared transcript-to-file pipeline extracted from
-//! `examples/generate_transcript_csfs.rs` into `csf_generation::pipeline`.
+//! `examples/generate_transcript_csfs.rs` into `configuration_generation::csf_generation::complete_csf_generation_pipeline`.
 //! This is the same function backing the `rcsfs.generate_csfs_from_transcript`
 //! PyO3 binding, so a correct result here means the Python binding's
 //! generation logic is correct too.

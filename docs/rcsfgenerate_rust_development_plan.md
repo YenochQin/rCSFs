@@ -370,7 +370,7 @@ Rust 开发基线保留当前已有占据预归并和每任务整数 chunk，按
 
 ## 2026-09-10 历史对话实施记录（三）
 
-- §7.2 设计已落地：新增 `src/csf_generation/pipeline.rs`（`write_generated_csfs` + `generate_csfs_from_transcript`，transcript 全程只作为内存字符串，不落盘）、`src/lib.rs` 中的 PyO3 绑定 `generate_csfs_from_transcript`、`rcsfs/__init__.py` 的同名 Python 包装函数，以及 `rcsfs/cli.py` 的 `csfsgenerate` 交互子命令。`examples/generate_transcript_csfs.rs` 已改为调用共享的 `write_generated_csfs`，逐字节复现登记基准哈希 `5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011`（`e1_cc1as1`）。上一条记录里"接受已解析请求"的措辞已被 §7.2 的架构简化取代：实际绑定接受的是内存态 transcript 字符串，而不是结构化请求对象，理由见 §7.2 开头。
+- §7.2 设计已落地：新增 `src/configuration_generation/csf_generation/complete_csf_generation_pipeline.rs`（`write_generated_csfs` + `generate_csfs_from_transcript`，transcript 全程只作为内存字符串，不落盘）、`src/lib.rs` 中的 PyO3 绑定 `generate_csfs_from_transcript`、`rcsfs/__init__.py` 的同名 Python 包装函数，以及 `rcsfs/cli.py` 的 `csfsgenerate` 交互子命令。`examples/generate_transcript_csfs.rs` 已改为调用共享的 `write_generated_csfs`，逐字节复现登记基准哈希 `5c24c1db3a6955317dfd5f2a5fd2370b72d68bb4bd3a80d99b1130232bd22011`（`e1_cc1as1`）。上一条记录里"接受已解析请求"的措辞已被 §7.2 的架构简化取代：实际绑定接受的是内存态 transcript 字符串，而不是结构化请求对象，理由见 §7.2 开头。
 
 ### 已完成：移除 `GenerationRequest.max_records` 记录数上限（2026-09-12）
 

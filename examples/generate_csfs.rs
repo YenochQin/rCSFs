@@ -1,5 +1,7 @@
 //! Generate a fixed relativistic occupation configuration from a TOML request.
-use _rcsfs::csf_generation::{GenerationRequest, Subshell, SubshellOccupation, generate_csfs};
+use _rcsfs::configuration_generation::{
+    GenerationRequest, Subshell, SubshellOccupation, generate_csfs,
+};
 use _rcsfs::descriptor_schema::{DescriptorLayout, DescriptorVersion};
 use _rcsfs::descriptor_v2::encode_v2;
 use anyhow::{Context, Result, ensure};

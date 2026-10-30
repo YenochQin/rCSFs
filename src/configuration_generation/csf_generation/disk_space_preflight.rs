@@ -2,14 +2,14 @@
 //!
 //! This module answers one question — can these volumes hold this run? — and
 //! decides what to do when the answer is no or cannot be determined. The
-//! estimate it is asked about comes from [`super::capacity`], which owns the
+//! estimate it is asked about comes from [`super::csf_output_capacity_estimation`], which owns the
 //! byte model; keeping the two apart means a change to how space is measured or
 //! refused does not touch the measured ratios, and vice versa.
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
-use super::capacity::{ArtifactKind, CapacityEstimate, with_margin};
+use super::csf_output_capacity_estimation::{ArtifactKind, CapacityEstimate, with_margin};
 
 /// Free bytes available to the current user on `path`'s filesystem.
 ///
@@ -272,10 +272,10 @@ pub(crate) fn preflight_run(
 
 #[cfg(test)]
 mod tests {
+    use super::super::estimate_capacity;
     use super::*;
-    use crate::csf_generation::DeduplicationStrategy;
-    use crate::csf_generation::capacity::with_margin;
-    use crate::csf_generation::estimate_capacity;
+    use crate::configuration_generation::csf_generation::csf_output_capacity_estimation::with_margin;
+    use crate::configuration_generation::shared_generation::DeduplicationStrategy;
 
     /// Scratch and staging compete for the same volume, so their requirements
     /// add up. Checking them separately would let two half-sized checks pass on

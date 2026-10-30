@@ -5,49 +5,18 @@
 //! splitting, multiple references and existing-list expansion are separate stages
 //! and are not inferred by this interface.
 
-pub(crate) mod capacity;
-pub(crate) mod counting;
-mod final_encoding;
-mod occupations;
-mod options;
-mod pipeline;
-#[allow(dead_code)] // The estimate-only CLI mode consumes part of this module.
-pub(crate) mod planning;
-mod space;
-mod states;
-#[allow(dead_code)] // Phase 4 owns the public transaction/CLI wiring.
-pub(crate) mod streaming;
-
-pub(crate) use capacity::{ArtifactKind, CapacityEstimate, estimate_capacity};
-pub(crate) use counting::{PreparedCounter, count_configuration_records};
-pub(crate) use occupations::enumerate_occupations_with_budget;
-pub use occupations::{
-    EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest, OccupationMode, Orbital,
-    ReferenceConfiguration, ReferenceSubshell, enumerate_occupations,
-};
-pub(crate) use options::{
-    DeduplicationStrategy, GenerationOptions, ResourceBudget, ResourcePermit, ResourceStats,
-    SegmentCodec,
-};
-pub use pipeline::{
-    TranscriptGenerationStats, WriteStats, generate_csfs_from_transcript, write_generated_csfs,
-};
-pub(crate) use planning::{
-    GenerationPlan, PlanStats, PlannedTask, TaskSpan, estimate_workload, plan_generation,
-    report_plan, request_targets,
-};
-pub(crate) use space::{SpaceCheck, SpacePolicy, SpaceRole, check_space, preflight_run};
-
 use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 
+#[cfg(test)]
+use super::count_configuration_records;
+use super::subshell_state_catalog::subshell_states;
 use crate::complete_csf::{
     CompleteCsfFile, IntermediateCoupling, OccupiedSubshell, Parity, SubshellState,
 };
-pub(crate) use states::subshell_states;
 
 const ORBITAL_LETTERS: &[u8] = b"spdfghiklmn";
 const MAX_OCCUPIED_SUBSHELLS: usize = 20;
@@ -377,7 +346,7 @@ fn prepare_generation(request: &GenerationRequest) -> Result<PreparedGeneration>
     )
 }
 
-fn prepare_configuration(
+pub(crate) fn prepare_configuration(
     core_subshells: &[Subshell],
     configuration: &[SubshellOccupation],
     min_two_j: u16,
@@ -460,7 +429,7 @@ fn prepare_configuration(
     })
 }
 
-fn generate_prepared_records(
+pub(crate) fn generate_prepared_records(
     prepared: &PreparedGeneration,
     min_two_j: u16,
     max_two_j: u16,

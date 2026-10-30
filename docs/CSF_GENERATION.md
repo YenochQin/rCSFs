@@ -1,12 +1,20 @@
 # Fixed-configuration CSF generation
 
+The related full-CSF and CSFG implementations now share
+[`src/configuration_generation/`](GENERATION_SOURCE_LAYOUT.md), with separate
+`csf_generation/`, `csfg_generation/`, and `shared_generation/` directories.
+
+For direct GRASPG-compatible CSFG output, see the
+[CSFG generation guide](CSFG_GENERATION.md). The interfaces below continue to
+generate complete CSFs; the new `csfggenerate` command is separate.
+
 For the planned V2 disk-generation performance work, see the
 [V2 descriptor and CSF generation performance implementation plan](CSF_V2_GENERATION_PERFORMANCE_PLAN.md).
 It records the current measurements, staged changes, and acceptance criteria.
 The disk path now accepts a managed memory budget and reports its accounting
 alongside the stage timings; the budget is not an operating-system RSS limit.
 
-`csf_generation::generate_csfs` is the first serial implementation in phase C.
+`configuration_generation::generate_csfs` is the first serial implementation in phase C.
 It creates new CSFs for **one explicit relativistic occupation configuration**.
 The implementation runs entirely in Rust and returns `CompleteCsfFile` directly;
 it does not call GRASP or construct intermediate CSF text.
@@ -52,7 +60,7 @@ does not mean a nonrelativistic `2p^2` reference distributed across both.
 ## Rust interface
 
 ```rust
-use _rcsfs::csf_generation::{GenerationRequest, SubshellOccupation, generate_csfs};
+use _rcsfs::configuration_generation::{GenerationRequest, SubshellOccupation, generate_csfs};
 
 fn main() -> anyhow::Result<()> {
     let request = GenerationRequest {
@@ -413,7 +421,7 @@ would refuse jobs that fit.
 
 The exact path is kept rather than deleted: it is the reference the verified
 path is differentially checked against (`the_verified_path_publishes_what_the_exact_path_publishes`
-in `streaming.rs`, plus registered benchmark runs). The benchmark harness now
+in `disk_csf_generation_pipeline.rs`, plus registered benchmark runs). The benchmark harness now
 records hashes for all four published artifacts; B1/B2 reports written before
 that change contain only lengths and must be rerun before they count as content
 differentials. The exact path is also what a future path that *can* schedule the

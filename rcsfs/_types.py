@@ -336,3 +336,35 @@ class InteractionStats(TypedDict):
     output_count: int
     output_bytes: int
     blocks: list[InteractionBlockStats]
+
+
+class CsfgBlockStats(TypedDict):
+    """One J/parity block; angular momentum is encoded as integer 2J."""
+
+    two_j: int
+    parity: str
+    record_count: int
+    expanded_csf_count: int
+    label_csf_count: int
+
+
+class CsfgGenerationStats(TypedDict):
+    """Direct CSFG generation counts and stage timings (seconds)."""
+
+    success: bool
+    rcsfg_out: str
+    rlabel_out: str
+    record_count: int
+    label_csf_count: int
+    generator_count: int
+    expanded_csf_count: int
+    type_counts: list[int]
+    unique_occupations: int
+    representative_occupations: int
+    block_count: int
+    blocks: list[CsfgBlockStats]
+    csfg_bytes: int
+    label_bytes: int
+    planning_seconds: float
+    generation_seconds: float
+    writing_seconds: float

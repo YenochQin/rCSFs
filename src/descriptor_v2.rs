@@ -295,7 +295,7 @@ pub fn restore_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::csf_generation::{GenerationRequest, SubshellOccupation, generate_csfs};
+    use crate::configuration_generation::{GenerationRequest, SubshellOccupation, generate_csfs};
     use std::io::Cursor;
 
     fn layout_for(file: &CompleteCsfFile) -> DescriptorLayout {
@@ -436,7 +436,7 @@ mod tests {
     /// contains a hand-written seniority/`2J` combination outside GRASP's
     /// real state tables (only ever exercised for byte-level text parsing).
     fn merged_multiblock_fixture() -> CompleteCsfFile {
-        use crate::csf_generation::write_generated_csfs;
+        use crate::configuration_generation::write_generated_csfs;
         use std::sync::atomic::{AtomicU64, Ordering};
 
         static COUNTER: AtomicU64 = AtomicU64::new(0);

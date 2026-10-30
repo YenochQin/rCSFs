@@ -1,6 +1,6 @@
 //! Generate CSFs from an rcsfgenerate transcript using the Rust generator.
 use _rcsfs::complete_csf::CompleteCsfFile;
-use _rcsfs::csf_generation::{
+use _rcsfs::configuration_generation::{
     ExcitationRequest, GenerationRequest, enumerate_occupations, generate_csfs_parallel,
     write_generated_csfs,
 };

@@ -122,6 +122,14 @@ class CsfsGenerateArgs(Protocol):
     json: bool
 
 
+class CsfgGenerateArgs(Protocol):
+    command: Literal["csfggenerate"]
+    config: Path
+    threads: int | None
+    overwrite: bool
+    json: bool
+
+
 class InteractingArgs(Protocol):
     """Parsed arguments for the ``interacting`` subcommand."""
 
@@ -140,6 +148,7 @@ type CliArgs = (
     GenDescriptorsArgs
     | ZeroFirstArgs
     | CsfsGenerateArgs
+    | CsfgGenerateArgs
     | InteractingArgs
     | RestoreCsfsArgs
     | CsfsSplitArgs
@@ -202,6 +211,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run every active command table in a TOML file, in file order.",
     )
     subparsers = parser.add_subparsers(dest="command")
+    csfg = subparsers.add_parser(
+        "csfggenerate", help="Direct GRASPG-compatible S/SD CSFG generation from TOML."
+    )
+    _ = csfg.add_argument(
+        "-c",
+        "--config",
+        type=Path,
+        nargs="?",
+        const=DEFAULT_CONFIG,
+        default=DEFAULT_CONFIG,
+    )
+    _ = csfg.add_argument("--threads", type=_parse_positive_int)
+    _ = csfg.add_argument("--overwrite", action="store_true")
+    _ = csfg.add_argument("--json", action="store_true")
 
     def add_config_argument(
         command_parser: argparse.ArgumentParser, *, optional_path: bool = False
@@ -1773,6 +1796,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _run_parsed_command(args: CliArgs) -> int:
+    if args.command == "csfggenerate":
+        from ._csfg_cli import run
+
+        return run(args.config, args.threads, args.overwrite, args.json)
+
     if args.command == "gen-descriptors":
         staging: Path | None = None
         try:

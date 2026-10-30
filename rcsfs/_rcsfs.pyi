@@ -7,6 +7,7 @@ from ._types import (
     ConversionStats,
     CsfGenerationEstimate,
     CsfGenerationStats,
+    CsfgGenerationStats,
     CsfHeaderData,
     CsfRestoreStats,
     DescriptorGenerationStats,
@@ -112,3 +113,15 @@ def select_interacting_csfs(
     num_workers: int | None = None,
     overwrite: bool = False,
 ) -> InteractionStats: ...
+def generate_csfgs(
+    inactive_core: int,
+    reference_configuration: list[str],
+    labeling_space: str,
+    active_space: str,
+    j_min: int,
+    j_max: int,
+    excitations: int,
+    csfg_output: str,
+    label_output: str,
+    threads: int | None = None,
+) -> CsfgGenerationStats: ...

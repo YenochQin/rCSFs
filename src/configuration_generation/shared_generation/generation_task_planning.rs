@@ -696,7 +696,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::csf_generation::Subshell;
+    use crate::configuration_generation::Subshell;
 
     /// A state-prefix split must cover every non-empty prefix exactly once for
     /// *every* task size.

@@ -2,7 +2,7 @@
 //!
 //! This module owns the storage adapter: range scheduling and the segment
 //! writers, the exact de-duplication chain, and the segment-level merge that
-//! the one-pass final encoding (`super::final_encoding`) or the two-pass
+//! the one-pass final encoding (`super::csf_artifact_encoding`) or the two-pass
 //! reference path consumes. Keeping the range writer here lets the angular
 //! generator use `GeneratedRecordSink` without learning about Arrow, scratch
 //! paths or final publication.
@@ -30,14 +30,14 @@ use super::{
 };
 use super::{
     DeduplicationStrategy, EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest,
-    GeneratedRecordRef, GeneratedRecordSink, GenerationOptions, GenerationPlan, Parity, PlanStats,
+    GeneratedRecordRef, GeneratedRecordSink, GenerationOptions, GenerationPlan, PlanStats,
     PlannedTask, RecordSelection, ResourceBudget, ResourcePermit, ResourceStats, SegmentCodec,
     Subshell, SubshellOccupation, TaskSpan, enumerate_occupations_with_budget, estimate_capacity,
     estimate_workload, generate_configuration_records, plan_generation, report_plan,
     request_targets,
 };
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
-use crate::complete_csf::OccupiedSubshell;
+use crate::complete_csf::{OccupiedSubshell, Parity};
 use crate::descriptor_schema::{
     DescriptorLayout, DescriptorVersion, output_schema, validate_record,
 };
@@ -519,7 +519,7 @@ fn generate_disk_outputs_from_requests(
     );
 
     eprintln!("Building final descriptor and CSF outputs from segments...");
-    let final_stats = super::final_encoding::build_final_outputs_from_segments(
+    let final_stats = super::csf_artifact_encoding::build_final_outputs_from_segments(
         &deduplicated,
         &header_lines,
         descriptor_output,
@@ -2911,8 +2911,10 @@ fn copy_surviving_segment_to_parquet(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::csf_generation::final_encoding::build_final_outputs_from_segments;
-    use crate::csf_generation::{GenerationRequest, enumerate_occupations, generate_csfs};
+    use crate::configuration_generation::csf_generation::csf_artifact_encoding::build_final_outputs_from_segments;
+    use crate::configuration_generation::{
+        GenerationRequest, enumerate_occupations, generate_csfs,
+    };
     use crate::descriptor_v2::write_feature_row;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::sync::atomic::{AtomicU64, Ordering};

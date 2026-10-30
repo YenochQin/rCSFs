@@ -154,16 +154,16 @@ B1 中生成仅占端到端时间的小部分，去重、合并和还原合计�
 
 | 位置（相对 rCSFs 根目录） | 已确认的成本 |
 | --- | --- |
-| `src/csf_generation/streaming.rs`：`generate_range_segments` | 固定组态数划分，每任务同步写 Arrow |
+| `src/configuration_generation/csf_generation/disk_csf_generation_pipeline.rs`：`generate_range_segments` | 固定组态数划分，每任务同步写 Arrow |
 | 同文件：`deduplicate_v2_descriptor_segments`、`process_bucket` | 顺序分桶和顺序消费，固定 65,536 行叶桶上限 |
 | 同文件：`merge_v2_deduplicated_segments` | 顺序筛选、复制并交给单个 Parquet writer |
 | `src/csfs_descriptor.rs`：`restore_v2_descriptor_parquet_to_outputs` | 顺序解码、验证、格式化、写出两种产物 |
 | `src/descriptor_schema.rs`：`validate_record` | 逐记录解析标签并获取会分配 Vec 的合法态表 |
-| `src/csf_generation/mod.rs`：`generate_prepared_records` | 嵌套并行先缓存完整分支记录，再顺序送入 sink |
+| `src/configuration_generation/shared_generation/angular_coupling_generator.rs`：`generate_prepared_records` | 嵌套并行先缓存完整分支记录，再顺序送入 sink |
 | 同文件：`Generator::couple` | 目标 J 的最终判断在末级，缺少后缀可达性剪枝 |
 | `rcsfs/cli.py`：`_generate_outputs` | 最终产物从 staging 完整复制到目标 |
 | `scripts/benchmark_v2_generation.py`：`_run_once` | 总墙钟包含临时目录和全部输出的删除；当前无预热、RSS/scratch 峰值、`resource_stats`、Git/机器元数据 |
-| `src/csf_generation/streaming.rs`：`precompute_peel_subshells` | 已知零目标-J 产出组态可能带来 Peel header 等价边角，需显式纳入后续正确性任务 |
+| `src/configuration_generation/csf_generation/disk_csf_generation_pipeline.rs`：`precompute_peel_subshells` | 已知零目标-J 产出组态可能带来 Peel header 等价边角，需显式纳入后续正确性任务 |
 
 待确认：用户运行的具体阶段、CPU/内存/存储、Arrow 是否仍增长、磁盘等待情况；紧凑暂存的收益、并行 Parquet 编码方案及生成唯一性均尚未实现验证。另外待确认完整任务的最终压缩比、scratch 峰值、写放大、文件数、安全可用空间及失败后是否需要断点恢复。
 
@@ -177,7 +177,7 @@ P0a 与 P1 已完成，P6a 已给出结论（内部路径全局唯一，P3 不�
 
 ### P0a/P0b：建立阶段观测和可重复基线（P0a 已验收；P0b 本机证据齐备，验收未完成）
 
-改动范围：`streaming.rs`、`rcsfs/cli.py`、`scripts/`、`tests/`、`docs/benchmarks/`。
+改动范围：`disk_csf_generation_pipeline.rs`、`rcsfs/cli.py`、`scripts/`、`tests/`、`docs/benchmarks/`。
 
 - [x] 将临时探针整理成不依赖外部 GRASP 的维护基准入口；`scripts/benchmark_v2_generation.py` 接受任意 transcript，输出可保存的 JSON 测量。
 - [x] 分别报告枚举、CSF 生成、分桶/去重、最终编码和 CSF 还原阶段的墙钟、Unix 进程 CPU 时间、行数和阶段边界/临时写入字节。发布复制仍由 Python CLI 管理，未伪装成 Rust 阶段。
@@ -195,7 +195,7 @@ P0a 与 P1 已完成，P6a 已给出结论（内部路径全局唯一，P3 不�
 
 ### P1：统一资源预算和内部批次协议
 
-改动范围：`src/csf_generation/` 中的资源管理模块、`streaming.rs`、PyO3 绑定、Python wrapper/stub、CLI。
+改动范围：`src/configuration_generation/` 中的资源管理模块、`disk_csf_generation_pipeline.rs`、PyO3 绑定、Python wrapper/stub、CLI。
 
 - [x] 引入内部 `GenerationOptions`，集中传递线程数、预算和现有 scratch 位置；不向用户暴露所有 bucket/range/batch 常量。
 - [x] 首批新增可选 `memory_budget_mib`，CLI 对应 `--memory-budget-mib`。它表示受管理数据结构的总预算：占据组态、缓存、在途 batches、重排序、去重、编码均需计入。
@@ -209,7 +209,7 @@ P0a 与 P1 已完成，P6a 已给出结论（内部路径全局唯一，P3 不�
 
 ### P5a（前置）：生产级计数和工作量规划（代码完成；验收未完成，见完成条件）
 
-改动范围：计数算法、`occupations.rs`、range planner、基准报告。
+改动范围：计数算法、`electron_occupation_enumeration.rs`、range planner、基准报告。
 
 - [x] 生产级计数器使用 checked arithmetic；计数溢出返回明确错误，调度估计不得因截断变成零。高于 32 位的记录数和 ordinal 贯穿规划、协议、文件和统计。
 - [x] 计数与真实生成在小规模覆盖集合上逐项对照，并报告计数算法的输入契约与不变量。`counted_records_match_generated_records` 覆盖重复 2J 不同 seniority、seniority 标签、闭壳层、多耦合链与被生成器拒绝的组态；修复前完整输入的 5,814,175,207 与 §2.2 的历史独立数值一致。修复后的 B3 当前估算为 5,811,925,522，仍需目标机器验收。
@@ -246,7 +246,7 @@ P0a 与 P1 已完成，P6a 已给出结论（内部路径全局唯一，P3 不�
 
 ### P2：减少暂存数据与分桶 I/O
 
-改动范围：内部 segment codec、`streaming.rs` 的 writer/reader/桶记录格式。
+改动范围：内部 segment codec、`disk_csf_generation_pipeline.rs` 的 writer/reader/桶记录格式。
 
 分为两个可独立验收的子步骤。P6a 若已证明某些内部生成路径无需全局去重，P2 对这些路径只保留稳定重排和最终输出所必需的暂存，不再为已证明无用的根桶优化格式。
 
@@ -290,7 +290,7 @@ P0a 与 P1 已完成，P6a 已给出结论（内部路径全局唯一，P3 不�
 
 ### P5b：目标 J 剪枝、角动量缓存和生成存储优化
 
-改动范围：`states.rs`、`mod.rs`、`descriptor_schema.rs`、`occupations.rs`、内部生成 batch。计数和 range planner 已前置到 P5a。
+改动范围：`subshell_state_catalog.rs`、`angular_coupling_generator.rs`、`descriptor_schema.rs`、`electron_occupation_enumeration.rs`、内部生成 batch。计数和 range planner 已前置到 P5a。
 
 - [ ] 合法态表改为可复用只读数据；Peel 标签只解析一次。外部验证继续使用完整规则，但通过缓存查表而非逐记录分配 Vec。
 - [ ] 建立目标-J 的后缀可达位集/DP，对无法完成的耦合前缀提前剪枝，保留其余分支的原始遍历顺序。

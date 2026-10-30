@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-30
+
+新增直接 CSFG 生成与源码分层；本次为源码版本提交，尚未发布 PyPI/GitHub Release。
+
+### 生成模块目录与命名整理（2026-10-30）
+
+- 将有关联的 CSF/CSFG 实现统一放入 `src/configuration_generation/`，以 `shared_generation/`、`csf_generation/`、`csfg_generation/` 区分共享算法及两套生成流程。
+- 将 `pipeline.rs`、`plan.rs`、`writer.rs`、`states.rs` 等文件改为具体职责名称；将生成用 PyO3 绑定归入对应子目录，`mod.rs` 仅保留声明与导出。
+- 保留 Rust `csf_generation`/`csf_generation::csfg` 兼容导出，Python 函数、命令和 TOML 契约不变；结构与路径映射见 [源码布局](GENERATION_SOURCE_LAYOUT.md)。
+
+### 直接生成 GRASPG CSFG（2026-10-30）
+
+- 新增 `rcsfs csfggenerate`、`[csfggenerate]` 与 `generate_csfgs(...)`，输出配套 `rcsfg.out/rlabel.out`。
+- 在占据配置层规划五类代表项，验证展开覆盖后复用 Rust 角动量递归；保留 GRASPG 的轨道、块及标记前缀顺序。
+- 首版支持共同连续相关空间的 S/SD 模型；现有完整 CSF 生成接口、V2 描述符和多列表语义保持不变。
+- 新增小模型的原版格式 fixture、并行一致性、物理约束和输出发布测试；Gd 大模型的文件对照与计时见 [报告](benchmarks/csfg_gd_20261030.md)。
+- 首版为内存路径，未提供复杂 VV/CV/CC 范围并集、任意径向限制或 SCF/RCI 物理验证。
+
 ### 更新 GitHub 托管 runner（2026-10-28）
 
 - 将 macOS 构建从 `macos-14` 迁移到 `macos-15`，目标仍为 Apple Silicon。

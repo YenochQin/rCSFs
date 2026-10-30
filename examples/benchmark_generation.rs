@@ -1,7 +1,7 @@
 //! Serial development baseline: retain per-occupation integer chunks and export once.
 //! This is a measurement harness, not the public transcript-generation API.
 use _rcsfs::complete_csf::CompleteCsfFile;
-use _rcsfs::csf_generation::{
+use _rcsfs::configuration_generation::{
     ExcitationRequest, GenerationRequest, Subshell, enumerate_occupations, generate_csfs_parallel,
 };
 use anyhow::{Context, Result, ensure};

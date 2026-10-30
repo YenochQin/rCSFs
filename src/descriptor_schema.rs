@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::complete_csf::{IntermediateCoupling, OccupiedSubshell};
-use crate::csf_generation::{Subshell, subshell_states};
+use crate::configuration_generation::shared_generation::{Subshell, subshell_states};
 
 /// Sentinel written to a V2 field that GRASP never printed for that record.
 ///

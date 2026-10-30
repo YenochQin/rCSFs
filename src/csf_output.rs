@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 
-use crate::csf_generation::{ResourceBudget, ResourcePermit};
+use crate::configuration_generation::shared_generation::{ResourceBudget, ResourcePermit};
 use crate::descriptor_schema::DescriptorLayout;
 
 /// Maximum rows buffered by either published Parquet writer.
@@ -25,7 +25,7 @@ pub(crate) mod descriptor {
     use parquet::file::writer::SerializedFileWriter;
     use rayon::prelude::*;
 
-    use crate::csf_generation::ResourceBudget;
+    use crate::configuration_generation::shared_generation::ResourceBudget;
     use crate::descriptor_schema::{DescriptorLayout, hash_header_file, output_kv_metadata};
 
     use super::ROW_GROUP_ROWS;

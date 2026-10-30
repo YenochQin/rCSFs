@@ -35,8 +35,8 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 
 使用 Python 3.15 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
 
-本仓库正在准备 **2.0.1**，使用独立的 Python 3.15 `.venv`，详见
-[源码开发说明](docs/development.md)。下方固定版本安装示例需等 2.0.1
+本仓库正在准备 **2.1.0**，使用独立的 Python 3.15 `.venv`，详见
+[源码开发说明](docs/development.md)。下方固定版本安装示例需等 2.1.0
 发布到 PyPI 后使用；推送源码不会自动发布安装包。
 分发包名、Python 导入名和命令行入口都叫 `rcsfs`。
 
@@ -54,7 +54,7 @@ uv run rcsfs --help
 已有 uv 项目使用 Python 3.15 或更新版本时，直接在其目录运行 `uv add rcsfs`。
 该命令会将依赖写入 `pyproject.toml`，更新 `uv.lock`，并安装到项目的 `.venv` 中。
 运行自己的分析脚本时使用 `uv run python analysis.py`，无需手动激活环境。
-需要固定版本时，使用 `uv add "rcsfs==2.0.1"`。
+需要固定版本时，使用 `uv add "rcsfs==2.1.0"`。
 
 也可以手动将依赖加入已有的 `pyproject.toml`：
 
@@ -64,7 +64,7 @@ name = "csf-analysis"
 version = "0.1.0"
 requires-python = ">=3.15"
 dependencies = [
-    "rcsfs==2.0.1",
+    "rcsfs==2.1.0",
 ]
 ```
 
@@ -79,7 +79,7 @@ dependencies = [
 python -m pip install rcsfs
 ```
 
-需要固定版本时，使用 `python -m pip install "rcsfs==2.0.1"`。
+需要固定版本时，使用 `python -m pip install "rcsfs==2.1.0"`。
 两种安装方式提供相同的 Python API 和 `rcsfs` 命令。
 
 发布工作流的目标是 CPython 3.15 wheel，覆盖 Linux x86_64（glibc 2.28+）、
@@ -534,3 +534,14 @@ MIT，详见 [LICENSE](LICENSE)。
 
 构建、平台范围、wheel 验证和手动发布工作流见[发布指南](docs/releasing.md)。
 GRASP 来源说明及其 MIT 许可文本见[第三方声明](licenses/GRASP-MIT.txt)。
+
+## 直接生成 CSFG
+
+`rcsfs csfggenerate --config csfg.toml --threads 8 --json` 可直接用 Rust 生成
+GRASPG 兼容的 `rcsfg.out` 和 `rlabel.out`。首版支持显式标记空间、共同连续相关范围的
+S/SD 模型，不先写出完整 CSF 列表。覆盖已有文件需要显式 `--overwrite`；
+原 `csfsgenerate` 完整 CSF 生成命令保持不变。
+配置示例、Python 接口和限制见 [CSFG 使用说明](docs/CSFG_GENERATION.md)，
+文件兼容性与计时见 [Gd 基准](docs/benchmarks/csfg_gd_20261030.md)。
+
+源码组织见[共享内核与 CSF/CSFG 分层布局](docs/GENERATION_SOURCE_LAYOUT.md)。

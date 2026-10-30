@@ -185,7 +185,7 @@ def _identity(**git: object) -> dict[str, object]:
 
 def test_a_dirty_source_must_be_accepted_explicitly() -> None:
     """A registered report claims a source state someone else can rebuild."""
-    dirty = _identity(dirty=True, dirty_paths=["src/csf_generation/space.rs"])
+    dirty = _identity(dirty=True, dirty_paths=["src/configuration_generation/csf_generation/disk_space_preflight.rs"])
     with pytest.raises(SystemExit, match="source tree is dirty"):
         support.require_clean_source(dirty, allow_dirty=False)
     support.require_clean_source(dirty, allow_dirty=True)
@@ -632,7 +632,7 @@ def test_the_one_pass_tail_published_what_the_two_pass_tail_published(
     # does not fix, so equal or unequal bytes are both legitimate; asserting
     # either direction would turn a layout detail into a contract. Its logical
     # rows are compared where they can be: the live differentials in
-    # `streaming.rs` (both tails, and across thread counts).
+    # `disk_csf_generation_pipeline.rs` (both tails, and across thread counts).
 
 
 @pytest.mark.parametrize("fixture", ["b1", "b2"])

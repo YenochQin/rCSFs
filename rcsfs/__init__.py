@@ -72,6 +72,7 @@ from ._types import (
     ConversionStats,
     CsfBlockInfo,
     CsfDataStats,
+    CsfgBlockStats,
     CsfGenerationEstimate,
     CsfGenerationEstimateBytes,
     CsfGenerationPlanStats,
@@ -79,6 +80,7 @@ from ._types import (
     CsfGenerationResourceStats,
     CsfGenerationStageStats,
     CsfGenerationStats,
+    CsfgGenerationStats,
     CsfHeaderData,
     CsfHeaderInfo,
     CsfRestoreStats,
@@ -96,8 +98,9 @@ from ._types import (
 try:
     __version__ = version("rcsfs")
 except PackageNotFoundError:
-    __version__ = "2.0.1"
+    __version__ = "2.1.0"
 
+from ._csfg import generate_csfgs
 from ._rcsfs import (
     convert_csfs as _convert_csfs,
 )
@@ -738,6 +741,7 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     # Structural interaction selection
     "select_interacting_csfs",
     # CSF generation
+    "generate_csfgs",
     "generate_csfs_from_transcript",
     "generate_disk_outputs_from_transcript",
     "estimate_disk_generation",
@@ -756,6 +760,8 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     "JBlockOutputStats",
     "JBlockSplitStats",
     "CsfGenerationStats",
+    "CsfgBlockStats",
+    "CsfgGenerationStats",
     "CsfGenerationEstimate",
     "CsfGenerationEstimateBytes",
     "CsfGenerationPlanStats",

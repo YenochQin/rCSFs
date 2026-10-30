@@ -140,3 +140,115 @@ def test_cli_rejects_unsupported_or_unsafe_settings(
     assert main(["csfggenerate", "--json"]) == 1
     assert config.read_bytes() == before
     assert not Path("rcsfg.out").exists()
+
+
+@pytest.mark.parametrize("section", ["csfg-split", "csfs-split"])
+def test_layer_batch_matches_direct_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, section: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    mr = (
+        INPUT.replace("[csfggenerate]", "[[csfggenerate]]\nas = 0")
+        .replace('active_space = "3s,3p"', 'active_space = "1s"')
+        .replace("excitations = 2", "excitations = 0")
+    )
+    sd = INPUT.replace("[csfggenerate]", "[[csfggenerate]]\nas = 2")
+    config = tmp_path / "batch.toml"
+    config.write_text(
+        'conf = "model"\n'
+        + mr
+        + sd
+        + f'\n[{section}.active_spaces]\nAS1="2s,2p"\nAS2="3s,3p"\n'
+    )
+    assert main(["-c", str(config)]) == 0
+    assert len(list(tmp_path.glob("model_as*raw.*"))) == 6
+    for number, space, excitations in [(0, "1s", 0), (1, "2s,2p", 2), (2, "3s,3p", 2)]:
+        direct = tmp_path / f"direct{number}"
+        direct.mkdir()
+        generate(direct, active_space=space, excitations=excitations)
+        assert (tmp_path / f"model_as{number}raw.g").read_bytes() == (
+            direct / "rcsfg.out"
+        ).read_bytes()
+        assert (tmp_path / f"model_as{number}raw.l").read_bytes() == (
+            direct / "rlabel.out"
+        ).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        '\n[csfg-split.active_spaces]\nAS1="4s,4p"\n',
+        '\n[csfg-split.active_spaces]\nAS2="2s,2p"\n',
+        '\n[csfg-split.active_spaces]\nAS1="1s"\n',  # valid subset; also tested separately
+    ],
+)
+def test_batch_validation_and_no_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, suffix: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "batch.toml"
+    config.write_text(
+        'conf="model"\n'
+        + INPUT.replace("[csfggenerate]", "[[csfggenerate]]\nas=2")
+        + suffix
+    )
+    if 'AS1="1s"' in suffix:
+        (tmp_path / "model_as1raw.l").write_text("keep")
+    assert main(["csfggenerate", "-c", str(config)]) == 1
+    assert not list(tmp_path.glob("*.g"))
+
+
+def test_invalid_later_model_publishes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "batch.toml"
+    first = INPUT.replace("[csfggenerate]", "[[csfggenerate]]\nas=0")
+    second = first.replace("as=0", "as=1").replace("excitations = 2", "excitations = 3")
+    config.write_text('conf="model"\n' + first + second)
+    assert main(["csfggenerate", "-c", str(config)]) == 1
+    assert not list(tmp_path.glob("*.g"))
+    assert not list(tmp_path.glob("*.l"))
+
+
+def test_batch_json_overwrite_and_source_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "batch.toml"
+    config.write_text(
+        'conf="model"\n'
+        + INPUT.replace("[csfggenerate]", "[[csfggenerate]]\nas=2")
+        + '\n[csfg-split]\nsource_as=2\n[csfg-split.active_spaces]\nAS1="2s,2p"\n'
+    )
+    args = ["csfggenerate", "-c", str(config), "--json"]
+    assert main(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["success"] and len(report["results"]) == 2
+    assert main(args) == 1
+    _ = capsys.readouterr()
+    assert main([*args, "--overwrite"]) == 0
+    assert json.loads(capsys.readouterr().out)["success"]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        '[csfg-split]\nsource_as=3\n[csfg-split.active_spaces]\nAS1="2s,2p"',
+        '[csfg-split.active_spaces]\nAS1="2s,2p"\n[csfs-split.active_spaces]\nAS1="2s,2p"',
+        '[csfg-split.active_spaces]\nAS01="2s,2p"',
+    ],
+)
+def test_bad_batch_plans_leave_no_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = tmp_path / "batch.toml"
+    config.write_text(
+        'conf="model"\n'
+        + INPUT.replace("[csfggenerate]", "[[csfggenerate]]\nas=2")
+        + "\n"
+        + extra
+    )
+    assert main(["csfggenerate", "-c", str(config)]) == 1
+    assert not list(tmp_path.glob("*.g"))

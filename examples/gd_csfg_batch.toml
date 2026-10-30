@@ -1,0 +1,27 @@
+conf = "o1_vv1"
+
+[[csfggenerate]]
+as = 0
+inactive_core = 4
+reference_configuration = ["4d(10,c)5s(2,i)5p(6,i)6s(2,i)4f(7,*)5d(1,*)"]
+labeling_space = "6s,5p,5d,4f"
+active_space = "6s,5p,5d,4f"
+j_min = 2
+j_max = 12
+excitations = 0
+
+[[csfggenerate]]
+as = 4
+inactive_core = 4
+reference_configuration = ["4d(10,c)5s(2,i)5p(6,i)6s(2,i)4f(7,*)5d(1,*)"]
+labeling_space = "6s,5p,5d,4f"
+active_space = "10s,9p,9d,8f,8g"
+j_min = 2
+j_max = 12
+excitations = 2
+
+[csfg-split.active_spaces]
+AS1="7s,6p,6d,5f,5g"
+AS2="8s,7p,7d,6f,6g"
+AS3="9s,8p,8d,7f,7g"
+AS4="10s,9p,9d,8f,8g"

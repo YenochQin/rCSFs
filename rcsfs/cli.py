@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 import tempfile
+import tomllib
 from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
@@ -1621,9 +1622,14 @@ def _run_init_config(command: str) -> int:
 
 def _run_config_file(path: Path, parser: argparse.ArgumentParser) -> int:
     try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        if "csfggenerate" in data:
+            from ._csfg_cli import run
+
+            return run(path, None, False, False)
         commands = configured_commands(path)
         log_path, config_contents = configured_run_log(path)
-    except (TypeError, ValueError) as exc:
+    except (OSError, TypeError, ValueError) as exc:
         parser.error(str(exc))
     steps = [
         (

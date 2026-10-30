@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-30
+
+本次为源码版本提交，尚未发布 2.1.1。
+
+- CSFG 支持共享 `conf`、编号 `[[csfggenerate]]` 和 `[csfg-split.active_spaces]`，通过 Rust 直接生成完整分层 `.g/.l`；兼容 `csfs-split` 配置别名，提供输出冲突预检和全批次暂存。
+
 ## [2.1.0] - 2026-10-30
 
 新增直接 CSFG 生成与源码分层；本次为源码版本提交，尚未发布 PyPI/GitHub Release。

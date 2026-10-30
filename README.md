@@ -34,9 +34,9 @@ It helps you:
 
 Install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.15 or newer.
 
-This checkout prepares version **2.1.0** and uses its own Python 3.15 `.venv`;
+This checkout prepares version **2.1.1** and uses its own Python 3.15 `.venv`;
 see [source development](docs/development.md). The pinned installation examples
-below apply once 2.1.0 has been published to PyPI; pushing the source does not
+below apply once 2.1.1 has been published to PyPI; pushing the source does not
 publish a package.
 The distribution name, Python import name and command-line entry point are all
 `rcsfs`.
@@ -57,7 +57,7 @@ For an existing uv project using Python 3.15 or newer, run `uv add rcsfs` in its
 directory. This records the dependency in `pyproject.toml`, updates `uv.lock`,
 and installs it in the project's `.venv`. Run your own script with
 `uv run python analysis.py`; manual environment activation is not required.
-To pin a particular release, use `uv add "rcsfs==2.1.0"`.
+To pin a particular release, use `uv add "rcsfs==2.1.1"`.
 
 You can also add the dependency to an existing `pyproject.toml` manually:
 
@@ -67,7 +67,7 @@ name = "csf-analysis"
 version = "0.1.0"
 requires-python = ">=3.15"
 dependencies = [
-    "rcsfs==2.1.0",
+    "rcsfs==2.1.1",
 ]
 ```
 
@@ -83,7 +83,7 @@ To install into an existing Python environment:
 python -m pip install rcsfs
 ```
 
-For a fixed release, use `python -m pip install "rcsfs==2.1.0"`.
+For a fixed release, use `python -m pip install "rcsfs==2.1.1"`.
 Both installation methods provide the same Python API and `rcsfs` command.
 
 The release workflow targets CPython 3.15 wheels for Linux x86_64

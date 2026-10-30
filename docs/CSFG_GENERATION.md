@@ -1,6 +1,6 @@
 # Direct GRASPG-compatible CSFG generation
 
-Status: first implementation, 2026-10-30. This is an unreleased local change.
+Direct generation is available in 2.1.0. Batch/layer configuration described below is added in 2.1.1.
 It generates CSFG files directly in Rust; it does not invoke GRASPG or write a
 full CSF list as an intermediate. See the [design record](CSFG_GENERATION_PLAN.md)
 for the upstream contract and the deferred features. The
@@ -13,10 +13,9 @@ under `src/configuration_generation/` with one shared generation kernel.
 rcsfs csfggenerate --config csfg.toml --threads 8 --json
 ```
 
-The command reads one `[csfggenerate]` table. With `-c` and no filename, or no
+The command reads one `[csfggenerate]` table or numbered `[[csfggenerate]]` batches. With `-c` and no filename, or no
 config argument, it reads `rcsfs.toml`. Relative output paths are relative to the
-invocation directory. Run it in the desired calculation directory. This first
-version does not participate in the top-level multi-command batch runner.
+invocation directory. Run it in the desired calculation directory. CSFG-only configurations also support `rcsfs -c csfg.toml`. Mixing CSFG with other command families is not supported.
 
 The Gd I model used for validation:
 
@@ -42,9 +41,43 @@ without changing the physical model.
 The output names default to `rcsfg.out` and `rlabel.out`. Optional table keys
 are `threads` and `overwrite`. CLI `--threads` overrides the table value;
 `--overwrite` explicitly allows replacing both completed outputs. Existing
-files are otherwise refused. Unknown keys, `as/conf`, lists, descriptors,
+files are otherwise refused. Unknown keys, multi-list physical models, descriptors,
 Parquet, storage modes and memory-budget options are not accepted by this
 first-version command. The existing `csfsgenerate` command is unchanged.
+
+
+## Batch generation and active-space layers
+
+Use a shared `conf`, `as` on each `[[csfggenerate]]`, and an explicit
+`labeling_space` on every model. Numbered outputs are `{conf}_as{as}raw.g`
+and `{conf}_as{as}raw.l`; they cannot also specify individual output paths.
+AS0 can use zero excitations while the largest model uses SD.
+
+Append, for example:
+
+```toml
+[csfg-split.active_spaces]
+AS1 = "7s,6p,6d,5f,5g"
+AS2 = "8s,7p,7d,6f,6g"
+AS3 = "9s,8p,8d,7f,7g"
+AS4 = "10s,9p,9d,8f,8g"
+```
+
+`[csfs-split.active_spaces]` is accepted as an alias in a CSFG-only config;
+do not use both names. Layers inherit the highest numbered model, or the
+model selected by `source_as` in `[csfg-split]`. Each layer is generated
+directly by the Rust CSFG generator, not filtered from ordinary CSFs or
+read back from a `.g` file. Outputs contain complete spaces, not increments.
+A repeated layer identical to an explicit model (e.g. AS4) runs once;
+conflicting models or layers extending beyond the source space fail.
+
+Run `rcsfs csfggenerate -c csfg.toml --threads 8 --json` or `rcsfs -c csfg.toml`.
+Batch JSON contains `success` and a `results` list; single-model JSON is unchanged.
+All outputs are staged before publication, so a bad later model leaves no final
+files. Publication remains atomic per file, not across the whole batch.
+Existing files require explicit overwrite permission. Relative paths are
+relative to the invocation directory. The complete Gd example is in
+[examples/gd_csfg_batch.toml](../examples/gd_csfg_batch.toml).
 
 ## Python
 

@@ -126,7 +126,7 @@ pub(crate) mod descriptor {
                 .zip(fields.into_par_iter())
                 .zip(group.columns().to_vec().into_par_iter())
                 .map(|((mut column_writer, field), column)| {
-                    let mut leaves = compute_leaves(&field, &column)?;
+                    let mut leaves = compute_leaves(field, &column)?;
                     anyhow::ensure!(
                         leaves.len() == 1,
                         "descriptor Int32 column unexpectedly has {} leaves",

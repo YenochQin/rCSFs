@@ -257,7 +257,7 @@ pub fn split_csfs_by_active_spaces(
     }
 
     let reader_file = File::open(input_parquet)?;
-    let mut reader = ParquetRecordBatchReaderBuilder::try_new(reader_file)?
+    let reader = ParquetRecordBatchReaderBuilder::try_new(reader_file)?
         .with_batch_size(BATCH_ROWS)
         .build()?;
     let mut pending = Vec::with_capacity(targets.len());
@@ -289,7 +289,7 @@ pub fn split_csfs_by_active_spaces(
     let mut consumed = 0usize;
     let mut position = 0usize;
     let mut selected = vec![false; pending.len()];
-    while let Some(batch) = reader.next() {
+    for batch in reader {
         let batch = batch?;
         ensure!(
             batch.num_columns() == 4,

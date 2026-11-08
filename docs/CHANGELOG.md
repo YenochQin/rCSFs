@@ -6,6 +6,7 @@
 
 ## [Unreleased]
 
+- 清理 Rust 核心的 11 条 Clippy 警告及 Python 绑定的一处冗余闭包：简化等价写法，以具名结构体表达多列表准备结果，并保留跨平台磁盘空间转换与乘法的溢出检查。
 - 实现可独立安装的 Rust 原生 `rcsfs` CLI：使用 `--no-default-features --features cli` 构建，无需 Python 运行时；保留 Python 库和原有 Python CLI。
 - 原生版接入生成、CSFG 分层、描述符、恢复、zero-first、活动空间/J 分割和相互作用上界筛选，新增 `convert`、`info` 和转录文件入口；支持 TOML 参数覆盖、批处理、配置模板、JSON 输出及批处理结果日志。
 - 共享描述符恢复和 Parquet 元数据实现，隔离 PyO3 绑定；转换和划分的进度输出统一到 stderr，避免污染 CLI JSON。

@@ -424,7 +424,7 @@ fn split_csfs_by_j(
                 overwrite,
             )
         })
-        .map_err(|error| split_error(error))?;
+        .map_err(split_error)?;
 
     let result = PyDict::new(py);
     result.set_item("success", true)?;

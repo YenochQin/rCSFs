@@ -648,10 +648,18 @@ fn merge_plan_into(merged: &mut GenerationPlan, mut next: GenerationPlan) -> Res
     Ok(())
 }
 
+struct PreparedLists {
+    peel: Vec<Subshell>,
+    core: Vec<Subshell>,
+    plan: GenerationPlan,
+    enumeration_millis: u128,
+    planning_millis: u128,
+}
+
 fn prepare_multiple_lists(
     requests: &[ExcitationRequest],
     options: &GenerationOptions,
-) -> Result<(Vec<Subshell>, Vec<Subshell>, GenerationPlan, u128, u128)> {
+) -> Result<PreparedLists> {
     ensure!(
         !requests.is_empty(),
         "at least one generation list is required"
@@ -721,13 +729,13 @@ fn prepare_multiple_lists(
         !peel.is_empty(),
         "no occupied Peel subshells were enumerated"
     );
-    Ok((
+    Ok(PreparedLists {
         peel,
-        core.unwrap(),
-        merge_plans(plans)?,
+        core: core.unwrap(),
+        plan: merge_plans(plans)?,
         enumeration_millis,
         planning_millis,
-    ))
+    })
 }
 
 /// Where a run will put its data, for the pre-flight's space checks.
@@ -831,8 +839,13 @@ pub(crate) fn estimate_disk_generation_from_transcripts_with_layout(
     let mut options = supplied_options.clone();
     options.deduplication = DeduplicationStrategy::Exact;
     options.validate()?;
-    let (peel, _core, plan, enumeration_millis, planning_millis) =
-        prepare_multiple_lists(&requests, &options)?;
+    let PreparedLists {
+        peel,
+        plan,
+        enumeration_millis,
+        planning_millis,
+        ..
+    } = prepare_multiple_lists(&requests, &options)?;
     let targets = requests
         .iter()
         .map(request_targets)
@@ -934,7 +947,12 @@ fn generate_multiple_list_segments(
     options: &GenerationOptions,
     preflight: impl FnOnce(&CapacityEstimate) -> Result<()>,
 ) -> Result<SegmentGeneration> {
-    let (peel, core, estimated_plan, _, _) = prepare_multiple_lists(requests, options)?;
+    let PreparedLists {
+        peel,
+        core,
+        plan: estimated_plan,
+        ..
+    } = prepare_multiple_lists(requests, options)?;
     let targets = requests
         .iter()
         .map(request_targets)
@@ -1876,12 +1894,8 @@ impl BucketReader {
             .expect("bucket hash field has fixed width");
         row.clear();
         row.try_reserve(self.row_len)?;
-        for bytes in self.record_buffer[24..].chunks_exact(4) {
-            row.push(i32::from_le_bytes(
-                bytes
-                    .try_into()
-                    .expect("bucket integer field has fixed width"),
-            ));
+        for bytes in self.record_buffer[24..].as_chunks::<4>().0 {
+            row.push(i32::from_le_bytes(*bytes));
         }
         self.remaining -= 1;
         Ok(Some((u64::from_le_bytes(ordinal_bytes), hash)))

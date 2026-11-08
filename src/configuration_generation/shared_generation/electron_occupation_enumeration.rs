@@ -421,11 +421,7 @@ impl EnumerationCharge {
                     .context("occupation capacity byte count overflow")?,
             )
             .and_then(|total| {
-                total.checked_add(
-                    key_capacity
-                        .checked_mul(size_of::<(u8, u8, u8)>())
-                        .unwrap_or(usize::MAX),
-                )
+                total.checked_add(key_capacity.saturating_mul(size_of::<(u8, u8, u8)>()))
             })
             .and_then(|total| total.checked_add(32))
             .context("occupation configuration byte count overflow")?;

@@ -252,10 +252,9 @@ pub(crate) fn estimate_capacity(
         .context("staged output size estimate overflow")?;
 
     let assumptions = vec![
-        format!(
-            "record counts are pre-de-duplication: no record is assumed to be removed \
-             (B1/B2 removed none, and a removing input only lowers the published sizes)"
-        ),
+        "record counts are pre-de-duplication: no record is assumed to be removed \
+         (B1/B2 removed none, and a removing input only lowers the published sizes)"
+            .to_owned(),
         match strategy {
             DeduplicationStrategy::VerifiedUnique => {
                 "de-duplication is the verified path: the generator cannot repeat a row, so \
@@ -292,10 +291,9 @@ pub(crate) fn estimate_capacity(
              {CSF_PARQUET_BYTES_PER_RECORD} bytes/record; measured 320.05/27.51 and 300.77/72.60, \
              rounded up"
         ),
-        format!(
-            "publishing copies the staged set to its destinations, so the staged set and the \
-             published files exist at the same time"
-        ),
+        "publishing copies the staged set to its destinations, so the staged set and the \
+         published files exist at the same time"
+            .to_owned(),
         format!("safety margin {MARGIN_NUMERATOR}/{MARGIN_DENOMINATOR} on every requirement"),
         "free space is checked with statvfs where the platform provides it; elsewhere it is \
          reported as unchecked rather than assumed sufficient"

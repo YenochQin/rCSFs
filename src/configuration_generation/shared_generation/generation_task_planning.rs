@@ -678,7 +678,7 @@ fn push_prefix_task(
 }
 
 /// Run `work` on a private pool when the caller pinned the thread count.
-pub(crate) fn run_parallel<T: Send>(
+pub(crate) fn run_parallel<T>(
     threads: Option<usize>,
     work: impl FnOnce() -> Result<T> + Send,
 ) -> Result<T>

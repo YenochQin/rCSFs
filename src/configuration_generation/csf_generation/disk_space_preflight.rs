@@ -27,9 +27,17 @@ pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
     }
     // SAFETY: the successful statvfs call initialized `stats`.
     let stats = unsafe { stats.assume_init() };
-    u64::try_from(stats.f_bavail)
+    checked_block_bytes(stats.f_bavail, stats.f_frsize)
+}
+
+/// `statvfs` field widths differ by platform; convert before multiplying so
+/// narrow counters do not overflow and invalid or unrepresentable values fail.
+#[cfg(any(unix, test))]
+fn checked_block_bytes(blocks: impl TryInto<u64>, block_size: impl TryInto<u64>) -> Option<u64> {
+    blocks
+        .try_into()
         .ok()?
-        .checked_mul(u64::try_from(stats.f_frsize).ok()?)
+        .checked_mul(block_size.try_into().ok()?)
 }
 
 #[cfg(not(unix))]
@@ -278,6 +286,20 @@ mod tests {
     use crate::configuration_generation::csf_generation::csf_output_capacity_estimation::with_margin;
     use crate::configuration_generation::shared_generation::DeduplicationStrategy;
 
+    #[test]
+    fn free_byte_arithmetic_handles_platform_widths_and_rejects_overflow() {
+        assert_eq!(
+            checked_block_bytes(u32::MAX, 4096_u32),
+            Some(u64::from(u32::MAX) * 4096)
+        );
+        assert_eq!(checked_block_bytes(7_u32, 4096_u64), Some(28_672));
+        assert_eq!(checked_block_bytes(u64::MAX, 1_u32), Some(u64::MAX));
+        assert_eq!(checked_block_bytes(0_u32, u64::MAX), Some(0));
+        assert_eq!(checked_block_bytes(u64::MAX, 2_u32), None);
+        assert_eq!(checked_block_bytes(-1_i64, 4096_u64), None);
+        assert_eq!(checked_block_bytes(1_u32, -1_i64), None);
+        assert_eq!(checked_block_bytes(u128::MAX, 1_u32), None);
+    }
     /// Scratch and staging compete for the same volume, so their requirements
     /// add up. Checking them separately would let two half-sized checks pass on
     /// a volume that cannot hold both.

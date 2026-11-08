@@ -271,12 +271,12 @@ impl ResourceBudget {
             let next = current
                 .checked_add(bytes)
                 .ok_or_else(|| anyhow::anyhow!("managed memory accounting overflow"))?;
-            if let Some(limit) = self.state.limit_bytes {
-                if next > limit {
-                    bail!(
-                        "memory budget exceeded while reserving {label}: requested {bytes} bytes, managed total would be {next} bytes, budget is {limit} bytes"
-                    );
-                }
+            if let Some(limit) = self.state.limit_bytes
+                && next > limit
+            {
+                bail!(
+                    "memory budget exceeded while reserving {label}: requested {bytes} bytes, managed total would be {next} bytes, budget is {limit} bytes"
+                );
             }
             match self.state.current_bytes.compare_exchange_weak(
                 current,

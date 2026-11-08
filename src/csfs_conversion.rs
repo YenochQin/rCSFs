@@ -129,7 +129,7 @@ fn extract_header_lines(
             }
             Some(Err(e)) => return Err(e.into()),
             None => {
-                println!("警告: 文件少于 {} 行 Header", CSF_HEADER_LINE_COUNT);
+                eprintln!("警告: 文件少于 {} 行 Header", CSF_HEADER_LINE_COUNT);
                 break;
             }
         }
@@ -274,7 +274,7 @@ pub fn convert_csfs_to_parquet_parallel(
 
     let thread_pool = match num_workers {
         Some(n) => {
-            println!("配置 Rayon 线程池，使用 {} 个 worker", n);
+            eprintln!("配置 Rayon 线程池，使用 {} 个 worker", n);
             Some(
                 rayon::ThreadPoolBuilder::new()
                     .num_threads(n)
@@ -285,11 +285,11 @@ pub fn convert_csfs_to_parquet_parallel(
         None => None,
     };
 
-    println!("开始并行转换 CSF 文件");
-    println!("输入文件: {:?}", csfs_path);
-    println!("输出文件: {:?}", output_path);
-    println!("最大行长度: {}", max_line_len);
-    println!("批处理大小: {}", chunk_size);
+    eprintln!("开始并行转换 CSF 文件");
+    eprintln!("输入文件: {:?}", csfs_path);
+    eprintln!("输出文件: {:?}", output_path);
+    eprintln!("最大行长度: {}", max_line_len);
+    eprintln!("批处理大小: {}", chunk_size);
 
     // --- 1. 读取 Header (5行) ---
     let headers = extract_header_lines(csfs_path)?;
@@ -309,7 +309,7 @@ pub fn convert_csfs_to_parquet_parallel(
         .build();
     let writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
     let mut writer_guard = ParquetFileGuard::new(writer, output_path);
-    println!("Parquet 写入器已创建，使用无压缩");
+    eprintln!("Parquet 写入器已创建，使用无压缩");
 
     // --- 3. 流式读取 + 批量并行处理 ---
     let input_file = File::open(csfs_path)?;
@@ -329,7 +329,7 @@ pub fn convert_csfs_to_parquet_parallel(
     let mut truncated_count = 0;
     let mut block_tracker = BlockTracker::new();
 
-    println!("开始并行处理 CSF 数据...");
+    eprintln!("开始并行处理 CSF 数据...");
 
     loop {
         let pending_lines_before_read = batch_lines.len();
@@ -467,12 +467,12 @@ pub fn convert_csfs_to_parquet_parallel(
     };
     let block_info = block_tracker.into_block_info();
 
-    println!("\n并行转换完成！");
-    println!("CSF 数据行数: {}", total_lines);
-    println!("CSF 数量: {}", csf_count);
-    println!("截断行数: {}", truncated_count);
+    eprintln!("\n并行转换完成！");
+    eprintln!("CSF 数据行数: {}", total_lines);
+    eprintln!("CSF 数量: {}", csf_count);
+    eprintln!("截断行数: {}", truncated_count);
     if truncated_count > 0 {
-        println!(
+        eprintln!(
             "警告: {} 行被截断，考虑增加 max_line_len 参数",
             truncated_count
         );
@@ -497,7 +497,7 @@ pub fn convert_csfs_to_parquet_parallel(
     let toml_string = toml::to_string_pretty(&header_data)?;
     std::fs::write(&header_path, toml_string)?;
 
-    println!("Header 文件: {:?}", header_path);
+    eprintln!("Header 文件: {:?}", header_path);
 
     Ok(final_stats)
 }
@@ -540,9 +540,9 @@ pub fn convert_csfs_to_parquet(
     max_line_len: usize,
     chunk_size: usize,
 ) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
-    println!("开始转换，最大行长度: {}", max_line_len);
-    println!("输入文件: {:?}", csfs_path);
-    println!("输出文件: {:?}", output_path);
+    eprintln!("开始转换，最大行长度: {}", max_line_len);
+    eprintln!("输入文件: {:?}", csfs_path);
+    eprintln!("输出文件: {:?}", output_path);
 
     // 打开输入文件
     let input_file = File::open(csfs_path)?;
@@ -576,7 +576,7 @@ pub fn convert_csfs_to_parquet(
 
     let writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
     let mut writer_guard = ParquetFileGuard::new(writer, output_path);
-    println!("Parquet 写入器已创建，使用无压缩");
+    eprintln!("Parquet 写入器已创建，使用无压缩");
 
     // --- 4. 批量处理 ---
     let mut batch_lines = Vec::with_capacity(chunk_size);
@@ -585,7 +585,7 @@ pub fn convert_csfs_to_parquet(
     let mut truncated_count = 0;
     let mut block_tracker = BlockTracker::new();
 
-    println!("开始处理 CSF 数据...");
+    eprintln!("开始处理 CSF 数据...");
 
     loop {
         let mut hit_eof = false;
@@ -610,7 +610,7 @@ pub fn convert_csfs_to_parquet(
                         truncated_count += 1;
                         if truncated_count <= 5 {
                             // 只打印前5个截断警告
-                            println!(
+                            eprintln!(
                                 "警告: 第 {} 条 CSF 数据行被截断 ({} > {})",
                                 total_lines,
                                 line.len(),
@@ -688,7 +688,7 @@ pub fn convert_csfs_to_parquet(
 
         csf_count += num_full_csfs;
         if csf_count % 100000 == 0 {
-            println!("已处理 {} 个 CSF", csf_count);
+            eprintln!("已处理 {} 个 CSF", csf_count);
         }
     }
 
@@ -720,46 +720,71 @@ pub fn convert_csfs_to_parquet(
     std::fs::write(&header_path, toml_string)?;
 
     // 统计信息
-    println!("\n转换完成！");
-    println!("================ 统计信息 ================");
-    println!("CSF 数据行数: {}", total_lines);
-    println!("CSF 数量: {}", csf_count);
-    println!("截断行数: {}", truncated_count);
+    eprintln!("\n转换完成！");
+    eprintln!("================ 统计信息 ================");
+    eprintln!("CSF 数据行数: {}", total_lines);
+    eprintln!("CSF 数量: {}", csf_count);
+    eprintln!("截断行数: {}", truncated_count);
     if truncated_count > 0 {
-        println!(
+        eprintln!(
             "警告: {} 行被截断，考虑增加 max_line_len 参数",
             truncated_count
         );
     }
-    println!("输出文件: {:?}", output_path);
-    println!("Header 文件: {:?}", header_path);
-    println!("==========================================");
+    eprintln!("输出文件: {:?}", output_path);
+    eprintln!("Header 文件: {:?}", header_path);
+    eprintln!("==========================================");
 
     Ok(header_data.conversion_stats)
 }
 
-/// Get Parquet file metadata without reading the actual data.
-///
-/// This function efficiently retrieves file information and metadata
-/// without loading the entire file into memory.
-///
-/// # Arguments
-///
-/// * `parquet_path` - Path to the Parquet file
-///
-/// # Returns
-///
-/// Returns a Python dictionary containing:
-/// * `file_path` - Path to the Parquet file
-/// * `file_size` - File size in bytes
-/// * `num_rows` - Number of rows in the file
-/// * `num_columns` - Number of columns
-/// * `compression` - Compression method used for the first column chunk (e.g., "ZSTD")
-/// * `created_by` - Writer identifier stored in parquet metadata
-///
-/// # Errors
-///
-/// Returns an error if the file cannot be opened or is not a valid Parquet file.
+/// Runtime-independent Parquet metadata shared by Python and the native CLI.
+#[derive(Debug, Serialize)]
+pub struct ParquetInfo {
+    pub file_path: String,
+    pub file_size: u64,
+    pub num_rows: i64,
+    pub num_columns: usize,
+    pub compression: String,
+    pub created_by: String,
+    pub key_value_metadata: std::collections::BTreeMap<String, Option<String>>,
+}
+
+/// Read metadata without loading the Parquet rows.
+pub fn read_parquet_info(
+    parquet_path: &Path,
+) -> Result<ParquetInfo, Box<dyn std::error::Error + Send + Sync>> {
+    let file_size = std::fs::metadata(parquet_path)?.len();
+    let reader = SerializedFileReader::new(File::open(parquet_path)?)?;
+    let metadata = reader.metadata();
+    Ok(ParquetInfo {
+        file_path: parquet_path.to_string_lossy().into_owned(),
+        file_size,
+        num_rows: metadata.file_metadata().num_rows(),
+        num_columns: metadata.file_metadata().schema().get_fields().len(),
+        compression: metadata
+            .row_groups()
+            .first()
+            .and_then(|r| r.columns().first())
+            .map(|column| format!("{:?}", column.compression()))
+            .unwrap_or_else(|| "Unknown".into()),
+        created_by: metadata
+            .file_metadata()
+            .created_by()
+            .unwrap_or("Unknown")
+            .into(),
+        key_value_metadata: metadata
+            .file_metadata()
+            .key_value_metadata()
+            .into_iter()
+            .flatten()
+            .map(|entry| (entry.key.clone(), entry.value.clone()))
+            .collect(),
+    })
+}
+
+/// Compatibility adapter for existing Python-enabled Rust callers.
+#[cfg(feature = "python")]
 pub fn get_parquet_metadata(
     parquet_path: &Path,
 ) -> Result<pyo3::Py<pyo3::PyAny>, Box<dyn std::error::Error + Send + Sync>> {
@@ -767,48 +792,16 @@ pub fn get_parquet_metadata(
         Python,
         types::{PyDict, PyDictMethods},
     };
-
-    // 获取文件大小
-    let file_metadata = std::fs::metadata(parquet_path)?;
-    let file_size = file_metadata.len();
-
-    // 打开 Parquet 文件
-    let file = File::open(parquet_path)?;
-    let reader = SerializedFileReader::new(file)?;
-    let metadata = reader.metadata();
-
-    // 获取行数和列数
-    let num_rows = metadata.file_metadata().num_rows();
-    let schema = metadata.file_metadata().schema();
-    let num_columns = schema.get_fields().len();
-
-    let compression = metadata
-        .row_groups()
-        .first()
-        .and_then(|row_group| row_group.columns().first())
-        .map(|column| format!("{:?}", column.compression()))
-        .unwrap_or_else(|| "Unknown".to_string());
-    let created_by = metadata.file_metadata().created_by().unwrap_or("Unknown");
-    let key_value_metadata = metadata.file_metadata().key_value_metadata();
-
-    // 创建 Python 字典并返回
+    let info = read_parquet_info(parquet_path)?;
     Python::attach(|py| {
         let dict = PyDict::new(py);
-        dict.set_item("file_path", parquet_path.to_string_lossy().as_ref())?;
-        dict.set_item("file_size", file_size)?;
-        dict.set_item("num_rows", num_rows)?;
-        dict.set_item("num_columns", num_columns)?;
-        dict.set_item("compression", compression)?;
-        dict.set_item("created_by", created_by)?;
-
-        let kv_dict = PyDict::new(py);
-        if let Some(entries) = key_value_metadata {
-            for entry in entries {
-                kv_dict.set_item(&entry.key, entry.value.as_deref())?;
-            }
-        }
-        dict.set_item("key_value_metadata", kv_dict)?;
-
+        dict.set_item("file_path", info.file_path)?;
+        dict.set_item("file_size", info.file_size)?;
+        dict.set_item("num_rows", info.num_rows)?;
+        dict.set_item("num_columns", info.num_columns)?;
+        dict.set_item("compression", info.compression)?;
+        dict.set_item("created_by", info.created_by)?;
+        dict.set_item("key_value_metadata", info.key_value_metadata)?;
         Ok(dict.into())
     })
 }

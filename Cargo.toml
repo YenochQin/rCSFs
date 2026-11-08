@@ -27,6 +27,7 @@ include = [
 [features]
 default = ["python"]
 python = ["dep:pyo3", "dep:pyo3-arrow"]
+cli = ["dep:clap", "dep:serde_json", "dep:tempfile", "toml/preserve_order"]
 
 [dependencies]
 arrow = "59.0.0"
@@ -42,6 +43,14 @@ anyhow = "1.0.100"
 libc = "0.2"
 rayon = "1.10"
 sha2 = "0.10"
+clap = { version = "4.5", optional = true }
+serde_json = { version = "1.0", optional = true }
+tempfile = { version = "3", optional = true }
+
+[[bin]]
+name = "rcsfs"
+path = "src/bin/rcsfs.rs"
+required-features = ["cli"]
 
 [lib]
 name = "_rcsfs"

@@ -39,6 +39,7 @@ pub(crate) fn free_bytes(_path: &Path) -> Option<u64> {
 
 /// What a single volume's requirement found.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "cli", derive(serde::Serialize))]
 pub(crate) struct SpaceCheck {
     pub(crate) path: String,
     /// The largest simultaneous requirement any phase places on this volume.

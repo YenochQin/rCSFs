@@ -1612,119 +1612,118 @@ fn py_restore_csfs_from_descriptors(
     output: String,
     indices: Option<Vec<u64>>,
 ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+    use pyo3::types::PyDict;
+    let (record_count, output_bytes) = py
+        .detach(|| {
+            restore_csfs_from_descriptors(
+                Path::new(&descriptor_parquet),
+                Path::new(&header_path),
+                Path::new(&output),
+                indices.as_deref(),
+            )
+        })
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let dict = PyDict::new(py);
+    dict.set_item("success", true)?;
+    dict.set_item("output_file", output)?;
+    dict.set_item("record_count", record_count)?;
+    dict.set_item("output_bytes", output_bytes)?;
+    Ok(dict.into())
+}
+
+/// Restore all rows or an ordered index selection using the same V2 checks.
+pub fn restore_csfs_from_descriptors(
+    descriptor_path: &Path,
+    header_path_buf: &Path,
+    output_path: &Path,
+    indices: Option<&[u64]>,
+) -> Result<(usize, u64)> {
     use crate::atomic_output::{
         create_temporary_output, ensure_output_does_not_alias_input, publish_temporary_output,
     };
     use crate::descriptor_v2::restore_file;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    use pyo3::types::PyDict;
-    use std::path::Path;
 
-    let descriptor_path = Path::new(&descriptor_parquet).to_path_buf();
-    let header_path_buf = Path::new(&header_path).to_path_buf();
-    let output_path = Path::new(&output).to_path_buf();
+    if indices.is_none() {
+        return restore_v2_descriptor_parquet_stream(descriptor_path, header_path_buf, output_path);
+    }
+    ensure_output_does_not_alias_input(output_path, descriptor_path, "descriptor")?;
+    ensure_output_does_not_alias_input(output_path, header_path_buf, "header")?;
 
-    let stats = py
-        .detach(|| -> anyhow::Result<(usize, u64)> {
-            if indices.is_none() {
-                return restore_v2_descriptor_parquet_stream(
-                    &descriptor_path,
-                    &header_path_buf,
-                    &output_path,
-                );
-            }
-            ensure_output_does_not_alias_input(&output_path, &descriptor_path, "descriptor")?;
-            ensure_output_does_not_alias_input(&output_path, &header_path_buf, "header")?;
+    let expected_hash = crate::descriptor_schema::hash_header_file(header_path_buf)?;
+    let file = std::fs::File::open(descriptor_path)
+        .with_context(|| format!("failed to open {}", descriptor_path.display()))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .with_context(|| "failed to create parquet reader")?;
+    let metadata = builder.metadata().file_metadata().clone();
+    let kv = metadata
+        .key_value_metadata()
+        .context("descriptor file has no key-value metadata; cannot verify version")?;
+    let get = |key: &str| {
+        kv.iter()
+            .find(|entry| entry.key == key)
+            .and_then(|entry| entry.value.clone())
+    };
+    let version_tag: u8 = get("descriptor_version")
+        .context("descriptor file is missing descriptor_version metadata")?
+        .parse()
+        .context("descriptor_version metadata is not a valid integer")?;
+    let version = DescriptorVersion::from_tag(version_tag)?;
+    ensure!(
+        version == DescriptorVersion::V2,
+        "restoration only supports V2 descriptor files"
+    );
+    let subshell_count: usize = get("subshell_count")
+        .context("descriptor file is missing subshell_count metadata")?
+        .parse()
+        .context("subshell_count metadata is not a valid integer")?;
+    if let Some(stored_hash) = get("source_header_sha256") {
+        ensure!(
+            stored_hash == expected_hash,
+            "header file does not match the hash recorded in the descriptor file"
+        );
+    }
 
-            let expected_hash = crate::descriptor_schema::hash_header_file(&header_path_buf)?;
-            let file = std::fs::File::open(&descriptor_path)
-                .with_context(|| format!("failed to open {}", descriptor_path.display()))?;
-            let builder = ParquetRecordBatchReaderBuilder::try_new(file)
-                .with_context(|| "failed to create parquet reader")?;
-            let metadata = builder.metadata().file_metadata().clone();
-            let kv = metadata
-                .key_value_metadata()
-                .context("descriptor file has no key-value metadata; cannot verify version")?;
-            let get = |key: &str| {
-                kv.iter()
-                    .find(|entry| entry.key == key)
-                    .and_then(|entry| entry.value.clone())
-            };
-            let version_tag: u8 = get("descriptor_version")
-                .context("descriptor file is missing descriptor_version metadata")?
-                .parse()
-                .context("descriptor_version metadata is not a valid integer")?;
-            let version = DescriptorVersion::from_tag(version_tag)?;
-            ensure!(
-                version == DescriptorVersion::V2,
-                "py_restore_csfs_from_descriptors only supports V2 descriptor files"
-            );
-            let subshell_count: usize = get("subshell_count")
-                .context("descriptor file is missing subshell_count metadata")?
-                .parse()
-                .context("subshell_count metadata is not a valid integer")?;
-            if let Some(stored_hash) = get("source_header_sha256") {
-                ensure!(
-                    stored_hash == expected_hash,
-                    "header file does not match the hash recorded in the descriptor file"
-                );
-            }
-
-            let layout = DescriptorLayout::new(version, subshell_count);
-            let mut reader = builder
-                .build()
-                .with_context(|| "failed to build parquet reader")?;
-            let mut rows: Vec<Vec<i32>> = Vec::new();
-            loop {
-                match reader.next() {
-                    Some(Ok(batch)) => {
-                        use arrow::array::{Array, Int32Array};
-                        let columns: Vec<&Int32Array> = (0..batch.num_columns())
-                            .map(|i| {
-                                batch
-                                    .column(i)
-                                    .as_any()
-                                    .downcast_ref::<Int32Array>()
-                                    .context("descriptor column is not Int32")
-                            })
-                            .collect::<anyhow::Result<Vec<_>>>()?;
-                        for row_idx in 0..batch.num_rows() {
-                            rows.push(columns.iter().map(|column| column.value(row_idx)).collect());
-                        }
-                    }
-                    Some(Err(e)) => {
-                        return Err(anyhow::anyhow!("error reading parquet batch: {e}"));
-                    }
-                    None => break,
+    let layout = DescriptorLayout::new(version, subshell_count);
+    let mut reader = builder
+        .build()
+        .with_context(|| "failed to build parquet reader")?;
+    let mut rows: Vec<Vec<i32>> = Vec::new();
+    loop {
+        match reader.next() {
+            Some(Ok(batch)) => {
+                use arrow::array::{Array, Int32Array};
+                let columns: Vec<&Int32Array> = (0..batch.num_columns())
+                    .map(|i| {
+                        batch
+                            .column(i)
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .context("descriptor column is not Int32")
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                for row_idx in 0..batch.num_rows() {
+                    rows.push(columns.iter().map(|column| column.value(row_idx)).collect());
                 }
             }
+            Some(Err(e)) => {
+                return Err(anyhow::anyhow!("error reading parquet batch: {e}"));
+            }
+            None => break,
+        }
+    }
 
-            let header_toml = std::fs::read_to_string(&header_path_buf)
-                .with_context(|| format!("failed to read {}", header_path_buf.display()))?;
-            let (header_lines, block_lengths) = parse_restore_header_from_toml(&header_toml)?;
+    let header_toml = std::fs::read_to_string(header_path_buf)
+        .with_context(|| format!("failed to read {}", header_path_buf.display()))?;
+    let (header_lines, block_lengths) = parse_restore_header_from_toml(&header_toml)?;
 
-            let (temp, file) = create_temporary_output(&output_path)?;
-            let restored = restore_file(
-                &rows,
-                layout,
-                header_lines,
-                Some(&block_lengths),
-                indices.as_deref(),
-            )?;
-            restored.write_to(std::io::BufWriter::new(file))?;
-            let record_count = restored.records.len();
-            let bytes_written = std::fs::metadata(temp.path())?.len();
-            publish_temporary_output(temp.path(), &output_path, false)?;
-            Ok((record_count, bytes_written))
-        })
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-
-    let dict = PyDict::new(py);
-    dict.set_item("success", true)?;
-    dict.set_item("output_file", output)?;
-    dict.set_item("record_count", stats.0)?;
-    dict.set_item("output_bytes", stats.1)?;
-    Ok(dict.into())
+    let (temp, file) = create_temporary_output(output_path)?;
+    let restored = restore_file(&rows, layout, header_lines, Some(&block_lengths), indices)?;
+    restored.write_to(std::io::BufWriter::new(file))?;
+    let record_count = restored.records.len();
+    let bytes_written = std::fs::metadata(temp.path())?.len();
+    publish_temporary_output(temp.path(), output_path, false)?;
+    Ok((record_count, bytes_written))
 }
 
 fn parse_restore_header_from_toml(toml_content: &str) -> Result<([String; 5], Vec<usize>)> {

@@ -33,7 +33,8 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 
 ## 安装
 
-使用 Python 3.15 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
+需要独立可执行程序时，使用下方的 [Rust 原生 CLI](#将-rust-原生-cli-加入-path)。
+需要 Python 库和 Python CLI 时，使用 Python 3.15 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
 
 本仓库正在准备 **2.1.1**，使用独立的 Python 3.15 `.venv`，详见
 [源码开发说明](docs/development.md)。下方固定版本安装示例需等 2.1.1
@@ -102,17 +103,12 @@ uv run rcsfs --help
 也可通过 `python -m rcsfs.cli --help` 调用命令行（uv 项目中在前面加 `uv run`）。
 源码构建和贡献者环境见[开发指南](docs/development.md)，发布维护步骤见[发布指南](docs/releasing.md)。
 
-### 将 Rust 原生 CLI 加入 PATH（规划中）
+### 将 Rust 原生 CLI 加入 PATH
 
-计划提供独立的 `rcsfs` 可执行程序，直接调用 Rust 核心，运行时无需 Python 环境。
-**这是待实现的安装方案，当前仓库尚不支持。** 目前的 `rcsfs` 命令仍是 Python 入口；
-还需要新增原生可执行程序目标、`cli` feature，并完成 Python 绑定的条件编译隔离。
-以下构建命令需在这些工作完成后才能使用。
-
-原生 CLI 实现后，可在仓库根目录使用 Rust 工具链编译并安装：
+原生 CLI 是独立的 `rcsfs` 可执行程序，与 Python 库共用 Rust 核心，运行时无需 Python 环境。
+在仓库根目录使用 Rust 工具链编译并安装：
 
 ```bash
-# 规划用法：当前仓库尚不支持此命令。
 cargo install --path . --locked --no-default-features --features cli --bin rcsfs
 ```
 
@@ -133,18 +129,43 @@ rcsfs --help
 也可以仅编译，再自行放置可执行程序：
 
 ```bash
-# 规划用法：当前仓库尚不支持此命令。
 cargo build --release --locked --no-default-features --features cli --bin rcsfs
 ```
 
 使用默认的本机 Cargo 输出布局时，产物为 `target/release/rcsfs`（Windows 为 `rcsfs.exe`）。
 将它复制到已在 `PATH` 中的目录，或用绝对路径将它所在目录加入 `PATH`。
-计划保留 `rcsfs csfsgenerate -c rcsfs.toml`、`rcsfs jsplit input.c`、
+支持 `rcsfs csfsgenerate -c rcsfs.toml`、`rcsfs jsplit input.c`、
 `rcsfs -c rcsfs.toml` 等接口；调用时需准备对应的配置和输入文件。
 
-Python 安装与计划中的原生安装都使用 `rcsfs` 这个名字。实际执行的是 `PATH` 中最先找到的
+Python 安装与原生安装都使用 `rcsfs` 这个名字。实际执行的是 `PATH` 中最先找到的
 程序，激活 Python 环境可能改变顺序。Bash/Zsh 下可用 `type -a rcsfs` 检查可用入口，
 也可通过原生程序的绝对路径调用。
+
+原生版支持 `csfsgenerate`、`csfggenerate`、`gen-descriptors`、`zero-first`、
+`csfs-split`、`jsplit`、`interacting`、`restore-csfs`，并提供 `convert`（CSF 文本转 Parquet）
+和 `info`（查看 Parquet 元数据）。保留已有分割命令别名。用 `rcsfs COMMAND --help` 查看参数，
+用 `rcsfs COMMAND init-config` 向 `rcsfs.toml` 追加注释形式的配置示例。例如：
+
+```bash
+rcsfs convert input.c input.parquet --num-workers 8
+rcsfs gen-descriptors input.parquet descriptors.parquet --header input_header.toml
+rcsfs restore-csfs --descriptors descriptors.parquet --header input_header.toml --output restored.c
+```
+
+`csfsgenerate` 支持交互问答、TOML 模型和 `--transcript FILE`；磁盘生成、容量估算和多列表
+合并均复用 Rust 实现。CSFG 支持编号模型和活动空间分层。输出文件必须位于调用时的当前目录，
+命令行参数覆盖 TOML 设置。`--json` 将结果写入 stdout，进度和错误写入 stderr。
+退出码为：成功 0，参数或配置错误 2，处理失败 1。
+
+`rcsfs -c FILE` 按配置表顺序执行，失败后停止。普通 CSF 批处理向 `rcsfs.log`
+（有 `conf` 时为 `rcsfs_<conf>.log`）追加 JSON Lines，记录配置快照、各命令结果、耗时和错误；
+进度信息仍输出到 stderr。CSFG 批处理先暂存所有模型，再发布结果并直接报告统计。
+Python CLI 保持原有日志格式。输出按单个文件原子发布，多个输出文件不是一个事务；
+发布失败时会报告已经完成发布的文件。
+
+[原生 CLI 工作流](.github/workflows/native-cli.yml) 独立于 Python wheel，构建并测试 Linux、
+Windows 和 macOS 可执行程序。本地验证不代表所有平台的 CI 已通过；验证命令见
+[开发指南](docs/development.md#native-rust-cli)。
 
 ## 快速开始
 

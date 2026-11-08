@@ -56,6 +56,7 @@ const PROGRESS_REPORT_INTERVAL: Duration = Duration::from_secs(2);
 /// logical file bytes, not a claim about physical device I/O or page-cache
 /// traffic.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "cli", derive(serde::Serialize))]
 pub(crate) struct StageStats {
     pub(crate) name: &'static str,
     pub(crate) elapsed_millis: u128,
@@ -283,6 +284,7 @@ pub(crate) struct DeduplicatedSegments {
 /// Results from the disk generation pipeline before the caller publishes its
 /// private staging files as one output set.
 #[derive(Debug)]
+#[cfg_attr(feature = "cli", derive(serde::Serialize))]
 pub(crate) struct DiskGenerationStats {
     pub(crate) unique_occupations: usize,
     pub(crate) generated_count: usize,

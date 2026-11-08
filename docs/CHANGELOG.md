@@ -6,7 +6,10 @@
 
 ## [Unreleased]
 
-- 中英文 README 补充 Rust 原生 CLI 的规划安装方式、`PATH` 设置和同名命令检查；明确原生程序及 `cli` feature 尚未实现，示例不是当前可用的构建命令。
+- 实现可独立安装的 Rust 原生 `rcsfs` CLI：使用 `--no-default-features --features cli` 构建，无需 Python 运行时；保留 Python 库和原有 Python CLI。
+- 原生版接入生成、CSFG 分层、描述符、恢复、zero-first、活动空间/J 分割和相互作用上界筛选，新增 `convert`、`info` 和转录文件入口；支持 TOML 参数覆盖、批处理、配置模板、JSON 输出及批处理结果日志。
+- 共享描述符恢复和 Parquet 元数据实现，隔离 PyO3 绑定；转换和划分的进度输出统一到 stderr，避免污染 CLI JSON。
+- 增加无 Python 的可执行程序回归测试和独立的平台构建工作流，更新依赖许可清单与中英文 README 的实际安装/PATH 用法。
 
 ## [2.1.1] - 2026-10-30
 

@@ -12,7 +12,7 @@
 //! assumption rather than assuming zero, so the result is an upper bound with a
 //! visible derivation instead of a point prediction.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use super::DeduplicationStrategy;
 
@@ -116,6 +116,7 @@ impl ArtifactKind {
         }
     }
 
+    #[cfg(feature = "python")]
     pub(crate) fn from_name(name: &str) -> Result<Self> {
         match name {
             "csf_text" => Ok(Self::CsfText),
@@ -123,7 +124,7 @@ impl ArtifactKind {
             "descriptor" => Ok(Self::Descriptor),
             "header" => Ok(Self::Header),
             "descriptor_metadata" => Ok(Self::DescriptorMetadata),
-            other => bail!(
+            other => anyhow::bail!(
                 "unknown published artifact {other:?}; expected csf_text, csf_parquet, \
                  descriptor, header, or descriptor_metadata"
             ),

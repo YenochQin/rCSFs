@@ -356,6 +356,7 @@ impl ResourceBudget {
 
 /// Stable resource information returned with a generation result.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "cli", derive(serde::Serialize))]
 pub(crate) struct ResourceStats {
     pub(crate) memory_budget_mib: Option<usize>,
     pub(crate) budget_bytes: Option<u64>,

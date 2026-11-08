@@ -32,7 +32,8 @@ It helps you:
 
 ## Installation
 
-Install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.15 or newer.
+For a standalone executable, use the [native Rust CLI](#native-rust-cli-on-path).
+For the Python library and Python CLI, install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.15 or newer.
 
 This checkout prepares version **2.1.1** and uses its own Python 3.15 `.venv`;
 see [source development](docs/development.md). The pinned installation examples
@@ -111,20 +112,13 @@ Source builds and contributor setup are described in
 [development.md](docs/development.md); release maintenance is covered by
 [the release guide](docs/releasing.md).
 
-### Native Rust CLI on PATH (planned)
+### Native Rust CLI on PATH
 
-The intended native CLI will provide a standalone `rcsfs` executable that calls
-the Rust core directly, without a Python environment at runtime. **This is a
-proposed installation route, not an available feature in this checkout.** The
-current `rcsfs` command is the Python entry point. A native binary target, a
-`cli` feature, and complete isolation of the Python bindings still need to be
-implemented; the build commands below will only apply after that work.
-
-With the proposed CLI implemented, build and install it from the repository
-root using a Rust toolchain:
+The native CLI is a standalone `rcsfs` executable that calls the same Rust core
+as the Python library. It requires no Python environment at runtime. Build and
+install it from the repository root with a Rust toolchain:
 
 ```bash
-# Planned command; not supported by the current checkout.
 cargo install --path . --locked --no-default-features --features cli --bin rcsfs
 ```
 
@@ -144,23 +138,55 @@ custom installation root, use its `bin` directory instead. On Windows, add the
 directory containing `rcsfs.exe` (by default `%USERPROFILE%\.cargo\bin`) to the
 user `Path` environment variable and open a new terminal.
 
-Alternatively, the proposed binary can be built without installing it:
+Alternatively, build the executable without installing it:
 
 ```bash
-# Planned command; not supported by the current checkout.
 cargo build --release --locked --no-default-features --features cli --bin rcsfs
 ```
 
 With the default native Cargo output layout, the executable will be
 `target/release/rcsfs` (`rcsfs.exe` on Windows). Copy it into a directory already
-on `PATH`, or add its containing directory using an absolute path. The intended
-interface preserves commands such as `rcsfs csfsgenerate -c rcsfs.toml`,
+on `PATH`, or add its containing directory using an absolute path. The native
+interface supports commands such as `rcsfs csfsgenerate -c rcsfs.toml`,
 `rcsfs jsplit input.c`, and `rcsfs -c rcsfs.toml`; those inputs must exist.
 
-Both the Python installation and the proposed native installation use the name
+Both the Python installation and the native installation use the name
 `rcsfs`. The first matching executable on `PATH` runs, and activating a Python
 environment can change that order. On Bash/Zsh, use `type -a rcsfs` to inspect
 the available entries or invoke the native executable by its absolute path.
+
+The native commands are `csfsgenerate`, `csfggenerate`, `gen-descriptors`,
+`zero-first`, `csfs-split`, `jsplit`, `interacting`, and `restore-csfs`, plus
+`convert` (CSF text to Parquet) and `info` (Parquet metadata). Existing split
+aliases are accepted. Use `rcsfs COMMAND --help` for arguments or
+`rcsfs COMMAND init-config` to append a commented TOML example. For example:
+
+```bash
+rcsfs convert input.c input.parquet --num-workers 8
+rcsfs gen-descriptors input.parquet descriptors.parquet --header input_header.toml
+rcsfs restore-csfs --descriptors descriptors.parquet --header input_header.toml --output restored.c
+```
+
+`csfsgenerate` supports the interactive dialog, TOML models, and
+`--transcript FILE`; disk generation, estimates and continuation lists use the
+shared Rust pipeline. CSFG supports numbered models and active-space layers.
+Output filenames must be in the invocation directory. CLI arguments override
+TOML values. `--json` writes a result to stdout; progress and diagnostics go to
+stderr. Exit codes are 0 for success, 2 for argument/configuration errors, and
+1 for processing failures.
+
+`rcsfs -c FILE` runs configured tables in file order and stops on failure.
+For regular CSF batches, `rcsfs.log` (or `rcsfs_<conf>.log`) appends JSON Lines
+containing the configuration snapshot, command results, timings and failures;
+progress messages remain on stderr. CSFG batches stage all models before
+publishing and report their results directly. The Python CLI retains its
+existing log format. Publication is atomic per file, not a transaction across
+all output files; failures report files already published.
+
+The [native CLI workflow](.github/workflows/native-cli.yml) builds and tests
+Linux, Windows and macOS executables independently of Python wheels. Local
+validation does not establish that all platform CI jobs have passed. See
+[development.md](docs/development.md#native-rust-cli) for validation commands.
 
 ## Quick Start
 

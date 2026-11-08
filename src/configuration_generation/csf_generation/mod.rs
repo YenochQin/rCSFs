@@ -5,6 +5,7 @@ pub(crate) mod csf_output_capacity_estimation;
 #[allow(dead_code)]
 pub(crate) mod disk_csf_generation_pipeline;
 mod disk_space_preflight;
+#[cfg(feature = "python")]
 pub(crate) mod python_csf_bindings;
 
 pub use complete_csf_generation_pipeline::{

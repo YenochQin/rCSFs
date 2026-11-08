@@ -1,6 +1,7 @@
 //! Direct CSFG generation and its GRASPG-compatible paired output.
 mod direct_csfg_generation_pipeline;
 mod graspg_csfg_output_writer;
+#[cfg(feature = "python")]
 pub(crate) mod python_csfg_bindings;
 mod representative_occupation_planning;
 

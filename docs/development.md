@@ -54,3 +54,38 @@ Avoid `maturin develop`: its editable extension installation differs from the in
 
 For source-archive rebuilding, release manifests, license notices and the
 build-only platform matrix, follow [the release guide](releasing.md).
+
+## Native Rust CLI
+
+The `cli` feature enables the `rcsfs` binary; `python` remains the default
+feature for Python consumers. To build an executable without PyO3 or CPython:
+
+```sh
+cargo build --release --locked --no-default-features --features cli --bin rcsfs
+cargo test --release --locked --no-default-features --features cli
+cargo tree --locked --no-default-features --features cli
+```
+
+The dependency tree must not contain `pyo3` or `pyo3-arrow`. The executable is
+`target/release/rcsfs` (`rcsfs.exe` on Windows). The native executable tests clear
+`PATH` and exercise generation, configuration, file protection and descriptor
+round trips. They use only maintained fixtures and small synthetic models.
+They do not run GRASP or validate scientific accuracy. The separate
+[native workflow](../.github/workflows/native-cli.yml) tests the three release
+platforms; executing one platform locally does not validate the others.
+
+To install from source:
+
+```sh
+cargo install --path . --locked --no-default-features --features cli --bin rcsfs
+```
+
+Put the installation root's `bin` directory on `PATH`. Cargo's default root is
+`~/.cargo`. Use `rcsfs --version` to identify the native entry point; it includes
+`(native Rust)`. Python wheels retain the `rcsfs.cli:main` console script.
+
+After changing shared Rust code, also rebuild the Python extension and run the
+Python suite using the instructions above. The two builds select different
+features; do not copy a Python-free shared library into the Python package.
+Run `python scripts/collect_licenses.py` after dependency changes: it collects
+all features so notices cover both the Python extension and native executable.

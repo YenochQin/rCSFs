@@ -111,6 +111,57 @@ Source builds and contributor setup are described in
 [development.md](docs/development.md); release maintenance is covered by
 [the release guide](docs/releasing.md).
 
+### Native Rust CLI on PATH (planned)
+
+The intended native CLI will provide a standalone `rcsfs` executable that calls
+the Rust core directly, without a Python environment at runtime. **This is a
+proposed installation route, not an available feature in this checkout.** The
+current `rcsfs` command is the Python entry point. A native binary target, a
+`cli` feature, and complete isolation of the Python bindings still need to be
+implemented; the build commands below will only apply after that work.
+
+With the proposed CLI implemented, build and install it from the repository
+root using a Rust toolchain:
+
+```bash
+# Planned command; not supported by the current checkout.
+cargo install --path . --locked --no-default-features --features cli --bin rcsfs
+```
+
+By default, [cargo install](https://doc.rust-lang.org/cargo/commands/cargo-install.html)
+places the executable in `~/.cargo/bin`. On Linux/macOS, add the **directory**
+containing the executable to `PATH`:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+command -v rcsfs
+rcsfs --help
+```
+
+The export applies to the current shell. To keep it for new interactive shells,
+add the same line to `~/.bashrc` for Bash or `~/.zshrc` for Zsh. If Cargo uses a
+custom installation root, use its `bin` directory instead. On Windows, add the
+directory containing `rcsfs.exe` (by default `%USERPROFILE%\.cargo\bin`) to the
+user `Path` environment variable and open a new terminal.
+
+Alternatively, the proposed binary can be built without installing it:
+
+```bash
+# Planned command; not supported by the current checkout.
+cargo build --release --locked --no-default-features --features cli --bin rcsfs
+```
+
+With the default native Cargo output layout, the executable will be
+`target/release/rcsfs` (`rcsfs.exe` on Windows). Copy it into a directory already
+on `PATH`, or add its containing directory using an absolute path. The intended
+interface preserves commands such as `rcsfs csfsgenerate -c rcsfs.toml`,
+`rcsfs jsplit input.c`, and `rcsfs -c rcsfs.toml`; those inputs must exist.
+
+Both the Python installation and the proposed native installation use the name
+`rcsfs`. The first matching executable on `PATH` runs, and activating a Python
+environment can change that order. On Bash/Zsh, use `type -a rcsfs` to inspect
+the available entries or invoke the native executable by its absolute path.
+
 ## Quick Start
 
 Set `input_csf` to an existing GRASP CSF file from your calculation. The optional

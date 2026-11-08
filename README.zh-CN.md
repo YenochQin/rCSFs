@@ -102,6 +102,50 @@ uv run rcsfs --help
 也可通过 `python -m rcsfs.cli --help` 调用命令行（uv 项目中在前面加 `uv run`）。
 源码构建和贡献者环境见[开发指南](docs/development.md)，发布维护步骤见[发布指南](docs/releasing.md)。
 
+### 将 Rust 原生 CLI 加入 PATH（规划中）
+
+计划提供独立的 `rcsfs` 可执行程序，直接调用 Rust 核心，运行时无需 Python 环境。
+**这是待实现的安装方案，当前仓库尚不支持。** 目前的 `rcsfs` 命令仍是 Python 入口；
+还需要新增原生可执行程序目标、`cli` feature，并完成 Python 绑定的条件编译隔离。
+以下构建命令需在这些工作完成后才能使用。
+
+原生 CLI 实现后，可在仓库根目录使用 Rust 工具链编译并安装：
+
+```bash
+# 规划用法：当前仓库尚不支持此命令。
+cargo install --path . --locked --no-default-features --features cli --bin rcsfs
+```
+
+[cargo install](https://doc.rust-lang.org/cargo/commands/cargo-install.html)
+默认将程序放入 `~/.cargo/bin`。Linux/macOS 下，将可执行程序所在的**目录**加入 `PATH`：
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+command -v rcsfs
+rcsfs --help
+```
+
+该 `export` 仅对当前 shell 生效。若希望新开的交互式 shell 也生效，Bash 用户将同一行
+加入 `~/.bashrc`，Zsh 用户加入 `~/.zshrc`。若 Cargo 使用了自定义安装根目录，应改用
+该目录下的 `bin`。Windows 下，将 `rcsfs.exe` 所在目录（默认 `%USERPROFILE%\.cargo\bin`）
+加入用户环境变量 `Path`，然后重新打开终端。
+
+也可以仅编译，再自行放置可执行程序：
+
+```bash
+# 规划用法：当前仓库尚不支持此命令。
+cargo build --release --locked --no-default-features --features cli --bin rcsfs
+```
+
+使用默认的本机 Cargo 输出布局时，产物为 `target/release/rcsfs`（Windows 为 `rcsfs.exe`）。
+将它复制到已在 `PATH` 中的目录，或用绝对路径将它所在目录加入 `PATH`。
+计划保留 `rcsfs csfsgenerate -c rcsfs.toml`、`rcsfs jsplit input.c`、
+`rcsfs -c rcsfs.toml` 等接口；调用时需准备对应的配置和输入文件。
+
+Python 安装与计划中的原生安装都使用 `rcsfs` 这个名字。实际执行的是 `PATH` 中最先找到的
+程序，激活 Python 环境可能改变顺序。Bash/Zsh 下可用 `type -a rcsfs` 检查可用入口，
+也可通过原生程序的绝对路径调用。
+
 ## 快速开始
 
 将 `input_csf` 指向你已有的 GRASP CSF 计算文件。末尾可选的相互作用筛选示例

@@ -45,3 +45,7 @@ rcsfs_*.log
 # Temporary test code, local inputs, and probe outputs
 /temp/*
 !/temp/README.md
+
+# Local Claude and Codegraph data
+.claude/
+.codegraph/

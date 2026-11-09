@@ -98,7 +98,7 @@ from ._types import (
 try:
     __version__ = version("rcsfs")
 except PackageNotFoundError:
-    __version__ = "2.1.1"
+    __version__ = "3.0.0"
 
 from ._csfg import generate_csfgs
 from ._rcsfs import (
@@ -124,6 +124,7 @@ from ._rcsfs import (
 )
 from ._rcsfs import read_csfs_arrow as _read_csfs_arrow
 from ._rcsfs import select_interacting_csfs as _select_interacting_csfs
+from ._rcsfs import seniority_to_printed_v as _seniority_to_printed_v
 from ._rcsfs import split_csfs_by_active_spaces as _split_csfs_by_active_spaces
 from ._rcsfs import split_csfs_by_j as _split_csfs_by_j
 
@@ -257,6 +258,21 @@ def read_peel_subshells(header_path: str | Path) -> list[str]:
     return _read_peel_subshells(str(header_path))
 
 
+def seniority_to_printed_v(
+    two_j: int,
+    occupation: int,
+    subshell_two_j: int,
+    seniority: int,
+) -> int:
+    """Convert physical seniority to the canonical CSF printed-v label.
+
+    ``two_j`` is twice the single-electron j; ``subshell_two_j`` is twice
+    the occupied subshell's total J. Return -1 if J already identifies the
+    state, otherwise return ``seniority``. Illegal states raise ValueError.
+    """
+    return _seniority_to_printed_v(two_j, occupation, subshell_two_j, seniority)
+
+
 def generate_descriptors_from_parquet(
     input_parquet: str | Path,
     output_parquet: str | Path,
@@ -267,10 +283,12 @@ def generate_descriptors_from_parquet(
     descriptor_version: int = 2,
     header_path: str | Path | None = None,
 ) -> DescriptorGenerationStats:
-    """Generate reversible V2 Int32 descriptors from CSF Parquet.
+    """Generate reversible V2 Int8 descriptors from CSF Parquet.
 
     Each peel subshell contributes named ``sub{i}_n``, ``sub{i}_2j``,
-    ``sub{i}_v``, ``sub{i}_2k`` columns. Unprinted J, seniority and coupling
+    ``sub{i}_v``, ``sub{i}_2k`` columns. The v channel stores physical
+    seniority (zero for empty/closed subshells). Angular values are checked
+    against 0..126 before conversion to Int8. Unprinted J and coupling
     fields are -1, distinct from a printed zero. Global ``total_two_j`` and
     ``parity`` columns make the full row width ``4 * len(peel_subshells) + 2``.
 
@@ -321,7 +339,9 @@ def restore_csfs_from_descriptors(
     Restore a CSF text file from a V2 descriptor Parquet file.
 
     The descriptor Parquet must carry ``descriptor_version=2`` key-value
-    metadata (written by :func:`generate_descriptors_from_parquet` with
+    metadata, ``seniority_encoding=physical``, ``descriptor_dtype=int8``
+    and ``max_two_j=126`` (written by
+    :func:`generate_descriptors_from_parquet` with
     ``descriptor_version=2``). ``header_path`` must be the exact
     ``{stem}_header.toml`` the descriptors were generated from; if the
     descriptor file recorded a ``source_header_sha256``, it is verified
@@ -732,6 +752,7 @@ __all__ = [  # noqa: RUF022 - grouped by public API area
     # Batch descriptor generation
     "generate_descriptors_from_parquet",
     "restore_csfs_from_descriptors",
+    "seniority_to_printed_v",
     "read_peel_subshells",
     # Zero-first partition
     "partition_csfs",

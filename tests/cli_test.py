@@ -88,6 +88,9 @@ def test_gen_descriptors_reads_header_and_prints_summary(
     assert tomllib.loads(sidecar.read_text()) == {
         "format_version": 2,
         "encoding": "parquet",
+        "descriptor_dtype": "int8",
+        "max_two_j": 126,
+        "seniority_encoding": "physical",
         "normalized": False,
         "record_count": 12,
         "subshells": ["5s", "4d-", "4d"],

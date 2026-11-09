@@ -18,8 +18,8 @@ use super::DeduplicationStrategy;
 
 /// Extra bytes per row for the Arrow IPC framing of a segment.
 ///
-/// Measured at 3.3% over the raw `4M + 2` integers plus the two storage
-/// ordinals; rounded up to 10%.
+/// The earlier Int32 measurements were 3.3%; retain 10% as an explicit
+/// assumption for Int8 until large-scale measurements are repeated.
 const SEGMENT_OVERHEAD_NUMERATOR: u64 = 11;
 const SEGMENT_OVERHEAD_DENOMINATOR: u64 = 10;
 
@@ -193,7 +193,8 @@ pub(crate) fn estimate_capacity(
         .checked_mul(4)
         .and_then(|columns| columns.checked_add(2))
         .context("V2 column count overflow")?;
-    let row_bytes = v2_columns.checked_mul(4).context("V2 row width overflow")?;
+    // Each descriptor value occupies exactly one byte in Arrow/scratch.
+    let row_bytes = v2_columns;
     let segment_row_bytes = scaled(
         row_bytes
             .checked_add(12)
@@ -270,8 +271,8 @@ pub(crate) fn estimate_capacity(
         },
         format!(
             "segments {segment_row_bytes} bytes/row = 1.1x the {row_bytes}-byte V2 row plus \
-             two ordinals; measured overhead was 3.3%, and the model assumes *uncompressed* \
-             segments, so a run that enables a segment codec writes fewer bytes than this"
+             two ordinals; 10% overhead is retained from the earlier Int32 measurements \
+             and has not been rebenchmarked for Int8; segments are modeled uncompressed"
         ),
         format!(
             "root buckets {bucket_row_bytes} bytes/row = V2 row + 16-byte digest + 8-byte \
@@ -283,8 +284,8 @@ pub(crate) fn estimate_capacity(
         ),
         format!(
             "descriptor {DESCRIPTOR_HUNDREDTHS_PER_INT_ROW}/100 bytes per V2 integer per row; \
-             measured 0.0098 (61 columns) and 0.0062 (226 columns) bytes, so every shape is \
-             rounded up"
+             earlier Int32 measurements were 0.0098 (61 columns) and 0.0062 (226 columns) \
+             bytes; this compression estimate has not been rebenchmarked for Int8"
         ),
         format!(
             "CSF text {CSF_TEXT_BYTES_PER_RECORD} bytes/record and CSF Parquet \
@@ -336,25 +337,23 @@ mod tests {
     }
 
     #[test]
-    fn the_estimate_matches_the_measured_registered_runs() {
-        // B1: 2,695,762 records over a 24-subshell Peel table. Measured
-        // 1,124,709,846 segment bytes, 1,121,773,963 bucket bytes and a
-        // 2,232,842,742-byte scratch peak.
+    fn int8_scratch_covers_raw_payload_and_keeps_output_assumptions() {
+        // B1 shape: 98 Int8 columns, plus u32/u64 IPC ordinals or a
+        // u64 ordinal and 16-byte bucket hash. Old Int32 scratch sizes no
+        // longer describe these payloads. Published-output assumptions below
+        // are retained from the historical measurements, not new benchmarks.
         let b1 = estimate_capacity(24, 2_695_762, 1, DeduplicationStrategy::Exact).unwrap();
-        assert!(b1.segment_bytes >= 1_124_709_846);
-        assert!(b1.root_bucket_bytes >= 1_121_773_963);
-        assert!(b1.scratch_peak_bytes >= 2_232_842_742);
+        assert!(b1.segment_bytes >= 2_695_762 * (98 + 12));
+        assert!(b1.root_bucket_bytes >= 2_695_762 * (98 + 24));
+        assert!(b1.scratch_peak_bytes >= b1.segment_bytes + b1.root_bucket_bytes);
         assert!(b1.descriptor_bytes >= 2_594_699);
         assert!(b1.csf_text_bytes >= 862_789_499);
         assert!(b1.csf_parquet_bytes >= 74_150_973);
-        // B2: 560,351 records over 56 subshells. Measured 530,280,358 segment
-        // bytes, 520,075,772 bucket bytes, 1,046,641,830-byte scratch peak,
-        // 781,637 descriptor bytes, 168,534,272 text bytes and 40,680,076
-        // Parquet bytes.
+        // B2 shape: 226 Int8 columns over the historical record count.
         let b2 = estimate_capacity(56, 560_351, 1, DeduplicationStrategy::Exact).unwrap();
-        assert!(b2.segment_bytes >= 530_280_358);
-        assert!(b2.root_bucket_bytes >= 520_075_772);
-        assert!(b2.scratch_peak_bytes >= 1_046_641_830);
+        assert!(b2.segment_bytes >= 560_351 * (226 + 12));
+        assert!(b2.root_bucket_bytes >= 560_351 * (226 + 24));
+        assert!(b2.scratch_peak_bytes >= b2.segment_bytes + b2.root_bucket_bytes);
         assert!(b2.descriptor_bytes >= 781_637);
         assert!(b2.csf_text_bytes >= 168_534_272);
         assert!(b2.csf_parquet_bytes >= 40_680_076);

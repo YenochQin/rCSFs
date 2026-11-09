@@ -616,6 +616,7 @@ def _write_gen_descriptors_sidecar(
     descriptor_version = stats.get("descriptor_version", 2)
     _ = sidecar.write_text(
         f'format_version = {descriptor_version}\nencoding = "parquet"\n'
+        'descriptor_dtype = "int8"\nmax_two_j = 126\nseniority_encoding = "physical"\n'
         "normalized = false\n"
         f"record_count = {stats.get('descriptor_count', 0)}\n"
         f"subshells = {json.dumps(peel_subshells)}\n",
@@ -1359,6 +1360,7 @@ def _generate_outputs(
         sidecar = root / "features.toml"
         _ = sidecar.write_text(
             f'format_version = {result.get("descriptor_version", 2)}\nencoding = "parquet"\n'
+            'descriptor_dtype = "int8"\nmax_two_j = 126\nseniority_encoding = "physical"\n'
             "normalized = false\n"
             f"record_count = {result['descriptor_count']}\n"
             f"subshells = {json.dumps(shells)}\n",

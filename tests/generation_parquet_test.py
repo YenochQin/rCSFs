@@ -83,6 +83,9 @@ def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
     assert metadata == {
         "format_version": 2,
         "encoding": "parquet",
+        "descriptor_dtype": "int8",
+        "max_two_j": 126,
+        "seniority_encoding": "physical",
         "normalized": False,
         "record_count": frame.height,
         "subshells": read_peel_subshells(tmp_path / "out_header.toml"),
@@ -93,7 +96,7 @@ def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
         for index in range(len(metadata["subshells"]))
         for channel in ("n", "2j", "v", "2k")
     ] + ["total_two_j", "parity"]
-    assert frame.dtypes == [pl.Int32] * frame.width
+    assert frame.dtypes == [pl.Int8] * frame.width
     assert frame["total_two_j"].to_list() == [0]
     assert frame["parity"].to_list() == [1]
     parquet_metadata = get_parquet_info(tmp_path / "out_descriptors.parquet")[
@@ -432,13 +435,13 @@ def test_the_final_encoding_bounds_the_memory_owned_by_its_writers(
         )
 
     # Far too small: the generation stage's own batch reservation refuses first.
-    message, _, _, _ = run(8)
+    message, _, _, _ = run(1)
     assert "descriptor generation batch" in message, message
 
     # Enough for generation, not for the final encoding: the refusal must name a
     # reservation this stage makes, which is what proves the charge exists and
     # happens before the allocation.
-    for budget in (12, 16, 20, 24, 28, 36, 40):
+    for budget in (8, 12, 16, 20, 24, 28, 32, 36):
         message, _, _, _ = run(budget)
         assert message != "ok", f"{budget} MiB was accepted; the charges are too small"
         assert any(
@@ -454,9 +457,11 @@ def test_the_final_encoding_bounds_the_memory_owned_by_its_writers(
 
     # And the two writers are charged separately: a budget that covers one
     # writer's allowance plus the batch is not automatically enough for both.
-    outcome, peak, descriptor_parquet, csf_parquet = run(48)
+    # Int8 lowers the Arrow/source payload, while both Parquet encoders keep
+    # their physical INT32/string allowances. The managed peak lies above 36.
+    outcome, peak, descriptor_parquet, csf_parquet = run(40)
     assert outcome == "ok", outcome
-    assert 40.0 <= peak <= 48.0, peak
+    assert 36.0 < peak <= 40.0, peak
     assert descriptor_parquet is not None
     assert csf_parquet is not None
     for path in (descriptor_parquet, csf_parquet):

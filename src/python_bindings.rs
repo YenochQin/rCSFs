@@ -32,11 +32,23 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(select_interacting_csfs, m)?)?;
+    m.add_function(wrap_pyfunction!(seniority_to_printed_v, m)?)?;
 
     // Register CSF descriptor module
     csfs_descriptor::register_descriptor_module(m)?;
 
     Ok(())
+}
+
+#[pyfunction]
+fn seniority_to_printed_v(
+    two_j: u16,
+    occupation: u8,
+    subshell_two_j: u16,
+    seniority: u8,
+) -> PyResult<i32> {
+    seniority::seniority_to_printed_v(two_j, occupation, subshell_two_j, seniority)
+        .map_err(|error| PyValueError::new_err(format!("{error:#}")))
 }
 
 /// Select candidate CSFs that may interact with a reference space.

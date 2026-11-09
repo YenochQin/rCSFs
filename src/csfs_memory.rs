@@ -154,7 +154,7 @@ pub fn read_csfs_to_record_batch(
                     .map_init(
                         || {
                             (
-                                vec![0i32; generator.layout().row_len()],
+                                vec![0i8; generator.layout().row_len()],
                                 Vec::with_capacity(generator.orbital_count()),
                             )
                         },

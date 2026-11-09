@@ -30,7 +30,7 @@ For in-tree tests and distributable wheels, read [development.md](docs/developme
 
 ## Format invariants
 
-V2 descriptors store raw `Int32` channels and source-header metadata. Preserve row order, header association, parity, and the distinction between missing printed values (`-1`) and printed zero. V1 generation and the Python/CLI `normalize` option are removed; ML feature scaling belongs to the consuming pipeline.
+V2 descriptors store raw `Int8` channels and source-header metadata. The `v` channel is physical seniority, including zero for empty/closed subshells; files require `seniority_encoding=physical`, `descriptor_dtype=int8`, and `max_two_j=126`. Validate 2J/2K in 0..=126 before narrowing; preserve wide indices/counts and arithmetic temporaries. Preserve row order, header association, parity, and the distinction between missing printed J/coupling values (`-1`) and printed zero. Restore seniority labels through the shared `src/seniority.rs` state table; reject old printed-v descriptor files rather than silently interpreting them as physical values. V1 generation and the Python/CLI `normalize` option are removed; ML feature scaling belongs to the consuming pipeline.
 
 J is encoded as integer **2J**: text `3/2` becomes `3`, while `4` or `4-` becomes `8`; parity is stored separately. CSF records have three lines after the five-line header. Test changes to parsing, conversion, restoration, or splitting against realistic fixtures.
 

@@ -23,7 +23,7 @@
 //!   whole pass, which is what makes any claim about them checkable.
 
 use anyhow::{Context, Result, ensure};
-use arrow::array::{Array, Int32Array, UInt32Array, UInt64Array};
+use arrow::array::{Array, Int8Array, UInt32Array, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use arrow_ipc::reader::FileReader;
 use parquet::arrow::arrow_writer::ArrowWriter;
@@ -403,8 +403,8 @@ fn build_final_outputs_from_segments_inner(
                         .map(|column| {
                             column
                                 .as_any()
-                                .downcast_ref::<Int32Array>()
-                                .context("segment descriptor column is not Int32")
+                                .downcast_ref::<Int8Array>()
+                                .context("segment descriptor column is not Int8")
                         })
                         .collect::<Result<Vec<_>>>()?;
                     Ok::<_, anyhow::Error>((range_column, local_column, data_columns))
@@ -469,14 +469,19 @@ fn build_final_outputs_from_segments_inner(
                     survivors
                         .par_iter()
                         .map(|&row| {
-                            let mut values = vec![0i32; row_len];
+                            let mut values = vec![0i8; row_len];
                             for (value, column) in values.iter_mut().zip(&data_columns) {
                                 *value = column.value(row);
                             }
                             let mut occupied = Vec::new();
                             let mut couplings = Vec::new();
-                            let (total_two_j, parity) =
-                                decode_v2_into(&values, layout, &mut occupied, &mut couplings)?;
+                            let (total_two_j, parity) = decode_v2_into(
+                                &values,
+                                layout,
+                                peel_subshells,
+                                &mut occupied,
+                                &mut couplings,
+                            )?;
                             validate_record(peel_subshells, &occupied, &couplings)?;
                             let (line1, line2, line3) =
                                 crate::complete_csf::CompleteCsfFile::format_record_parts(
@@ -494,7 +499,7 @@ fn build_final_outputs_from_segments_inner(
                 descriptor.add(|| {
                     let arrays: Vec<Arc<dyn Array>> = selected_columns
                         .drain(..)
-                        .map(|column| Arc::new(Int32Array::from(column)) as Arc<dyn Array>)
+                        .map(|column| Arc::new(Int8Array::from(column)) as Arc<dyn Array>)
                         .collect();
                     let batch = RecordBatch::try_new(schema.clone(), arrays)
                         .context("failed to construct the final descriptor batch")?;
@@ -646,7 +651,7 @@ fn build_final_outputs_from_segments_inner(
 /// compressed file size predicts resident memory.
 fn source_batch_managed_bytes(row_len: usize, rows: usize) -> Result<u64> {
     let row_bytes = row_len
-        .checked_mul(std::mem::size_of::<i32>())
+        .checked_mul(std::mem::size_of::<i8>())
         .and_then(|bytes| bytes.checked_add(std::mem::size_of::<u32>()))
         .and_then(|bytes| bytes.checked_add(std::mem::size_of::<u64>()))
         .context("source batch row width overflow")?;
@@ -684,7 +689,7 @@ fn batch_managed_bytes(
 ) -> Result<u64> {
     let columns = survivors
         .checked_mul(row_len)
-        .and_then(|ints| ints.checked_mul(std::mem::size_of::<i32>()))
+        .and_then(|ints| ints.checked_mul(std::mem::size_of::<i8>()))
         .context("final-encoding column bytes overflow")?;
     // Three lines per record plus the `String` headers, and a NUL-free bound on
     // each line, so the charge cannot be smaller than what formatting produces.
@@ -696,7 +701,7 @@ fn batch_managed_bytes(
         .checked_mul(text_per_record)
         .context("formatted text bytes overflow")?;
     let scratch_per_thread = row_len
-        .checked_mul(std::mem::size_of::<i32>())
+        .checked_mul(std::mem::size_of::<i8>())
         .and_then(|bytes| bytes.checked_add(4096))
         .context("decode scratch byte count overflow")?;
     let scratch = threads

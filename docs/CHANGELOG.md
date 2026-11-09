@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-09
+
+本次准备并提交源码版本，尚未发布 PyPI/GitHub Release。
+
+### 兼容性变化
+
+- 包主版本提升至 3.0.0：描述符仍采用 V2 的 `4M+2` 列布局，但 `v` 改为真实 seniority，数值存储改为 Int8。旧打印标签型或 Int32 描述符须重新生成。
+- 新描述符必须带有 `seniority_encoding=physical`、`descriptor_dtype=int8` 和 `max_two_j=126`；恢复入口同时校验标识和实际列类型，拒绝静默转换。
+- Rust 描述符行接口改用 `i8`，`decode_v2_into` 需要有序 Peel 轨道表以还原 seniority 打印策略。Python 函数调用参数保持兼容，输出列类型改变。
+
+### 功能与验证
+
+- 描述符数值缓冲、Arrow/Parquet 逻辑列、磁盘生成暂存段和去重载荷改为 Int8；量子数 2J/2K 统一限制为 0..126，转换前校验，保留 -1 缺省值与 ±1 宇称。新增 `descriptor_dtype=int8` 和 `max_two_j=126` 格式标识，旧 Int32 描述符需重新生成。记录计数、索引、运算暂存和 Parquet 物理 INT32 编码预算仍使用原宽类型。
+- 描述符 `sub{i}_v` 改为真实 seniority，空/满壳层为 0；恢复 CSF 时查共享允许态表还原应打印的标签，保留原有态次序及规范文本。
+- 新增 Python/Rust `seniority_to_printed_v` 转换函数。V2 列布局不变，Parquet 新增必需的 `seniority_encoding=physical`；旧打印标签型描述符需重新生成，相关模型输入应重新评估。
 - 清理 Rust 核心的 11 条 Clippy 警告及 Python 绑定的一处冗余闭包：简化等价写法，以具名结构体表达多列表准备结果，并保留跨平台磁盘空间转换与乘法的溢出检查。
 - 实现可独立安装的 Rust 原生 `rcsfs` CLI：使用 `--no-default-features --features cli` 构建，无需 Python 运行时；保留 Python 库和原有 Python CLI。
 - 原生版接入生成、CSFG 分层、描述符、恢复、zero-first、活动空间/J 分割和相互作用上界筛选，新增 `convert`、`info` 和转录文件入口；支持 TOML 参数覆盖、批处理、配置模板、JSON 输出及批处理结果日志。

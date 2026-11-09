@@ -21,6 +21,13 @@ from ._types import (
 
 __version__: str
 
+def seniority_to_printed_v(
+    two_j: int,
+    occupation: int,
+    subshell_two_j: int,
+    seniority: int,
+) -> int: ...
+
 class ArrowRecordBatchReader(Protocol):
     """Arrow C Stream producer consumed directly by Polars."""
 

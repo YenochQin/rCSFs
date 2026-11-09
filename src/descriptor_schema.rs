@@ -15,12 +15,56 @@ use std::sync::Arc;
 use crate::complete_csf::{IntermediateCoupling, OccupiedSubshell};
 use crate::configuration_generation::shared_generation::{Subshell, subshell_states};
 
-/// Sentinel written to a V2 field that GRASP never printed for that record.
+/// Sentinel for unprinted J/coupling fields. Physical seniority is never missing.
 ///
-/// Distinct from a printed `0` (occupation, `2J`, seniority or `2K` can all be
+/// Distinct from a printed `0` (`2J` or `2K` can both be
 /// legitimately zero), so round-tripping preserves the "printed vs not"
 /// distinction needed to restore the original CSF record.
-pub const MISSING: i32 = -1;
+pub const MISSING: i8 = -1;
+
+/// GRASP stores angular momenta as 2J+1 in a signed byte.
+pub const MAX_TWO_J: u16 = 126;
+pub const DESCRIPTOR_DTYPE: &str = "int8";
+
+/// Validate before narrowing; 127 fits i8 but violates GRASP's 2J+1 bound.
+pub fn checked_angular_value(two_j: u16, field: &str) -> Result<i8> {
+    ensure!(
+        two_j <= MAX_TWO_J,
+        "{field}={two_j} exceeds the descriptor angular bound 2J/2K <= {MAX_TWO_J} (GRASP |2J+1| <= 127)"
+    );
+    i8::try_from(two_j).context("descriptor angular value does not fit Int8")
+}
+
+pub fn validate_descriptor_storage(metadata: &[KeyValue]) -> Result<()> {
+    let maximum = MAX_TWO_J.to_string();
+    for (key, expected) in [
+        ("descriptor_dtype", DESCRIPTOR_DTYPE),
+        ("max_two_j", maximum.as_str()),
+    ] {
+        let mut entries = metadata.iter().filter(|entry| entry.key == key);
+        ensure!(
+            entries.next().and_then(|entry| entry.value.as_deref()) == Some(expected)
+                && entries.next().is_none(),
+            "descriptor file requires {key}={expected}; regenerate legacy Int32 descriptors from CSF text or CSF Parquet"
+        );
+    }
+    Ok(())
+}
+
+/// Required marker separating physical-v descriptors from older printed-v files.
+pub const SENIORITY_ENCODING: &str = "physical";
+
+pub fn validate_seniority_encoding(metadata: &[KeyValue]) -> Result<()> {
+    let mut entries = metadata
+        .iter()
+        .filter(|entry| entry.key == "seniority_encoding");
+    ensure!(
+        entries.next().and_then(|entry| entry.value.as_deref()) == Some(SENIORITY_ENCODING)
+            && entries.next().is_none(),
+        "descriptor file requires seniority_encoding=physical; regenerate legacy printed-seniority descriptors from CSF text or CSF Parquet"
+    );
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum DescriptorVersion {
@@ -235,9 +279,30 @@ pub fn output_schema(layout: DescriptorLayout) -> Result<Arc<arrow::datatypes::S
         .feature_column_names()
         .into_iter()
         .chain(layout.global_column_names())
-        .map(|name| Field::new(name, DataType::Int32, false))
+        .map(|name| Field::new(name, DataType::Int8, false))
         .collect::<Vec<_>>();
     Ok(Arc::new(Schema::new(fields)))
+}
+
+pub fn validate_output_schema(
+    actual: &arrow::datatypes::Schema,
+    layout: DescriptorLayout,
+) -> Result<()> {
+    let expected = output_schema(layout)?;
+    ensure!(
+        actual.fields().len() == expected.fields().len()
+            && actual
+                .fields()
+                .iter()
+                .zip(expected.fields())
+                .all(|(actual, expected)| {
+                    actual.name() == expected.name()
+                        && actual.data_type() == expected.data_type()
+                        && !actual.is_nullable()
+                }),
+        "descriptor schema must contain the ordered non-null Int8 V2 columns; regenerate legacy Int32 descriptors"
+    );
+    Ok(())
 }
 
 /// Lower-hex SHA-256 of a header TOML file's bytes.
@@ -295,6 +360,11 @@ pub fn output_kv_metadata(
 ) -> Vec<KeyValue> {
     let mut entries = vec![
         KeyValue::new(
+            "descriptor_dtype".to_owned(),
+            Some(DESCRIPTOR_DTYPE.to_owned()),
+        ),
+        KeyValue::new("max_two_j".to_owned(), Some(MAX_TWO_J.to_string())),
+        KeyValue::new(
             "descriptor_version".to_owned(),
             Some(layout.version().tag().to_string()),
         ),
@@ -311,6 +381,10 @@ pub fn output_kv_metadata(
             Some(json_string_array(peel_subshells)),
         ),
         KeyValue::new("missing_sentinel".to_owned(), Some(MISSING.to_string())),
+        KeyValue::new(
+            "seniority_encoding".to_owned(),
+            Some(SENIORITY_ENCODING.to_owned()),
+        ),
         KeyValue::new("normalized".to_owned(), Some("false".to_owned())),
         KeyValue::new(
             "feature_columns".to_owned(),
@@ -511,6 +585,7 @@ mod tests {
                 .and_then(|entry| entry.value.clone())
         };
         assert_eq!(get("descriptor_version"), Some("2".to_owned()));
+        assert_eq!(get("seniority_encoding"), Some("physical".to_owned()));
         assert_eq!(get("channels_per_subshell"), Some("4".to_owned()));
         assert_eq!(get("subshell_count"), Some("2".to_owned()));
         assert_eq!(get("peel_subshells"), Some("[\"4f-\",\"4f\"]".to_owned()));

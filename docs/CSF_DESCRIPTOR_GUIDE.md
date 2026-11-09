@@ -17,20 +17,47 @@ stats = generate_descriptors_from_parquet(
 )
 ```
 
-For M peel subshells, a row contains 4M+2 Int32 values:
+For M peel subshells, a row contains 4M+2 Int8 values:
 
 | Columns | Meaning |
 | --- | --- |
 | `sub{i}_n` | Occupation of peel subshell i |
 | `sub{i}_2j` | Printed doubled subshell J |
-| `sub{i}_v` | Printed seniority label |
+| `sub{i}_v` | Physical seniority, including 0 for empty/closed subshells |
 | `sub{i}_2k` | Printed doubled intermediate coupling K |
 | `total_two_j` | Total doubled J |
 | `parity` | +1 or -1 |
 
-Unoccupied slots have occupation zero; unprinted quantum fields use `-1`.
-Printed zero is distinct from missing. Parquet metadata records the subshell
-order, column names, version 2, missing sentinel and source header hash.
+Unoccupied slots are `[0, -1, 0, -1]`. Only unprinted J/coupling fields
+use `-1`; physical seniority is always nonnegative. Restoration recovers the
+canonical printed seniority from `(single-electron 2j, occupation, subshell 2J, v)`.
+Parquet metadata requires `seniority_encoding=physical`, `descriptor_dtype=int8`,
+and `max_two_j=126` in addition to version 2. Every J/coupling value must be
+0..126 or the permitted -1 missing marker; out-of-range input is rejected before
+narrowing. The in-memory row and Arrow columns are signed 8-bit integers.
+Old printed-v or Int32 descriptors without these markers must be regenerated from CSF text
+or three-line CSF Parquet. The column names and `4M+2` shape are unchanged.
+
+Rust descriptor row APIs use `i8` slices/vectors. Counts, offsets and numerical
+work variables retain their wider types. Parquet stores the signed 8-bit logical
+type using its INT32 physical type; this does not promise a fourfold reduction
+in compressed file size. Arrow/scratch numeric payloads use one byte per value,
+while Parquet encoder memory allowances still account for physical INT32 buffers.
+
+```python
+from rcsfs import seniority_to_printed_v
+
+assert seniority_to_printed_v(7, 4, 8, 2) == 2   # J=4 needs its v=2 label
+assert seniority_to_printed_v(7, 4, 8, 4) == 4   # different state with the same J
+assert seniority_to_printed_v(7, 4, 12, 2) == -1 # J=6 uniquely has v=2
+```
+
+The Rust `decode_v2_into` interface now also requires the ordered Peel labels
+to recover the printed seniority policy.
+
+The shared physical-state table preserves the generator's original state order
+and text labels. Descriptor generation infers a missing label only when its
+physical seniority is determined; insufficient information is an error.
 
 Both `rcsfs csfsgenerate --generate-descriptors` backends output V2. The
 standalone `rcsfs gen-descriptors` command also outputs V2; its optional
@@ -55,7 +82,7 @@ header, frame = read_csfs(
 )
 ```
 
-`coupling_signature` is a non-null `List(Int32)` derived from the validated V2
+`coupling_signature` is a non-null `List(Int8)` derived from the validated V2
 row. Each occupied peel subshell contributes its printed coupling, falling back
 to printed subshell J or zero; the last entry is total doubled J. Unoccupied
 positions are omitted. Compare signatures within `block_id` to keep parity

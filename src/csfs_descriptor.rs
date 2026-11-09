@@ -11,9 +11,7 @@ use std::path::Path;
 
 use crate::complete_csf::{IntermediateCoupling, OccupiedSubshell, Parity, SubshellState};
 use crate::descriptor_schema::MISSING;
-use crate::descriptor_schema::{
-    DescriptorLayout, DescriptorVersion, output_schema, validate_record,
-};
+use crate::descriptor_schema::{DescriptorLayout, DescriptorVersion, validate_record};
 use crate::descriptor_v2::{decode_v2_into, write_feature_row};
 
 pub(crate) fn parse_peel_subshells_from_header_lines(
@@ -70,7 +68,7 @@ pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
         create_temporary_output, ensure_output_does_not_alias_input, publish_temporary_output,
     };
     use crate::complete_csf::CompleteCsfFile;
-    use arrow::array::{Array, Int32Array};
+    use arrow::array::{Array, Int8Array};
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::fs::File;
     use std::io::{BufWriter, Write};
@@ -108,6 +106,8 @@ pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
         DescriptorVersion::from_tag(version_tag)? == DescriptorVersion::V2,
         "streaming restoration only supports V2 descriptor files"
     );
+    crate::descriptor_schema::validate_seniority_encoding(kv)?;
+    crate::descriptor_schema::validate_descriptor_storage(kv)?;
     let subshell_count: usize = get("subshell_count")
         .context("descriptor file is missing subshell_count metadata")?
         .parse()
@@ -134,23 +134,7 @@ pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
         metadata.num_rows()
     );
     let layout = DescriptorLayout::new(DescriptorVersion::V2, subshell_count);
-    let expected_schema = output_schema(layout)?;
-    let schema = builder.schema();
-    ensure!(
-        schema.fields().len() == expected_schema.fields().len(),
-        "descriptor schema has {} columns, expected {}",
-        schema.fields().len(),
-        expected_schema.fields().len()
-    );
-    for (actual, expected) in schema.fields().iter().zip(expected_schema.fields()) {
-        ensure!(
-            actual.name() == expected.name()
-                && actual.data_type() == expected.data_type()
-                && !actual.is_nullable(),
-            "descriptor schema field {:?} does not match V2 contract",
-            actual.name()
-        );
-    }
+    crate::descriptor_schema::validate_output_schema(builder.schema(), layout)?;
 
     let mut reader = builder
         .build()
@@ -205,8 +189,8 @@ pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
                 );
                 column
                     .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .context("descriptor column is not Int32")
+                    .downcast_ref::<Int8Array>()
+                    .context("descriptor column is not Int8")
             })
             .collect::<Result<Vec<_>>>()?;
         let mut batches = csf_parquet.as_ref().map(|(_, schema, _)| {
@@ -225,8 +209,13 @@ pub(crate) fn restore_v2_descriptor_parquet_to_outputs(
             for (value, column) in row_values.iter_mut().zip(&columns) {
                 *value = column.value(row);
             }
-            let (total_two_j, parity) =
-                decode_v2_into(&row_values, layout, &mut occupied, &mut couplings)?;
+            let (total_two_j, parity) = decode_v2_into(
+                &row_values,
+                layout,
+                &peel_subshells,
+                &mut occupied,
+                &mut couplings,
+            )?;
             validate_record(&peel_subshells, &occupied, &couplings)?;
             let formatted = CompleteCsfFile::format_record_parts(
                 &peel_subshells,
@@ -593,13 +582,13 @@ pub mod parquet_batch {
                         .ok_or_else(|| anyhow::anyhow!("line3 column is not string type"))?;
 
                     // Process each row
-                    use arrow::array::{Array, Int32Builder};
+                    use arrow::array::{Array, Int8Builder};
                     use std::sync::Arc;
 
                     // Initialize builders for each column (avoids transpose overhead)
-                    let mut row = vec![0i32; descriptor_size];
-                    let mut builders: Vec<Int32Builder> = (0..descriptor_size)
-                        .map(|_| arrow::array::Int32Builder::with_capacity(batch_size))
+                    let mut row = vec![0i8; descriptor_size];
+                    let mut builders: Vec<Int8Builder> = (0..descriptor_size)
+                        .map(|_| arrow::array::Int8Builder::with_capacity(batch_size))
                         .collect();
 
                     for i in 0..batch_size {
@@ -682,7 +671,7 @@ pub mod parquet_batch {
     struct ResultItem {
         batch_idx: usize,
         batch_size: usize,
-        columns: Vec<Vec<i32>>,
+        columns: Vec<Vec<i8>>,
     }
 
     fn descriptor_chunk_size(batch_size: usize, rayon_thread_count: usize) -> usize {
@@ -694,21 +683,21 @@ pub mod parquet_batch {
         pool: &rayon::ThreadPool,
         generator: Arc<super::CSFDescriptorGenerator>,
         rows: Vec<DescriptorRow>,
-    ) -> Result<Vec<Vec<i32>>> {
+    ) -> Result<Vec<Vec<i8>>> {
         use rayon::prelude::*;
 
         let descriptor_size = generator.layout().row_len();
         let batch_size = rows.len();
         let chunk_size = descriptor_chunk_size(batch_size, pool.current_num_threads());
 
-        let chunk_columns: Vec<Result<(usize, Vec<Vec<i32>>)>> = pool.install(|| {
+        let chunk_columns: Vec<Result<(usize, Vec<Vec<i8>>)>> = pool.install(|| {
             rows.par_chunks(chunk_size)
                 .enumerate()
                 .map(|(chunk_idx, chunk)| {
-                    let mut columns: Vec<Vec<i32>> = (0..descriptor_size)
+                    let mut columns: Vec<Vec<i8>> = (0..descriptor_size)
                         .map(|_| Vec::with_capacity(chunk.len()))
                         .collect();
-                    let mut descriptor = vec![0i32; descriptor_size];
+                    let mut descriptor = vec![0i8; descriptor_size];
 
                     for (idx, line1, line2, line3) in chunk {
                         if let Err(e) =
@@ -756,7 +745,7 @@ pub mod parquet_batch {
     /// All three stages run concurrently, maximizing CPU utilization and I/O overlap.
     ///
     /// Output format: Parquet with configurable compression (default ZSTD level 3).
-    /// Output uses raw Int32 columns with dictionary encoding.
+    /// Output uses raw Int8 columns with dictionary encoding.
     ///
     /// # Arguments
     /// * `input_parquet` - Path to input parquet file
@@ -1000,7 +989,7 @@ pub mod parquet_batch {
         // Phase 5: Writer thread - maintain order and write to parquet (multi-column format)
         ////////////////////////////////////////////////////////////////////////////////
         let writer_handle: std::thread::JoinHandle<Result<usize>> = std::thread::spawn(move || {
-            use arrow::array::Int32Array;
+            use arrow::array::Int8Array;
 
             let mut pending: BTreeMap<usize, ResultItem> = BTreeMap::new();
             let mut next_write_idx = 0usize;
@@ -1022,7 +1011,7 @@ pub mod parquet_batch {
                     let column_arrays: Vec<Arc<dyn Array>> = result_item
                         .columns
                         .into_iter()
-                        .map(|column| Arc::new(Int32Array::from(column)) as Arc<dyn Array>)
+                        .map(|column| Arc::new(Int8Array::from(column)) as Arc<dyn Array>)
                         .collect();
 
                     let output_batch = match RecordBatch::try_new(schema.clone(), column_arrays) {
@@ -1234,8 +1223,9 @@ pub fn j_to_double_j(j_str: &str) -> Result<i32> {
     let cleaned = trimmed.trim_end_matches('-').trim_end_matches('+');
     cleaned
         .parse::<i32>()
-        .map(|j| j * 2)
-        .with_context(|| format!("Invalid J value: {}", trimmed))
+        .with_context(|| format!("Invalid J value: {}", trimmed))?
+        .checked_mul(2)
+        .with_context(|| format!("Doubled J overflow: {trimmed}"))
 }
 
 fn fixed_width_field(line: &str, start: usize, width: usize) -> &str {
@@ -1345,7 +1335,7 @@ impl CSFDescriptorGenerator {
         line1: &str,
         line2: &str,
         line3: &str,
-        row: &mut [i32],
+        row: &mut [i8],
     ) -> Result<()> {
         self.parse_csf_into(line1, line2, line3, row)
     }
@@ -1358,7 +1348,7 @@ impl CSFDescriptorGenerator {
     /// * `line3` - Third line: final coupling and total J value
     ///
     /// # Returns
-    /// A vector of i32 descriptor values
+    /// A vector of i8 descriptor values
     ///
     /// # CSF Format Example
     /// ```text
@@ -1366,7 +1356,7 @@ impl CSFDescriptorGenerator {
     /// line2: "      3/2"
     /// line3: "     3/2-"
     /// ```
-    pub fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> Result<Vec<i32>> {
+    pub fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> Result<Vec<i8>> {
         let mut descriptor = vec![MISSING; self.layout.row_len()];
         self.parse_csf_into(line1, line2, line3, &mut descriptor)?;
         Ok(descriptor)
@@ -1378,7 +1368,7 @@ impl CSFDescriptorGenerator {
         line1: &str,
         line2: &str,
         line3: &str,
-        row: &mut [i32],
+        row: &mut [i8],
     ) -> Result<()> {
         ensure!(
             self.layout.version() == DescriptorVersion::V2,
@@ -1480,7 +1470,15 @@ impl CSFDescriptorGenerator {
         }
 
         validate_record(&self.peel_subshells, &occupied, &couplings)?;
-        write_feature_row(self.layout, &occupied, &couplings, final_two_j, parity, row)
+        write_feature_row(
+            self.layout,
+            &self.peel_subshells,
+            &occupied,
+            &couplings,
+            final_two_j,
+            parity,
+            row,
+        )
     }
 
     /// Derive the coupling-family view from V2; it is not a CSF identity key.
@@ -1489,7 +1487,7 @@ impl CSFDescriptorGenerator {
         line1: &str,
         line2: &str,
         line3: &str,
-        descriptor: &mut [i32],
+        descriptor: &mut [i8],
         signature: &mut Vec<i32>,
     ) -> Result<()> {
         self.parse_csf_into(line1, line2, line3, descriptor)?;
@@ -1503,11 +1501,11 @@ impl CSFDescriptorGenerator {
                 } else {
                     0
                 };
-                signature.push(value);
+                signature.push(i32::from(value));
             }
         }
         if let Some(last) = signature.last_mut() {
-            *last = descriptor[self.layout.total_two_j_index().unwrap()];
+            *last = i32::from(descriptor[self.layout.total_two_j_index().unwrap()]);
         }
         Ok(())
     }
@@ -1522,7 +1520,7 @@ use pyo3::prelude::*;
 
 /// Python-exposed function to generate descriptors from parquet file (parallel version)
 ///
-/// Output format: Parquet with named per-subshell and global Int32 columns
+/// Output format: Parquet with named per-subshell and global Int8 columns
 /// and configurable compression (default ZSTD level 3)
 /// - Each named column corresponds to one position in the V2 row.
 ///
@@ -1673,6 +1671,8 @@ pub fn restore_csfs_from_descriptors(
         version == DescriptorVersion::V2,
         "restoration only supports V2 descriptor files"
     );
+    crate::descriptor_schema::validate_seniority_encoding(kv)?;
+    crate::descriptor_schema::validate_descriptor_storage(kv)?;
     let subshell_count: usize = get("subshell_count")
         .context("descriptor file is missing subshell_count metadata")?
         .parse()
@@ -1685,21 +1685,22 @@ pub fn restore_csfs_from_descriptors(
     }
 
     let layout = DescriptorLayout::new(version, subshell_count);
+    crate::descriptor_schema::validate_output_schema(builder.schema(), layout)?;
     let mut reader = builder
         .build()
         .with_context(|| "failed to build parquet reader")?;
-    let mut rows: Vec<Vec<i32>> = Vec::new();
+    let mut rows: Vec<Vec<i8>> = Vec::new();
     loop {
         match reader.next() {
             Some(Ok(batch)) => {
-                use arrow::array::{Array, Int32Array};
-                let columns: Vec<&Int32Array> = (0..batch.num_columns())
+                use arrow::array::{Array, Int8Array};
+                let columns: Vec<&Int8Array> = (0..batch.num_columns())
                     .map(|i| {
                         batch
                             .column(i)
                             .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .context("descriptor column is not Int32")
+                            .downcast_ref::<Int8Array>()
+                            .context("descriptor column is not Int8")
                     })
                     .collect::<anyhow::Result<Vec<_>>>()?;
                 for row_idx in 0..batch.num_rows() {
@@ -1833,7 +1834,7 @@ mod tests {
     #[test]
     fn parse_csf_into_rejects_wrong_buffer_size() {
         let generator = CSFDescriptorGenerator::new(vec!["5s".to_string()]);
-        let mut too_short = vec![0i32; 2];
+        let mut too_short = vec![0i8; 2];
 
         let result = generator.parse_csf_into("  5s ( 2)", "", "      0  ", &mut too_short);
 
@@ -1917,7 +1918,7 @@ mod tests {
         );
         let generator = v2_generator(subshells.clone());
 
-        let mut row = vec![0i32; generator.layout().row_len()];
+        let mut row = vec![0i8; generator.layout().row_len()];
         generator
             .parse_csf_into(&line1, &line2, &line3, &mut row)
             .unwrap();
@@ -1931,12 +1932,12 @@ mod tests {
         // line2 back-fill of the neighboring coupling.
         assert_eq!(row[4], 4); // occupation
         assert_eq!(row[5], MISSING); // no printed 2J
-        assert_eq!(row[6], MISSING); // no printed seniority
+        assert_eq!(row[6], 0); // closed subshell has physical seniority zero
 
         // 4d (index 2, base 8, last occupied position): total 2J is a
         // separate global column, never folded into this subshell's slot.
         assert_eq!(row[8], 3); // occupation
-        assert_eq!(row[10], MISSING); // no printed seniority for a single hole
+        assert_eq!(row[10], 3); // 4d(3), J=3/2 is a seniority-three state
         assert_eq!(row[11], MISSING); // last position: 2K boundary never printed
 
         let total_index = generator.layout().total_two_j_index().unwrap();
@@ -1947,7 +1948,7 @@ mod tests {
     fn parse_csf_into_reads_parity_byte() {
         let subshells = vec!["5s".to_string()];
         let generator = v2_generator(subshells);
-        let mut row = vec![0i32; generator.layout().row_len()];
+        let mut row = vec![0i8; generator.layout().row_len()];
 
         generator
             .parse_csf_into("  5s ( 1)", "", "        3+", &mut row)
@@ -1968,7 +1969,7 @@ mod tests {
         // remaining 9-wide field.
         let subshells = vec!["4f".to_string()];
         let generator = v2_generator(subshells);
-        let mut row = vec![0i32; generator.layout().row_len()];
+        let mut row = vec![0i8; generator.layout().row_len()];
 
         generator
             .parse_csf_into("  4f ( 4)", "   2;   4", "        4+", &mut row)
@@ -1983,7 +1984,7 @@ mod tests {
     fn parse_csf_into_rejects_invalid_fields() {
         let subshells = vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()];
         let generator = v2_generator(subshells);
-        let mut row = vec![0i32; generator.layout().row_len()];
+        let mut row = vec![0i8; generator.layout().row_len()];
 
         // (a) Coupling line too short to slice with the fixed 4/5 offsets.
         assert!(
@@ -2018,7 +2019,7 @@ mod tests {
 
         // (d) Orbital missing from the peel map must error, not warn-and-skip.
         let missing_generator = v2_generator(vec!["5s".to_string()]);
-        let mut missing_row = vec![0i32; missing_generator.layout().row_len()];
+        let mut missing_row = vec![0i8; missing_generator.layout().row_len()];
         assert!(
             missing_generator
                 .parse_csf_into("  6p ( 2)", "", "        0+", &mut missing_row)
@@ -2034,7 +2035,7 @@ mod tests {
 
         // (f) Out-of-Peel-order occupied subshells must error via validate_record.
         let reordered_generator = v2_generator(vec!["4d-".to_string(), "5s".to_string()]);
-        let mut reordered_row = vec![0i32; reordered_generator.layout().row_len()];
+        let mut reordered_row = vec![0i8; reordered_generator.layout().row_len()];
         assert!(
             reordered_generator
                 .parse_csf_into(
@@ -2051,7 +2052,7 @@ mod tests {
     fn parse_csf_into_rejects_zero_electron_count() {
         // V2 requires validate_record's occupation >= 1 instead.
         let generator = v2_generator(vec!["5s".to_string()]);
-        let mut row = vec![0i32; generator.layout().row_len()];
+        let mut row = vec![0i8; generator.layout().row_len()];
         let error = generator
             .parse_csf_into("  5s ( 0)", "", "        0+", &mut row)
             .unwrap_err();
@@ -2094,12 +2095,12 @@ mod tests {
         let generator = v2_generator(parsed.subshells.clone());
         for record in &parsed.records {
             let (line1, line2, line3) = format_record_for_test(&parsed, record);
-            let mut text_row = vec![0i32; generator.layout().row_len()];
+            let mut text_row = vec![0i8; generator.layout().row_len()];
             generator
                 .parse_csf_into(&line1, &line2, &line3, &mut text_row)
                 .unwrap();
 
-            let mut complete_row = vec![0i32; generator.layout().row_len()];
+            let mut complete_row = vec![0i8; generator.layout().row_len()];
             encode_v2(&parsed, record, &mut complete_row).unwrap();
 
             assert_eq!(text_row, complete_row);

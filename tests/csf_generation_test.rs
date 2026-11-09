@@ -48,7 +48,7 @@ fn complete_integer_record_encodes_v2() {
     let layout = DescriptorLayout::new(DescriptorVersion::V2, generated.subshells.len());
     let mut descriptor = vec![0; layout.row_len()];
     encode_v2(&generated, &generated.records[0], &mut descriptor).unwrap();
-    assert_eq!(descriptor, [1, 3, -1, -1, 3, -1]);
+    assert_eq!(descriptor, [1, 3, 1, -1, 3, -1]);
 }
 
 fn roundtrip(request: &GenerationRequest) -> CompleteCsfFile {

@@ -35,9 +35,9 @@ It helps you:
 For a standalone executable, use the [native Rust CLI](#native-rust-cli-on-path).
 For the Python library and Python CLI, install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.15 or newer.
 
-This checkout prepares version **2.1.1** and uses its own Python 3.15 `.venv`;
+This checkout prepares version **3.0.0** and uses its own Python 3.15 `.venv`;
 see [source development](docs/development.md). The pinned installation examples
-below apply once 2.1.1 has been published to PyPI; pushing the source does not
+below apply once 3.0.0 has been published to PyPI; pushing the source does not
 publish a package.
 The distribution name, Python import name and command-line entry point are all
 `rcsfs`.
@@ -58,7 +58,7 @@ For an existing uv project using Python 3.15 or newer, run `uv add rcsfs` in its
 directory. This records the dependency in `pyproject.toml`, updates `uv.lock`,
 and installs it in the project's `.venv`. Run your own script with
 `uv run python analysis.py`; manual environment activation is not required.
-To pin a particular release, use `uv add "rcsfs==2.1.1"`.
+To pin a particular release, use `uv add "rcsfs==3.0.0"`.
 
 You can also add the dependency to an existing `pyproject.toml` manually:
 
@@ -68,7 +68,7 @@ name = "csf-analysis"
 version = "0.1.0"
 requires-python = ">=3.15"
 dependencies = [
-    "rcsfs==2.1.1",
+    "rcsfs==3.0.0",
 ]
 ```
 
@@ -84,7 +84,7 @@ To install into an existing Python environment:
 python -m pip install rcsfs
 ```
 
-For a fixed release, use `python -m pip install "rcsfs==2.1.1"`.
+For a fixed release, use `python -m pip install "rcsfs==3.0.0"`.
 Both installation methods provide the same Python API and `rcsfs` command.
 
 The release workflow targets CPython 3.15 wheels for Linux x86_64
@@ -328,7 +328,7 @@ descriptor table in the reversible V2 format. `descriptor_version` accepts only 
 Four integer channels per peel subshell, in named columns:
 
 ```text
-sub{i}_n, sub{i}_2j, sub{i}_v, sub{i}_2k   (occupation, printed 2J, seniority, printed coupling 2K)
+sub{i}_n, sub{i}_2j, sub{i}_v, sub{i}_2k   (occupation, printed 2J, physical seniority, printed coupling 2K)
 ```
 
 plus two global columns:
@@ -337,15 +337,21 @@ plus two global columns:
 total_two_j, parity   (parity is +1/-1)
 ```
 
-A value GRASP never printed for that record is `-1` (`MISSING`), distinct from a printed `0`.
-V2 always writes raw `Int32` columns. Feature scaling belongs to the consuming ML pipeline;
+Unprinted J/coupling values are `-1` (`MISSING`), distinct from a printed `0`.
+The v channel always stores physical seniority; empty/closed subshells have v=0.
+Files require `seniority_encoding=physical`, `descriptor_dtype=int8` and
+`max_two_j=126`. J/coupling values outside 0..126 are rejected before narrowing.
+Regenerate older printed-v or Int32 descriptors;
+restoration rejects files without this marker. `seniority_to_printed_v(two_j,
+occupation, subshell_two_j, seniority)` returns the canonical text label or -1.
+V2 always writes raw `Int8` columns. Feature scaling belongs to the consuming ML pipeline;
 the former `normalize` parameter has been removed.
 
 When `header_path` is given (or auto-detected next to `input_parquet`), its SHA-256 is recorded
 in the output Parquet's key-value metadata as `source_header_sha256`, binding the descriptor
 file to the exact header it was generated from. `get_parquet_info(...)` returns this and the
 rest of the format contract (`descriptor_version`, `channels_per_subshell`, `peel_subshells`,
-`feature_columns`, `global_columns`, `missing_sentinel`, `normalized`) under
+`feature_columns`, `global_columns`, `missing_sentinel`, `seniority_encoding`, `descriptor_dtype`, `max_two_j`, `normalized`) under
 `key_value_metadata`.
 
 V1 generation and its normalization have been removed. Regenerate old descriptors from
@@ -920,7 +926,7 @@ rather than treated as an identity selection.
 | `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | Convert CSF text to Parquet |
 | `get_parquet_info(input_path)` | Inspect Parquet metadata |
 | `read_peel_subshells(header_path)` | Read peel subshells from header TOML |
-| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, compression=None, *, descriptor_version=2, header_path=None)` | Generate descriptor Parquet from converted CSFs; `descriptor_version=2` is the only supported format and writes named Int32 columns |
+| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, compression=None, *, descriptor_version=2, header_path=None)` | Generate descriptor Parquet from converted CSFs; `descriptor_version=2` is the only supported format and writes named Int8 columns |
 | `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | Rebuild a CSF text file from a V2 descriptor Parquet file and its source header TOML |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | Reorder a CSF list into zero-order + first-order space per symmetry block |
 | `split_csfs_by_active_spaces(input_parquet, header_path, targets)` | Split one Parquet CSF list into independently selected, possibly overlapping active-space CSF text files; `targets` maps output path to orbital limits |

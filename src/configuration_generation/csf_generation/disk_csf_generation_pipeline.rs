@@ -8,7 +8,7 @@
 //! paths or final publication.
 
 use anyhow::{Context, Result, ensure};
-use arrow::array::{Array, Int32Array, UInt32Array, UInt64Array};
+use arrow::array::{Array, Int8Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_ipc::reader::FileReader;
@@ -1811,7 +1811,7 @@ impl BucketWriters {
         })
     }
 
-    fn push(&mut self, index: usize, ordinal: u64, hash: [u8; 16], row: &[i32]) -> Result<()> {
+    fn push(&mut self, index: usize, ordinal: u64, hash: [u8; 16], row: &[i8]) -> Result<()> {
         ensure!(
             row.len() == self.row_len,
             "bucket row width {} does not match {}",
@@ -1881,7 +1881,7 @@ impl BucketReader {
         })
     }
 
-    fn next(&mut self, row: &mut Vec<i32>) -> Result<Option<(u64, [u8; 16])>> {
+    fn next(&mut self, row: &mut Vec<i8>) -> Result<Option<(u64, [u8; 16])>> {
         if self.remaining == 0 {
             return Ok(None);
         }
@@ -1894,8 +1894,8 @@ impl BucketReader {
             .expect("bucket hash field has fixed width");
         row.clear();
         row.try_reserve(self.row_len)?;
-        for bytes in self.record_buffer[24..].as_chunks::<4>().0 {
-            row.push(i32::from_le_bytes(*bytes));
+        for bytes in self.record_buffer[24..].as_chunks::<1>().0 {
+            row.push(i8::from_le_bytes(*bytes));
         }
         self.remaining -= 1;
         Ok(Some((u64::from_le_bytes(ordinal_bytes), hash)))
@@ -1904,7 +1904,7 @@ impl BucketReader {
 
 fn bucket_record_byte_len(row_len: usize) -> Result<usize> {
     row_len
-        .checked_mul(std::mem::size_of::<i32>())
+        .checked_mul(std::mem::size_of::<i8>())
         .and_then(|row_bytes| row_bytes.checked_add(24))
         .context("bucket record byte length overflow")
 }
@@ -1978,7 +1978,7 @@ fn deduplicate_bucket(
 ) -> Result<()> {
     let row_bytes = max_rows_per_bucket
         .checked_mul(row_len)
-        .and_then(|value| value.checked_mul(std::mem::size_of::<i32>()))
+        .and_then(|value| value.checked_mul(std::mem::size_of::<i8>()))
         .and_then(|value| value.checked_add(max_rows_per_bucket.checked_mul(64)?))
         .context("de-duplication bucket memory byte count overflow")?;
     let _memory_permit = budget.try_reserve(
@@ -1986,7 +1986,7 @@ fn deduplicate_bucket(
         "de-duplication bucket",
     )?;
     let mut reader = BucketReader::open(&bucket, row_len)?;
-    let mut rows_by_hash = HashMap::<[u8; 16], Vec<Vec<i32>>>::new();
+    let mut rows_by_hash = HashMap::<[u8; 16], Vec<Vec<i8>>>::new();
     let mut row = Vec::with_capacity(row_len);
     while let Some((ordinal, hash)) = reader.next(&mut row)? {
         stats.generated_count = stats
@@ -2019,7 +2019,7 @@ fn deduplicate_bucket(
     Ok(())
 }
 
-fn stable_row_hash(row: &[i32]) -> [u8; 16] {
+fn stable_row_hash(row: &[i8]) -> [u8; 16] {
     let mut hasher = Sha256::new();
     hasher.update(b"rCSFs/CSFDescriptorV2/dedup/v1\\0");
     for value in row {
@@ -2037,7 +2037,7 @@ fn root_bucket_index(hash: &[u8; 16], bucket_count: usize) -> usize {
     usize::from_le_bytes(bytes) & (bucket_count - 1)
 }
 
-fn recursive_bucket_index(row: &[i32], depth: usize) -> usize {
+fn recursive_bucket_index(row: &[i8], depth: usize) -> usize {
     let mut hasher = Sha256::new();
     hasher.update(b"rCSFs/CSFDescriptorV2/dedup/split/v1\\0");
     hasher.update(
@@ -2294,7 +2294,7 @@ struct DescriptorBatchSink<'a> {
     peel_subshells: &'a [String],
     local_to_global: Vec<u16>,
     remapped_occupied: Vec<OccupiedSubshell>,
-    row: Vec<i32>,
+    row: Vec<i8>,
     range_writer: &'a mut RangeSegmentWriter,
 }
 
@@ -2338,6 +2338,7 @@ impl GeneratedRecordSink for DescriptorBatchSink<'_> {
         )?;
         write_feature_row(
             self.layout,
+            self.peel_subshells,
             &self.remapped_occupied,
             record.couplings,
             record.total_two_j,
@@ -2381,7 +2382,7 @@ impl RangeSegmentWriter {
         })
     }
 
-    fn push(&mut self, total_two_j: u16, parity: Parity, row: &[i32]) -> Result<()> {
+    fn push(&mut self, total_two_j: u16, parity: Parity, row: &[i8]) -> Result<()> {
         ensure!(
             row.len() == self.layout.row_len(),
             "descriptor row width {} does not match {}",
@@ -2444,7 +2445,7 @@ struct OpenSegment {
     path: PathBuf,
     local_start: u64,
     record_count: usize,
-    columns: Vec<Vec<i32>>,
+    columns: Vec<Vec<i8>>,
     local_ordinals: Vec<u64>,
     writer: FileWriter<BufWriter<File>>,
     _memory_permit: ResourcePermit,
@@ -2482,7 +2483,7 @@ impl BlockSegmentWriter {
         }
     }
 
-    fn push(&mut self, row: &[i32]) -> Result<()> {
+    fn push(&mut self, row: &[i8]) -> Result<()> {
         if self
             .current
             .as_ref()
@@ -2552,7 +2553,7 @@ impl BlockSegmentWriter {
         let row_bytes = self
             .rows_per_batch
             .checked_mul(self.row_len)
-            .and_then(|value| value.checked_mul(std::mem::size_of::<i32>()))
+            .and_then(|value| value.checked_mul(std::mem::size_of::<i8>()))
             .context("descriptor batch byte count overflow")?;
         let ordinal_bytes = self
             .rows_per_batch
@@ -2636,7 +2637,7 @@ impl BlockSegmentWriter {
             .iter_mut()
             .map(|column| {
                 let values = std::mem::replace(column, Vec::with_capacity(rows_per_batch));
-                Arc::new(Int32Array::from(values)) as Arc<dyn Array>
+                Arc::new(Int8Array::from(values)) as Arc<dyn Array>
             })
             .collect();
         arrays.push(Arc::new(UInt32Array::from(vec![range_ordinal; row_count])));
@@ -2759,7 +2760,7 @@ fn copy_segment_to_parquet(
 fn visit_segment_rows(
     segment: &DescriptorSegment,
     layout: DescriptorLayout,
-    mut visit: impl FnMut(&[i32]) -> Result<()>,
+    mut visit: impl FnMut(&[i8]) -> Result<()>,
 ) -> Result<usize> {
     let file = File::open(&segment.path)
         .with_context(|| format!("failed to open segment {}", segment.path.display()))?;
@@ -2786,8 +2787,8 @@ fn visit_segment_rows(
             .map(|column| {
                 column
                     .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .context("segment descriptor column is not Int32")
+                    .downcast_ref::<Int8Array>()
+                    .context("segment descriptor column is not Int8")
             })
             .collect::<Result<Vec<_>>>()?;
         let range_column = batch
@@ -2874,8 +2875,8 @@ fn copy_surviving_segment_to_parquet(
             .map(|column| {
                 column
                     .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .context("segment descriptor column is not Int32")
+                    .downcast_ref::<Int8Array>()
+                    .context("segment descriptor column is not Int8")
             })
             .collect::<Result<Vec<_>>>()?;
         for row in 0..batch.num_rows() {
@@ -2906,7 +2907,7 @@ fn copy_surviving_segment_to_parquet(
         if !selected_columns[0].is_empty() {
             let arrays = selected_columns
                 .into_iter()
-                .map(|column| Arc::new(Int32Array::from(column)) as Arc<dyn Array>)
+                .map(|column| Arc::new(Int8Array::from(column)) as Arc<dyn Array>)
                 .collect();
             let output = RecordBatch::try_new(output_schema.clone(), arrays)
                 .context("failed to construct surviving descriptor batch")?;
@@ -2949,7 +2950,7 @@ mod tests {
         ))
     }
 
-    fn read_rows(path: &Path) -> Result<Vec<Vec<i32>>> {
+    fn read_rows(path: &Path) -> Result<Vec<Vec<i8>>> {
         let file = File::open(path)?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
         let reader = builder.build()?;
@@ -2962,8 +2963,8 @@ mod tests {
                 .map(|column| {
                     column
                         .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .context("final descriptor column is not Int32")
+                        .downcast_ref::<Int8Array>()
+                        .context("final descriptor column is not Int8")
                 })
                 .collect::<Result<Vec<_>>>()?;
             for row in 0..batch.num_rows() {
@@ -2976,7 +2977,7 @@ mod tests {
     fn expected_rows(
         request: &ExcitationRequest,
         peel_subshells: &[String],
-    ) -> Result<Vec<Vec<i32>>> {
+    ) -> Result<Vec<Vec<i8>>> {
         let occupations = enumerate_occupations(request)?;
         let global_indices = peel_subshells
             .iter()
@@ -2984,7 +2985,7 @@ mod tests {
             .map(|(index, label)| Ok((label.parse::<Subshell>()?, u16::try_from(index)?)))
             .collect::<Result<HashMap<_, _>>>()?;
         let layout = DescriptorLayout::new(DescriptorVersion::V2, peel_subshells.len());
-        let mut blocks = BTreeMap::<(u16, bool), Vec<Vec<i32>>>::new();
+        let mut blocks = BTreeMap::<(u16, bool), Vec<Vec<i8>>>::new();
         for configuration in occupations.configurations {
             let generation_request = GenerationRequest {
                 core_subshells: occupations.core_subshells.clone(),
@@ -3015,6 +3016,7 @@ mod tests {
                 let mut row = vec![0; layout.row_len()];
                 write_feature_row(
                     layout,
+                    peel_subshells,
                     &remapped,
                     file.couplings(record)?,
                     record.total_two_j,
@@ -3328,7 +3330,7 @@ mod tests {
 
     /// One run's published result: CSF text, descriptor rows, record count,
     /// block count.
-    type Published = (Vec<u8>, Vec<Vec<i32>>, usize, usize);
+    type Published = (Vec<u8>, Vec<Vec<i8>>, usize, usize);
 
     /// The verified path must publish exactly what the exact path publishes.
     ///
@@ -3703,7 +3705,7 @@ mod tests {
     fn the_combined_final_pass_is_thread_invariant() {
         let root = temporary_directory("final-encoding-threads");
         fs::create_dir(&root).unwrap();
-        let mut publications: Vec<(Vec<u8>, Vec<Vec<i32>>, Vec<(u64, String, String, String)>)> =
+        let mut publications: Vec<(Vec<u8>, Vec<Vec<i8>>, Vec<(u64, String, String, String)>)> =
             Vec::new();
         for threads in [1usize, 2, 4, 8] {
             let directory = root.join(format!("threads-{threads}"));
@@ -3844,7 +3846,13 @@ mod tests {
             // A row a real run could produce: a handful of distinct values,
             // mostly MISSING, which is what the V2 payload looks like.
             let row = (0..row_len)
-                .map(|index| if index % 5 == 0 { index as i32 } else { -1 })
+                .map(|index| {
+                    if index % 5 == 0 {
+                        i8::try_from(index % 127).unwrap()
+                    } else {
+                        -1
+                    }
+                })
                 .collect::<Vec<_>>();
             for _ in 0..rows {
                 writer.push(&row).unwrap();
@@ -3873,7 +3881,7 @@ mod tests {
     }
 
     /// Read the first `limit` rows back out of an Arrow IPC segment.
-    fn read_segment_rows(path: &Path, limit: usize) -> Vec<Vec<i32>> {
+    fn read_segment_rows(path: &Path, limit: usize) -> Vec<Vec<i8>> {
         let file = File::open(path).unwrap();
         let reader = FileReader::try_new(BufReader::new(file), None).unwrap();
         let mut rows = Vec::new();
@@ -3883,7 +3891,7 @@ mod tests {
                 .columns()
                 .iter()
                 .take(batch.num_columns() - 2)
-                .map(|column| column.as_any().downcast_ref::<Int32Array>().unwrap())
+                .map(|column| column.as_any().downcast_ref::<Int8Array>().unwrap())
                 .collect::<Vec<_>>();
             for index in 0..batch.num_rows() {
                 if rows.len() == limit {

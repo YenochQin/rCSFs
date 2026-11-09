@@ -93,8 +93,8 @@ fn create_large_csf(path: &Path, csf_count: usize) {
     fs::write(path, content).expect("Failed to create large CSF file");
 }
 
-fn read_i32_descriptor_columns(path: &Path) -> Vec<Vec<i32>> {
-    use arrow::array::Int32Array;
+fn read_i8_descriptor_columns(path: &Path) -> Vec<Vec<i8>> {
+    use arrow::array::Int8Array;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     let file = File::open(path).expect("Failed to open descriptor parquet");
@@ -103,7 +103,7 @@ fn read_i32_descriptor_columns(path: &Path) -> Vec<Vec<i32>> {
         .build()
         .expect("Failed to build parquet reader");
 
-    let mut columns: Vec<Vec<i32>> = Vec::new();
+    let mut columns: Vec<Vec<i8>> = Vec::new();
     for batch in reader {
         let batch = batch.expect("Failed to read parquet batch");
         if columns.is_empty() {
@@ -113,8 +113,8 @@ fn read_i32_descriptor_columns(path: &Path) -> Vec<Vec<i32>> {
             let array = batch
                 .column(col_idx)
                 .as_any()
-                .downcast_ref::<Int32Array>()
-                .expect("Descriptor column should be Int32");
+                .downcast_ref::<Int8Array>()
+                .expect("Descriptor column should be Int8");
             for row_idx in 0..array.len() {
                 values.push(array.value(row_idx));
             }
@@ -611,8 +611,8 @@ fn test_descriptor_parallel_matches_sequential_outputs() {
     .expect("Parallel raw descriptor generation should succeed");
 
     assert_eq!(
-        read_i32_descriptor_columns(&sequential_raw_path),
-        read_i32_descriptor_columns(&parallel_raw_path)
+        read_i8_descriptor_columns(&sequential_raw_path),
+        read_i8_descriptor_columns(&parallel_raw_path)
     );
 
     cleanup_test_file(&input_path);

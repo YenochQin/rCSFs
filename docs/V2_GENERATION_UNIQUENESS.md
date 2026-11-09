@@ -101,7 +101,7 @@
 
 ### 3.5 L5：行唯一决定遍历（隐藏耦合是可恢复的）
 
-行里可用的信息是：每个子壳层的 `n`、`2j/seniority`（或 `MISSING`）、
+行里可用的信息是：每个子壳层的 `n`、打印的 `2j`（或 `MISSING`）、真实 `seniority`、
 boundary 落在 `2..occupied-1` 的 `2K`（其余为 `MISSING`），以及全局 `total_two_j`/`parity`。
 设 `cumulative[0] = selected[0].two_j`、`cumulative[last] = target`，
 中间 `cumulative[i]` 是 boundary `i+1` 处的累积 `2J`。对内部下标 `i`（`1 ≤ i ≤ last-1`）：

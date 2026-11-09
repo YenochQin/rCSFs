@@ -33,6 +33,9 @@ pub(super) fn sidecar(path: &Path, count: usize, shells: &[String]) -> Result<()
     struct Metadata<'a> {
         format_version: u8,
         encoding: &'a str,
+        descriptor_dtype: &'a str,
+        max_two_j: u16,
+        seniority_encoding: &'a str,
         normalized: bool,
         record_count: usize,
         subshells: &'a [String],
@@ -42,6 +45,9 @@ pub(super) fn sidecar(path: &Path, count: usize, shells: &[String]) -> Result<()
         toml::to_string(&Metadata {
             format_version: 2,
             encoding: "parquet",
+            descriptor_dtype: crate::descriptor_schema::DESCRIPTOR_DTYPE,
+            max_two_j: crate::descriptor_schema::MAX_TWO_J,
+            seniority_encoding: crate::descriptor_schema::SENIORITY_ENCODING,
             normalized: false,
             record_count: count,
             subshells: shells,

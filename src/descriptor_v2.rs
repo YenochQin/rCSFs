@@ -1,24 +1,26 @@
 //! V2 descriptor encode/decode and CSF restoration.
 //!
-//! V2 stores every printed value verbatim (using
-//! [`descriptor_schema::MISSING`] for anything GRASP did not print) so
-//! `decode_v2_into` is the exact inverse of `encode_v2`: no line2 back-fill, no
-//! folding the total `2J` into the last occupied subshell, and seniority is
-//! never discarded.
+//! V2 stores physical seniority, including zero for empty/closed subshells.
+//! Printed J and coupling fields retain MISSING; restoring a record projects
+//! physical seniority back to the canonical GRASP printed label.
 
 use anyhow::{Context, Result, ensure};
 
 use crate::complete_csf::{
     CompleteCsfFile, CsfRecord, IntermediateCoupling, OccupiedSubshell, Parity, SubshellState,
 };
+use crate::configuration_generation::Subshell;
 use crate::csfs_descriptor::parse_peel_subshells_from_header_lines;
-use crate::descriptor_schema::{DescriptorLayout, DescriptorVersion, MISSING, validate_record};
+use crate::descriptor_schema::{
+    DescriptorLayout, DescriptorVersion, MISSING, checked_angular_value, validate_record,
+};
+use crate::seniority::{physical_seniority, printed_seniority};
 
 /// Encode one already-validated CSF record into a caller-owned V2 row buffer.
 ///
 /// `row.len()` must equal `layout.row_len()`. Validates the record through
 /// [`validate_record`] first, so an encoded row is always a legal V2 record.
-pub fn encode_v2(file: &CompleteCsfFile, record: &CsfRecord, row: &mut [i32]) -> Result<()> {
+pub fn encode_v2(file: &CompleteCsfFile, record: &CsfRecord, row: &mut [i8]) -> Result<()> {
     let occupied = file.occupied(record)?;
     let couplings = file.couplings(record)?;
     validate_record(&file.subshells, occupied, couplings)?;
@@ -26,6 +28,7 @@ pub fn encode_v2(file: &CompleteCsfFile, record: &CsfRecord, row: &mut [i32]) ->
     let layout = DescriptorLayout::new(DescriptorVersion::V2, file.subshells.len());
     write_feature_row(
         layout,
+        &file.subshells,
         occupied,
         couplings,
         record.total_two_j,
@@ -43,11 +46,12 @@ pub fn encode_v2(file: &CompleteCsfFile, record: &CsfRecord, row: &mut [i32]) ->
 /// `occupied`/`couplings` themselves first.
 pub(crate) fn write_feature_row(
     layout: DescriptorLayout,
+    subshells: &[String],
     occupied: &[OccupiedSubshell],
     couplings: &[IntermediateCoupling],
     total_two_j: u16,
     parity: Parity,
-    row: &mut [i32],
+    row: &mut [i8],
 ) -> Result<()> {
     ensure!(
         row.len() == layout.row_len(),
@@ -55,27 +59,41 @@ pub(crate) fn write_feature_row(
         row.len(),
         layout.row_len()
     );
+    ensure!(
+        subshells.len() == layout.subshell_count(),
+        "subshell table does not match descriptor layout"
+    );
     row.fill(MISSING);
     for index in 0..layout.subshell_count() {
         row[layout.slot(index) + layout.n_offset()] = 0;
+        row[layout.slot(index) + layout.seniority_offset()] = 0;
     }
 
     for (position, shell) in occupied.iter().enumerate() {
         let index = usize::from(shell.subshell_index);
         let base = layout.slot(index);
-        row[base + layout.n_offset()] = i32::from(shell.occupation);
+        let subshell: Subshell = subshells
+            .get(index)
+            .context("subshell index exceeds descriptor layout")?
+            .parse()?;
+        row[base + layout.seniority_offset()] = i8::try_from(physical_seniority(
+            u16::from(subshell.capacity() - 1),
+            shell.occupation,
+            shell.state,
+        )?)
+        .context("physical seniority does not fit Int8")?;
+        row[base + layout.n_offset()] =
+            i8::try_from(shell.occupation).context("occupation does not fit Int8")?;
         if let Some(state) = shell.state {
-            row[base + layout.two_j_offset()] = i32::from(state.two_j);
-            if let Some(seniority) = state.seniority {
-                row[base + layout.seniority_offset()] = i32::from(seniority);
-            }
+            row[base + layout.two_j_offset()] = checked_angular_value(state.two_j, "subshell 2J")?;
         }
         // Boundary == 1-based occupied position (design doc §3.1). Position 0
         // and the last position always resolve to a boundary the writer never
         // prints (`2 <= boundary < field_count`), so their 2K slot stays MISSING.
         let boundary = u16::try_from(position + 1)?;
         if let Some(coupling) = couplings.iter().find(|value| value.boundary == boundary) {
-            row[base + layout.two_k_offset()] = i32::from(coupling.two_j);
+            row[base + layout.two_k_offset()] =
+                checked_angular_value(coupling.two_j, "intermediate 2K")?;
         }
     }
 
@@ -85,19 +103,19 @@ pub(crate) fn write_feature_row(
     let parity_index = layout
         .parity_index()
         .expect("V2 layout always carries parity");
-    row[total_index] = i32::from(total_two_j);
+    row[total_index] = checked_angular_value(total_two_j, "total 2J")?;
     row[parity_index] = parity_sign(parity);
     Ok(())
 }
 
-fn parity_sign(parity: Parity) -> i32 {
+fn parity_sign(parity: Parity) -> i8 {
     match parity {
         Parity::Even => 1,
         Parity::Odd => -1,
     }
 }
 
-fn parity_from_sign(value: i32) -> Result<Parity> {
+fn parity_from_sign(value: i8) -> Result<Parity> {
     match value {
         1 => Ok(Parity::Even),
         -1 => Ok(Parity::Odd),
@@ -112,8 +130,9 @@ fn parity_from_sign(value: i32) -> Result<Parity> {
 /// `(u16, Parity)` pair is the record's total `2J` and parity, read verbatim
 /// from the row's global columns.
 pub fn decode_v2_into(
-    row: &[i32],
+    row: &[i8],
     layout: DescriptorLayout,
+    subshells: &[String],
     occupied: &mut Vec<OccupiedSubshell>,
     couplings: &mut Vec<IntermediateCoupling>,
 ) -> Result<(u16, Parity)> {
@@ -127,11 +146,15 @@ pub fn decode_v2_into(
         row.len(),
         layout.row_len()
     );
+    ensure!(
+        subshells.len() == layout.subshell_count(),
+        "subshell table does not match descriptor layout"
+    );
     occupied.clear();
     couplings.clear();
 
     let mut occupied_position = 0u16;
-    for index in 0..layout.subshell_count() {
+    for (index, subshell_label) in subshells.iter().enumerate() {
         let base = layout.slot(index);
         let n_raw = row[base + layout.n_offset()];
         let two_j_raw = row[base + layout.two_j_offset()];
@@ -139,27 +162,28 @@ pub fn decode_v2_into(
         let two_k_raw = row[base + layout.two_k_offset()];
         if n_raw == 0 {
             ensure!(
-                two_j_raw == MISSING && seniority_raw == MISSING && two_k_raw == MISSING,
-                "unoccupied subshell {index} must be encoded as [0, -1, -1, -1]"
+                two_j_raw == MISSING && seniority_raw == 0 && two_k_raw == MISSING,
+                "unoccupied subshell {index} must be encoded as [0, -1, 0, -1]"
             );
             continue;
         }
         ensure!(n_raw > 0, "decoded occupation {n_raw} must be positive");
         let occupation = u8::try_from(n_raw).context("decoded occupation exceeds one byte")?;
 
+        let subshell: Subshell = subshell_label.parse()?;
+        let single_two_j = u16::from(subshell.capacity() - 1);
+        let physical_v = u8::try_from(seniority_raw)
+            .context("physical seniority must be non-negative and fit one byte; regenerate legacy descriptors")?;
         let state = if two_j_raw == MISSING {
             ensure!(
-                seniority_raw == MISSING,
-                "subshell {index} has seniority without a printed 2J"
+                physical_v == physical_seniority(single_two_j, occupation, None)?,
+                "physical seniority does not match omitted subshell state"
             );
             None
         } else {
             let two_j = u16::try_from(two_j_raw).context("decoded 2J is negative")?;
-            let seniority = if seniority_raw == MISSING {
-                None
-            } else {
-                Some(u8::try_from(seniority_raw).context("decoded seniority is negative")?)
-            };
+            checked_angular_value(two_j, "subshell 2J")?;
+            let seniority = printed_seniority(single_two_j, occupation, two_j, physical_v)?;
             Some(SubshellState { two_j, seniority })
         };
 
@@ -171,9 +195,11 @@ pub fn decode_v2_into(
         occupied_position += 1;
 
         if two_k_raw != MISSING {
+            let two_j = u16::try_from(two_k_raw).context("decoded 2K is negative")?;
+            checked_angular_value(two_j, "intermediate 2K")?;
             couplings.push(IntermediateCoupling {
                 boundary: occupied_position,
-                two_j: u16::try_from(two_k_raw).context("decoded 2K is negative")?,
+                two_j,
             });
         }
     }
@@ -187,6 +213,7 @@ pub fn decode_v2_into(
     let total_raw = row[total_index];
     ensure!(total_raw != MISSING, "row is missing total_two_j");
     let total_two_j = u16::try_from(total_raw).context("decoded total 2J is negative")?;
+    checked_angular_value(total_two_j, "total 2J")?;
     let parity = parity_from_sign(row[parity_index])?;
 
     Ok((total_two_j, parity))
@@ -201,7 +228,7 @@ pub fn decode_v2_into(
 /// whenever `total_two_j`/parity changes between consecutive appended
 /// records, which is correct for a full file or an arbitrary subset alike.
 pub fn restore_file(
-    rows: &[Vec<i32>],
+    rows: &[Vec<i8>],
     layout: DescriptorLayout,
     header_lines: [String; 5],
     block_lengths: Option<&[usize]>,
@@ -269,8 +296,13 @@ pub fn restore_file(
             row.len(),
             layout.row_len()
         );
-        let (total_two_j, parity) =
-            decode_v2_into(row, layout, &mut occupied_buf, &mut coupling_buf)?;
+        let (total_two_j, parity) = decode_v2_into(
+            row,
+            layout,
+            &subshells,
+            &mut occupied_buf,
+            &mut coupling_buf,
+        )?;
         validate_record(&subshells, &occupied_buf, &coupling_buf)
             .with_context(|| format!("row {row_index} decoded to an invalid CSF record"))?;
         let force_new_block = block_starts
@@ -317,13 +349,19 @@ mod tests {
         let layout = layout_for(&generated);
 
         for record in &generated.records {
-            let mut row = vec![0i32; layout.row_len()];
+            let mut row = vec![0i8; layout.row_len()];
             encode_v2(&generated, record, &mut row).unwrap();
 
             let mut occupied = Vec::new();
             let mut couplings = Vec::new();
-            let (total_two_j, parity) =
-                decode_v2_into(&row, layout, &mut occupied, &mut couplings).unwrap();
+            let (total_two_j, parity) = decode_v2_into(
+                &row,
+                layout,
+                &generated.subshells,
+                &mut occupied,
+                &mut couplings,
+            )
+            .unwrap();
 
             assert_eq!(total_two_j, record.total_two_j);
             assert_eq!(parity, record.parity);
@@ -333,10 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn printed_zero_differs_from_missing() {
-        // Two 4f(4) states at 2J=4 have seniority 2 and 4 (design doc §2.2
-        // collision sample); this asserts encode distinguishes an occupied
-        // slot's absent state (MISSING) from an explicit printed value.
+    fn unprinted_seniority_is_physical_while_coupling_stays_missing() {
         let request = GenerationRequest {
             core_subshells: Vec::new(),
             configuration: vec![SubshellOccupation {
@@ -349,15 +384,15 @@ mod tests {
         let generated = generate_csfs(&request).unwrap();
         let layout = layout_for(&generated);
         let record = &generated.records[0];
-        let mut row = vec![0i32; layout.row_len()];
+        let mut row = vec![0i8; layout.row_len()];
         encode_v2(&generated, record, &mut row).unwrap();
 
-        // Single occupied subshell: n printed, 2J printed, seniority never
-        // printed (single-electron state has no seniority label), 2K missing
+        // A single electron has physical seniority one despite no printed
+        // seniority label. The unused coupling channel remains missing
         // (position 0 is also the last position here).
         assert_eq!(row[layout.slot(0) + layout.n_offset()], 1);
         assert_eq!(row[layout.slot(0) + layout.two_j_offset()], 3);
-        assert_eq!(row[layout.slot(0) + layout.seniority_offset()], MISSING);
+        assert_eq!(row[layout.slot(0) + layout.seniority_offset()], 1);
         assert_eq!(row[layout.slot(0) + layout.two_k_offset()], MISSING);
     }
 
@@ -366,6 +401,8 @@ mod tests {
         let layout = DescriptorLayout::new(DescriptorVersion::V2, 2);
         let mut row = vec![MISSING; layout.row_len()];
         row[layout.slot(0) + layout.n_offset()] = 0;
+        row[layout.slot(0) + layout.seniority_offset()] = 0;
+        row[layout.slot(1) + layout.seniority_offset()] = 1;
         row[layout.slot(1) + layout.n_offset()] = 1;
         row[layout.slot(1) + layout.two_j_offset()] = 1;
         row[layout.total_two_j_index().unwrap()] = 1;
@@ -373,12 +410,28 @@ mod tests {
 
         let mut occupied = Vec::new();
         let mut couplings = Vec::new();
-        decode_v2_into(&row, layout, &mut occupied, &mut couplings).unwrap();
+        decode_v2_into(
+            &row,
+            layout,
+            &["1s".to_owned(), "2s".to_owned()],
+            &mut occupied,
+            &mut couplings,
+        )
+        .unwrap();
         assert_eq!(occupied.len(), 1);
         assert_eq!(occupied[0].subshell_index, 1);
 
         row[layout.slot(0) + layout.two_j_offset()] = 3;
-        assert!(decode_v2_into(&row, layout, &mut occupied, &mut couplings).is_err());
+        assert!(
+            decode_v2_into(
+                &row,
+                layout,
+                &["1s".to_owned(), "2s".to_owned()],
+                &mut occupied,
+                &mut couplings
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -398,7 +451,7 @@ mod tests {
 
         let mut rows = Vec::new();
         for record in &generated.records {
-            let mut row = vec![0i32; layout.row_len()];
+            let mut row = vec![0i8; layout.row_len()];
             encode_v2(&generated, record, &mut row).unwrap();
             rows.push(row);
         }
@@ -413,17 +466,38 @@ mod tests {
         for row in &rows {
             let mut occupied = Vec::new();
             let mut couplings = Vec::new();
-            decode_v2_into(row, layout, &mut occupied, &mut couplings).unwrap();
+            decode_v2_into(
+                row,
+                layout,
+                &generated.subshells,
+                &mut occupied,
+                &mut couplings,
+            )
+            .unwrap();
             assert_eq!(occupied.len(), 1);
         }
         // Decoded records remain distinguishable: different rows decode to
         // different seniority values on the same occupied subshell.
         let mut occupied_a = Vec::new();
         let mut couplings_a = Vec::new();
-        decode_v2_into(&rows[0], layout, &mut occupied_a, &mut couplings_a).unwrap();
+        decode_v2_into(
+            &rows[0],
+            layout,
+            &generated.subshells,
+            &mut occupied_a,
+            &mut couplings_a,
+        )
+        .unwrap();
         let mut occupied_b = Vec::new();
         let mut couplings_b = Vec::new();
-        decode_v2_into(&rows[1], layout, &mut occupied_b, &mut couplings_b).unwrap();
+        decode_v2_into(
+            &rows[1],
+            layout,
+            &generated.subshells,
+            &mut occupied_b,
+            &mut couplings_b,
+        )
+        .unwrap();
         assert_ne!(occupied_a[0].state, occupied_b[0].state);
     }
 
@@ -523,7 +597,7 @@ mod tests {
 
         let mut rows = Vec::new();
         for record in &parsed.records {
-            let mut row = vec![0i32; layout.row_len()];
+            let mut row = vec![0i8; layout.row_len()];
             encode_v2(&parsed, record, &mut row).unwrap();
             rows.push(row);
         }
@@ -559,7 +633,7 @@ mod tests {
 
         let mut rows = Vec::new();
         for record in &parsed.records {
-            let mut row = vec![0i32; layout.row_len()];
+            let mut row = vec![0i8; layout.row_len()];
             encode_v2(&parsed, record, &mut row).unwrap();
             rows.push(row);
         }
@@ -592,10 +666,18 @@ mod tests {
         let layout = DescriptorLayout::new(DescriptorVersion::V2, 1);
         let mut row = vec![MISSING; layout.row_len()];
         row[layout.slot(0) + layout.n_offset()] = 1;
+        row[layout.slot(0) + layout.seniority_offset()] = 1;
         row[layout.parity_index().unwrap()] = 1;
         let mut occupied = Vec::new();
         let mut couplings = Vec::new();
-        let error = decode_v2_into(&row, layout, &mut occupied, &mut couplings).unwrap_err();
+        let error = decode_v2_into(
+            &row,
+            layout,
+            &["5s".to_owned()],
+            &mut occupied,
+            &mut couplings,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("missing total_two_j"));
     }
 }

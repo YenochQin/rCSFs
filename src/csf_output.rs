@@ -89,6 +89,8 @@ pub(crate) mod descriptor {
     }
 
     pub(crate) fn writer_managed_bytes(layout: DescriptorLayout) -> Result<u64> {
+        // Parquet INT(8,true) uses physical INT32 values. Keep the encoder
+        // allowance wide even though Arrow/source descriptor buffers are i8.
         let bytes = layout
             .row_len()
             .checked_mul(ROW_GROUP_ROWS)
@@ -129,7 +131,7 @@ pub(crate) mod descriptor {
                     let mut leaves = compute_leaves(field, &column)?;
                     anyhow::ensure!(
                         leaves.len() == 1,
-                        "descriptor Int32 column unexpectedly has {} leaves",
+                        "descriptor Int8 column unexpectedly has {} leaves",
                         leaves.len()
                     );
                     column_writer.write(&leaves.remove(0))?;
@@ -153,7 +155,7 @@ pub(crate) mod descriptor {
 
     fn parallel_group_managed_bytes(columns: usize, rows: usize) -> Result<u64> {
         // Dictionary hash tables, encoded pages and column chunks may coexist.
-        // Six raw Int32 copies plus fixed per-column overhead is deliberately
+        // Parquet physically encodes Int8 as INT32; six such copies plus overhead is
         // conservative and is additive to the long-lived writer allowance.
         let bytes = columns
             .checked_mul(rows)

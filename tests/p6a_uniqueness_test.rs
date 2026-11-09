@@ -132,8 +132,8 @@ struct PeelFrame {
     /// Run-level index of each of the configuration's local Peel subshells.
     mapping: Vec<usize>,
     local_layout: DescriptorLayout,
-    local_row: Vec<i32>,
-    row: Vec<i32>,
+    local_row: Vec<i8>,
+    row: Vec<i8>,
 }
 
 impl PeelFrame {
@@ -157,8 +157,8 @@ impl PeelFrame {
         let layout = DescriptorLayout::new(DescriptorVersion::V2, peel.len());
         let local_layout = DescriptorLayout::new(DescriptorVersion::V2, file.subshells.len());
         Ok(Self {
-            row: vec![0i32; layout.row_len()],
-            local_row: vec![0i32; local_layout.row_len()],
+            row: vec![0i8; layout.row_len()],
+            local_row: vec![0i8; local_layout.row_len()],
             layout,
             mapping,
             local_layout,
@@ -166,11 +166,12 @@ impl PeelFrame {
     }
 
     /// Encode one record into the run's Peel coordinates.
-    fn encode(&mut self, file: &CompleteCsfFile, record: &CsfRecord) -> Result<&[i32]> {
+    fn encode(&mut self, file: &CompleteCsfFile, record: &CsfRecord) -> Result<&[i8]> {
         encode_v2(file, record, &mut self.local_row)?;
         self.row.fill(MISSING);
         for index in 0..self.layout.subshell_count() {
             self.row[self.layout.slot(index) + self.layout.n_offset()] = 0;
+            self.row[self.layout.slot(index) + self.layout.seniority_offset()] = 0;
         }
         let channels = self.local_layout.channels_per_subshell();
         for (local_index, &global_index) in self.mapping.iter().enumerate() {
@@ -216,7 +217,7 @@ impl PeelFrame {
 
 /// One generated record, in the run's Peel coordinates.
 struct Sighted {
-    row: Vec<i32>,
+    row: Vec<i8>,
     text: String,
     origin: String,
 }
@@ -316,6 +317,7 @@ fn audit(requests: &[GenerationRequest]) -> Result<Audit> {
         })
         .collect::<Result<Vec<_>>>()?;
     let peel = peel_table(&files);
+    let peel_labels = peel.iter().map(ToString::to_string).collect::<Vec<_>>();
     ensure!(!peel.is_empty(), "the family occupies no subshell");
     let index_of = peel
         .iter()
@@ -346,8 +348,13 @@ fn audit(requests: &[GenerationRequest]) -> Result<Audit> {
 
             let mut occupied = Vec::new();
             let mut couplings = Vec::new();
-            let (total_two_j, parity) =
-                decode_v2_into(&row, frame.layout, &mut occupied, &mut couplings)?;
+            let (total_two_j, parity) = decode_v2_into(
+                &row,
+                frame.layout,
+                &peel_labels,
+                &mut occupied,
+                &mut couplings,
+            )?;
             if occupied != expected
                 || couplings != file.couplings(record)?
                 || total_two_j != record.total_two_j

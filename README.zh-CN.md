@@ -36,8 +36,8 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 需要独立可执行程序时，使用下方的 [Rust 原生 CLI](#将-rust-原生-cli-加入-path)。
 需要 Python 库和 Python CLI 时，使用 Python 3.15 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
 
-本仓库正在准备 **2.1.1**，使用独立的 Python 3.15 `.venv`，详见
-[源码开发说明](docs/development.md)。下方固定版本安装示例需等 2.1.1
+本仓库正在准备 **3.0.0**，使用独立的 Python 3.15 `.venv`，详见
+[源码开发说明](docs/development.md)。下方固定版本安装示例需等 3.0.0
 发布到 PyPI 后使用；推送源码不会自动发布安装包。
 分发包名、Python 导入名和命令行入口都叫 `rcsfs`。
 
@@ -55,7 +55,7 @@ uv run rcsfs --help
 已有 uv 项目使用 Python 3.15 或更新版本时，直接在其目录运行 `uv add rcsfs`。
 该命令会将依赖写入 `pyproject.toml`，更新 `uv.lock`，并安装到项目的 `.venv` 中。
 运行自己的分析脚本时使用 `uv run python analysis.py`，无需手动激活环境。
-需要固定版本时，使用 `uv add "rcsfs==2.1.1"`。
+需要固定版本时，使用 `uv add "rcsfs==3.0.0"`。
 
 也可以手动将依赖加入已有的 `pyproject.toml`：
 
@@ -65,7 +65,7 @@ name = "csf-analysis"
 version = "0.1.0"
 requires-python = ">=3.15"
 dependencies = [
-    "rcsfs==2.1.1",
+    "rcsfs==3.0.0",
 ]
 ```
 
@@ -80,7 +80,7 @@ dependencies = [
 python -m pip install rcsfs
 ```
 
-需要固定版本时，使用 `python -m pip install "rcsfs==2.1.1"`。
+需要固定版本时，使用 `python -m pip install "rcsfs==3.0.0"`。
 两种安装方式提供相同的 Python API 和 `rcsfs` 命令。
 
 发布工作流的目标是 CPython 3.15 wheel，覆盖 Linux x86_64（glibc 2.28+）、
@@ -307,7 +307,7 @@ peel_subshells = read_peel_subshells("output_header.toml")
 每个 peel subshell 对应四个整数列（具名列）：
 
 ```text
-sub{i}_n, sub{i}_2j, sub{i}_v, sub{i}_2k   （占据数、打印的 2J、seniority、打印的耦合 2K）
+sub{i}_n, sub{i}_2j, sub{i}_v, sub{i}_2k   （占据数、打印的 2J、真实 seniority、打印的耦合 2K）
 ```
 
 外加两个全局列：
@@ -316,7 +316,11 @@ sub{i}_n, sub{i}_2j, sub{i}_v, sub{i}_2k   （占据数、打印的 2J、seniori
 total_two_j, parity   （parity 取值 +1/-1）
 ```
 
-GRASP 未打印的字段值为 `-1`（`MISSING`），与显式打印的 `0` 区分。V2 始终写为 `Int32` 列，
+未打印的 J/耦合字段值为 `-1`（`MISSING`），与显式打印的 `0` 区分。
+`v` 始终保存真实 seniority，空/满壳层为 0。文件要求 `seniority_encoding=physical`、`descriptor_dtype=int8`、`max_two_j=126`；
+J/耦合量子数超出 0..126 时明确报错，`-1` 缺省值保留。
+旧的打印标签型或 Int32 描述符需要从 CSF 文本或三行 CSF Parquet 重新生成，恢复入口拒绝缺少此标识的文件。
+`seniority_to_printed_v(two_j, occupation, subshell_two_j, seniority)` 可还原需要打印的标签，省略时返回 -1。V2 始终写为 `Int8` 列，
 保留原始整数。原 `normalize` 参数已删除；ML 特征缩放由下游训练流程处理。
 
 当提供 `header_path`（或从 `input_parquet` 同目录自动检测）时，其 SHA-256 会记录在输出
@@ -553,7 +557,7 @@ rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
 | `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | 将 CSF 文本转换为 Parquet |
 | `get_parquet_info(input_path)` | 读取 Parquet 元数据 |
 | `read_peel_subshells(header_path)` | 从头文件 TOML 中提取 peel subshells |
-| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, compression=None, *, descriptor_version=2, header_path=None)` | 从转换后的 CSF 数据生成描述符 Parquet；`descriptor_version=2` 是唯一受支持的格式，写具名 Int32 列 |
+| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, compression=None, *, descriptor_version=2, header_path=None)` | 从转换后的 CSF 数据生成描述符 Parquet；`descriptor_version=2` 是唯一受支持的格式，写具名 Int8 列 |
 | `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | 根据 V2 描述符 Parquet 文件及其来源 header TOML 重建 CSF 文本文件 |
 | `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | 按对称性分块将 CSF 列表重排为零级 + 一级空间 |
 | `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | 写出保守且非精确的相互作用候选上界；统计固定包含 `exact=False` |

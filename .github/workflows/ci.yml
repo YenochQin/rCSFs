@@ -29,17 +29,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build without Python
-        run: cargo build --release --locked --no-default-features --features cli --bin rcsfs
-      - name: Test Rust algorithms and Python-free CLI
-        run: cargo test --release --locked --no-default-features --features cli
       - uses: actions/setup-python@v6
         with:
           python-version: "3.15"
       - name: Select Python for PyO3
         run: python -c 'import os, sys; open(os.environ["GITHUB_ENV"], "a").write(f"PYO3_PYTHON={sys.executable}\n")'
       - name: Install Python test dependencies
-        run: python -m pip install 'polars>=2.1.0' 'pyarrow>=26.0.0' 'pytest>=9.0.2' 'pytest-speed>=0.3.5'
+        run: python -m pip install --group test
+      - name: Check pytest startup and packaging-test imports
+        run: python -m pytest --collect-only -q tests/test_github_release.py tests/build_backend_test.py
+      - name: Build without Python
+        run: cargo build --release --locked --no-default-features --features cli --bin rcsfs
+      - name: Test Rust algorithms and Python-free CLI
+        run: cargo test --release --locked --no-default-features --features cli
       - name: Test Rust with Python bindings
         run: cargo test --release --locked
       - name: Build the in-tree Python extension

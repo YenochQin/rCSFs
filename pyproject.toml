@@ -37,13 +37,17 @@ Source = "https://github.com/YenochQin/rCSFs"
 Issues = "https://github.com/YenochQin/rCSFs/issues"
 
 [dependency-groups]
-dev = [
+test = [
     "maturin>=1.15,<2.0",
     "pytest>=9.0.2",
-    "pytest-pretty>=1.2.0",
-    "pytest-speed>=0.3.5",
     # Parquet metadata assertions in the self-contained test suite.
     "pyarrow>=26.0.0",
+    # CI stages the extension directly instead of installing the package.
+    "polars>=2.1.0",
+]
+dev = [
+    { include-group = "test" },
+    "pytest-pretty>=1.2.0",
     "jupyter>=1.0.0",
     "jupyterlab>=4.0.0",
     "ipython>=9.8.0",
@@ -113,7 +117,9 @@ url = "https://mirrors.aliyun.com/pypi/simple/"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--ignore=temp"
+# Disable the retired plugin in environments created before its removal.
+# pytest-speed 0.3.5 registers conflicting option destinations on pytest 9.2.
+addopts = "--ignore=temp -p no:speed"
 # `[tool.maturin] python-source = "."` makes this repository the package root,
 # so the checkout's `rcsfs/` must win over the wheel `uv sync` installed in the
 # shared environment. Without this, the bare `pytest` script resolves `rcsfs`

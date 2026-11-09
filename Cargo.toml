@@ -48,6 +48,9 @@ clap = { version = "4.5", optional = true }
 serde_json = { version = "1.0", optional = true }
 tempfile = { version = "3", optional = true }
 
+[dev-dependencies]
+tempfile = "3"
+
 [[bin]]
 name = "rcsfs"
 path = "src/bin/rcsfs.rs"

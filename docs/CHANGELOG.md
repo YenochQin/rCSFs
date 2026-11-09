@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+- 修复 Windows 磁盘生成预检：使用系统 API 查询用户可用字节和卷身份，正确合并同卷 scratch、staging、发布产物的空间需求；保留无法查询时显式选择 unchecked 的策略。Windows 硬链接检查复用卷和文件身份。
+- 移除未使用且与 pytest 9.2 冲突的 pytest-speed，CI 与本地共享 test 依赖组（含打包测试必需的 Maturin），并在编译前检查 pytest 启动和测试导入。清理 Windows 测试的 unused_mut 警告。
+
 - 修复 Windows 原生 CLI 输出目录检查：当前目录与目标父目录均规范化后比较，避免 verbatim 路径前缀导致误拒绝；测试夹具固定 LF，避免 Windows checkout 转换为 CRLF。
 
 - GitHub Actions 整理为 `ci.yml`（Linux/Windows/macOS Rust 与 Python 编译测试）和 `publish.yml`（内置三平台构建、验证及可选发布）；移除独立 native/build workflow，保持手动发布及默认关闭上传。

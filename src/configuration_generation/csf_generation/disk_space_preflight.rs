@@ -40,7 +40,12 @@ fn checked_block_bytes(blocks: impl TryInto<u64>, block_size: impl TryInto<u64>)
         .checked_mul(block_size.try_into().ok()?)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
+    crate::windows_filesystem::free_bytes(path).ok()
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn free_bytes(_path: &Path) -> Option<u64> {
     None
 }
@@ -78,7 +83,7 @@ pub(crate) enum SpaceRole {
 /// volume are added rather than each compared against the whole volume.
 ///
 /// `None` means the platform cannot report it, in which case each path is
-/// treated as its own group: that over-estimates rather than under-estimates.
+/// treated as its own unmeasurable group and requires explicit opt-out.
 #[cfg(unix)]
 fn device_id(path: &Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
@@ -86,7 +91,14 @@ fn device_id(path: &Path) -> Option<u64> {
     std::fs::metadata(path).ok().map(|metadata| metadata.dev())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn device_id(path: &Path) -> Option<u64> {
+    crate::windows_filesystem::file_identity(path)
+        .ok()
+        .map(|identity| identity.volume)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn device_id(_path: &Path) -> Option<u64> {
     None
 }
@@ -171,7 +183,7 @@ pub(crate) fn check_space(
         // directories of one volume still compete for the same bytes, and
         // checking them separately would let each pass while their sum does
         // not fit. When the volume cannot be identified, every path becomes its
-        // own group, which over-estimates instead of merging unrelated storage.
+        // own unmeasurable group: their coexisting requirements cannot be summed.
         let existing = device
             .and_then(|device| groups.iter_mut().find(|(known, _)| *known == Some(device)))
             .map(|(_, group)| group);
@@ -205,7 +217,7 @@ pub(crate) fn check_space(
     }
 
     let mut checks = Vec::new();
-    for (_, group) in groups {
+    for (device, group) in groups {
         // Generation holds scratch and the staged set at the same time;
         // publication holds the staged set and the published copies.
         let generation = group
@@ -218,7 +230,12 @@ pub(crate) fn check_space(
             .context("space requirement overflow")?;
         let required = generation.max(publication);
         let path = group.directory.display().to_string();
-        match free_bytes(&group.directory) {
+        // Without a volume identity, separate path checks could each pass even
+        // when their sum does not fit. Keep any known shortfall, but report
+        // apparent sufficiency as unknown until the volume can be identified.
+        let available =
+            free_bytes(&group.directory).filter(|free| device.is_some() || *free < required);
+        match available {
             Some(free) => {
                 let sufficient = free >= required;
                 // A volume that is known to be too small stops a run whoever
@@ -240,7 +257,7 @@ pub(crate) fn check_space(
             None => {
                 if policy.refuses_unmeasurable() {
                     bail!(
-                        "cannot check free space at {path}: this platform does not report it, so \
+                        "cannot check free space at {path}: volume identity or available bytes could not be queried, so \
                          the run would proceed without the pre-flight it asked for. Pass \
                          allow_unchecked_space (CLI: --allow-unchecked-space) to accept that, or \
                          run where free space can be measured"
@@ -285,6 +302,26 @@ mod tests {
     use super::*;
     use crate::configuration_generation::csf_generation::csf_output_capacity_estimation::with_margin;
     use crate::configuration_generation::shared_generation::DeduplicationStrategy;
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn platform_filesystem_probe_reports_space_and_groups_unicode_directories() {
+        let temporary = tempfile::tempdir().unwrap();
+        let nested = temporary.path().join("space probe 子目录");
+        std::fs::create_dir(&nested).unwrap();
+        let volume = device_id(temporary.path());
+        assert!(
+            volume.is_some(),
+            "supported platforms must identify a volume"
+        );
+        assert_eq!(device_id(&nested), volume);
+        assert!(
+            free_bytes(&nested).is_some(),
+            "supported platforms must report free bytes"
+        );
+        assert_eq!(free_bytes(&nested.join("absent")), None);
+        assert_eq!(device_id(&nested.join("absent")), None);
+    }
 
     #[test]
     fn free_byte_arithmetic_handles_platform_widths_and_rejects_overflow() {
@@ -372,8 +409,8 @@ mod tests {
     /// caller always gets the verdict, including the two failing ones.
     #[test]
     fn the_space_policy_decides_each_verdict_independently() {
-        let roomy = estimate_capacity(56, 1_000_000, 2, DeduplicationStrategy::Exact).unwrap();
-        let mut short = estimate_capacity(56, 1_000_000, 2, DeduplicationStrategy::Exact).unwrap();
+        let roomy = estimate_capacity(1, 1, 1, DeduplicationStrategy::Exact).unwrap();
+        let mut short = estimate_capacity(1, 1, 1, DeduplicationStrategy::Exact).unwrap();
         short.required_scratch_bytes = u64::MAX / 2;
         let existing = [(std::env::temp_dir(), SpaceRole::Scratch)];
         // Neither this path nor its parent exists, so the volume cannot be

@@ -44,13 +44,13 @@ fn refuses_existing_outputs_and_input_aliases_without_overwriting() {
     fs::hard_link(&input, &hard_link).unwrap();
     let existing = directory.0.join("existing.c");
     fs::write(&existing, b"preserve existing output").unwrap();
-    let mut outputs = vec![input.clone(), hard_link, existing.clone()];
+    let outputs = vec![input.clone(), hard_link, existing.clone()];
     #[cfg(unix)]
-    {
+    let outputs = {
         let symlink = directory.0.join("symlink.c");
         std::os::unix::fs::symlink(&input, &symlink).unwrap();
-        outputs.push(symlink);
-    }
+        outputs.into_iter().chain([symlink]).collect::<Vec<_>>()
+    };
     for output in outputs {
         let error = example::roundtrip(&input, &output).unwrap_err();
         assert!(error.to_string().contains("output must be a new file"));

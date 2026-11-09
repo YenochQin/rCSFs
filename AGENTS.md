@@ -40,7 +40,7 @@ The maintained suite covers this repository's algorithms, APIs, CLI, and formats
 
 Put exploratory probes and one-off external comparisons under ignored `temp/`, outside Cargo/pytest discovery. Maintained tests can use ordinary temporary directories for I/O. Keep stable small fixtures in `tests/fixtures/` and add regression coverage for changed public behavior.
 
-Run affected Rust or Python tests; run both when crossing the binding or file-format boundary. Use `python -m pytest tests/rcsfs_test.py` for API checks, `ruff check <changed-paths>` for Python lint, and `basedpyright rcsfs/` for wrapper typing. Use `pytest --speed` only for relevant performance work. Expand to full suites when the affected contract is shared; documentation-only changes need example/link checks.
+Run affected Rust or Python tests; run both when crossing the binding or file-format boundary. Use `python -m pytest tests/rcsfs_test.py` for API checks, `ruff check <changed-paths>` for Python lint, and `basedpyright rcsfs/` for wrapper typing. CI and local test environments share the `test` dependency group; performance measurements use the scripts under `scripts/`. Expand to full suites when the affected contract is shared; documentation-only changes need example/link checks.
 
 ## Commit attribution
 

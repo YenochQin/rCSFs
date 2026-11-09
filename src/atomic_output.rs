@@ -108,7 +108,13 @@ fn same_file_identity(left: &Path, right: &Path) -> Result<bool> {
     Ok(left.dev() == right.dev() && left.ino() == right.ino())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn same_file_identity(left: &Path, right: &Path) -> Result<bool> {
+    Ok(crate::windows_filesystem::file_identity(left)?
+        == crate::windows_filesystem::file_identity(right)?)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn same_file_identity(_left: &Path, _right: &Path) -> Result<bool> {
     // Canonical paths catch ordinary names and symlinks on non-Unix targets.
     // Rust's standard library does not expose a portable file-ID comparison.
@@ -228,4 +234,24 @@ fn replace_output(temporary: &Path, output: &Path) -> Result<()> {
         });
     }
     Ok(())
+}
+
+#[cfg(all(test, any(unix, windows)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_file_identity_rejects_hardlinks_and_accepts_distinct_files() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("input 子.c");
+        let alias = temporary.path().join("alias.c");
+        let other = temporary.path().join("other.c");
+        fs::write(&source, b"original CSF input").unwrap();
+        fs::hard_link(&source, &alias).unwrap();
+        fs::write(&other, b"original CSF input").unwrap();
+        assert!(ensure_distinct_inputs(&source, &alias, "alias").is_err());
+        assert!(ensure_output_does_not_alias_input(&alias, &source, "CSF").is_err());
+        ensure_distinct_inputs(&source, &other, "distinct").unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"original CSF input");
+    }
 }

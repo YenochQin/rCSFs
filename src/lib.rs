@@ -15,6 +15,8 @@ pub mod interaction;
 #[cfg(feature = "python")]
 mod interaction_py;
 pub mod seniority;
+#[cfg(windows)]
+mod windows_filesystem;
 
 /// Compatibility alias for the established Rust generator interface.
 pub use configuration_generation as csf_generation;

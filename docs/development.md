@@ -40,6 +40,13 @@ The copy derives the ABI suffix from the local interpreter and handles Linux/mac
 
 Rust tests use `cargo test --release --locked` with the local environment activated and do not require this extension copy.
 
+The `test` dependency group supplies the CI test dependencies, including Maturin
+for backend tests. CI installs it with `python -m pip install --group test` and
+checks pytest startup before compiling. Local `dev` includes this group.
+The retired pytest-speed plugin is disabled for older environments; performance
+measurements use the repository's benchmark scripts. Windows disk generation
+queries caller-available space and volume/file identity through Win32 APIs.
+
 ## Distributable wheels
 
 For an explicit packaging task, use an isolated tool environment while targeting the local interpreter:

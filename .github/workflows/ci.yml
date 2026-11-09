@@ -65,3 +65,22 @@ jobs:
           PYTHON
       - name: Test Python APIs and native CLI integration
         run: python -m pytest tests/
+      - name: Check Windows text defaults and TOML path escaping on Linux
+        if: runner.os == 'Linux'
+        env:
+          PYTHONPATH: tests
+        run: |
+          python - <<'PYTHON'
+          from pathlib import Path
+          import subprocess
+          import sys
+          import tempfile
+
+          with tempfile.TemporaryDirectory(prefix="rcsfs-windows-text-") as temporary:
+              # A literal backslash in a Linux path exercises TOML escaping.
+              base = Path(temporary) / r"C:\Users\runner"
+              subprocess.run([
+                  sys.executable, "-m", "pytest", "tests/",
+                  "-p", "_windows_text_mode", "--basetemp", str(base),
+              ], check=True)
+          PYTHON

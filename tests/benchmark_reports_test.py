@@ -586,6 +586,25 @@ def test_a_windows_root_is_matched_case_insensitively(
     assert support.normalize_path(r"C:\Users\Alice\Other") == "<path>/Other"
 
 
+def test_nested_windows_report_paths_use_forward_slashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(support, "_PATH_PLACEHOLDERS", ((r"C:\Temp", "<system-temp>"),))
+    assert support.normalize_report_paths(
+        {"paths": [r"c:\temp\run\nested\output.c"]}
+    ) == {"paths": ["<system-temp>/run/nested/output.c"]}
+
+
+def test_posix_backslash_in_filename_is_not_a_separator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(support, "_PATH_PLACEHOLDERS", (("/tmp", "<system-temp>"),))
+    assert (
+        support.normalize_path(r"/tmp/literal\name/output.c")
+        == r"<system-temp>/literal\name/output.c"
+    )
+
+
 def _digests(report: Path, *, codec: str, deduplication: str) -> dict[str, str]:
     """The published-artifact digests one report recorded for one combination."""
     document = json.loads(report.read_text(encoding="utf-8"))

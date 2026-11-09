@@ -18,7 +18,7 @@ def test_split_csfs_by_j_names_outputs_by_two_j(
     from rcsfs import JBlockOutputStats, JBlockSplitStats, split_csfs_by_j
 
     input_csf = tmp_path / "multi_j.c"
-    input_csf.write_text(MULTI_J_CSF)
+    input_csf.write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
 
     stats = split_csfs_by_j(str(input_csf) if string_input else input_csf)
 
@@ -68,7 +68,7 @@ def test_split_csfs_by_j_copies_w_and_honors_output_dir_and_prefix(
 
     source = tmp_path / "inputs"
     source.mkdir()
-    (source / "multi_j.c").write_text(MULTI_J_CSF)
+    (source / "multi_j.c").write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
     (source / "multi_j.w").write_bytes(MULTI_J_W)
     destination = tmp_path / "outputs"
     destination.mkdir()
@@ -100,7 +100,7 @@ def test_split_csfs_by_j_errors(tmp_path: Path) -> None:
     from rcsfs import split_csfs_by_j
 
     input_csf = tmp_path / "multi_j.c"
-    input_csf.write_text(MULTI_J_CSF)
+    input_csf.write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
     split_csfs_by_j(input_csf)
 
     # Callers can explicitly refuse replacement; the default replaces outputs.
@@ -127,7 +127,7 @@ def test_split_csfs_by_j_replaces_existing_c_and_w_by_default(
     from rcsfs import _rcsfs, split_csfs_by_j
 
     input_csf = tmp_path / "multi_j.c"
-    input_csf.write_text(MULTI_J_CSF)
+    input_csf.write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
     orbital = tmp_path / "multi_j.w"
     orbital.write_bytes(MULTI_J_W)
     original = split_csfs_by_j(input_csf)
@@ -168,7 +168,7 @@ def test_split_csfs_by_j_rejects_noncanonical_separator_without_outputs(
     lines = MULTI_J_CSF.splitlines()
     lines[6] = marker
     input_csf = tmp_path / "malformed.c"
-    input_csf.write_text("\n".join(lines) + "\n")
+    input_csf.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     with pytest.raises(OSError, match="line 7: block separator must be exactly"):
         split_csfs_by_j(input_csf)
     assert list(tmp_path.iterdir()) == [input_csf]
@@ -180,7 +180,7 @@ def test_split_csfs_by_j_failed_rerun_preserves_existing_outputs(
     from rcsfs import split_csfs_by_j
 
     input_csf = tmp_path / "multi_j.c"
-    input_csf.write_text(MULTI_J_CSF)
+    input_csf.write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
     (tmp_path / "multi_j.w").write_bytes(MULTI_J_W)
     stats = split_csfs_by_j(input_csf)
     existing: dict[Path, bytes] = {}
@@ -191,7 +191,7 @@ def test_split_csfs_by_j_failed_rerun_preserves_existing_outputs(
                 existing[path] = path.read_bytes()
     lines = MULTI_J_CSF.splitlines()
     lines[13] = " *garbage"  # A later block, after an output has been staged.
-    input_csf.write_text("\n".join(lines) + "\n")
+    input_csf.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
     with pytest.raises(OSError, match="line 14: block separator must be exactly"):
         split_csfs_by_j(input_csf)
@@ -205,7 +205,7 @@ def test_split_csfs_by_j_error_classification_does_not_depend_on_path_text(
     from rcsfs import split_csfs_by_j
 
     input_csf = tmp_path / "input.c"
-    input_csf.write_text(MULTI_J_CSF)
+    input_csf.write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
     with pytest.raises(OSError, match="output directory does not exist") as caught:
         split_csfs_by_j(input_csf, output_dir=tmp_path / "already exists but missing")
     assert type(caught.value) is OSError
@@ -220,7 +220,7 @@ def test_split_csfs_by_j_publication_conflict_raises_file_exists_error(
     from rcsfs import split_csfs_by_j
 
     input_csf = tmp_path / "multi_j.c"
-    input_csf.write_text(MULTI_J_CSF)
+    input_csf.write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
     if extension == "w":
         (tmp_path / "multi_j.w").write_bytes(MULTI_J_W)
     conflict = tmp_path / f"multi_j_5.{extension}"
@@ -228,7 +228,9 @@ def test_split_csfs_by_j_publication_conflict_raises_file_exists_error(
 
     with pytest.raises(FileExistsError, match="already published:") as caught:
         split_csfs_by_j(input_csf, overwrite=False)
-    assert str(tmp_path / "multi_j_8.c") in str(caught.value)
+    assert json.dumps(str(tmp_path / "multi_j_8.c"), ensure_ascii=False) in str(
+        caught.value
+    )
     assert (tmp_path / "multi_j_8.c").is_file()
     assert conflict.is_symlink()
     assert not list(tmp_path.glob("*.tmp"))
@@ -241,7 +243,7 @@ def test_cli_jsplit_runs_and_prints_summary(
 
     monkeypatch.chdir(tmp_path)
     input_csf = tmp_path / "multi_j.c"
-    input_csf.write_text(MULTI_J_CSF)
+    input_csf.write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
     (tmp_path / "multi_j.w").write_bytes(MULTI_J_W)
 
     exit_code = cli.main(["jsplit", str(input_csf)])
@@ -274,7 +276,7 @@ def test_cli_jsplit_json_and_alias(
 
     monkeypatch.chdir(tmp_path)
     input_csf = tmp_path / "multi_j.c"
-    input_csf.write_text(MULTI_J_CSF)
+    input_csf.write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
 
     exit_code = cli.main(["rasfsplit", str(input_csf), "--json"])
     captured = capsys.readouterr()
@@ -308,7 +310,7 @@ def test_cli_jsplit_reads_toml_config(
     import _native_cli as cli
 
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "multi_j.c").write_text(MULTI_J_CSF)
+    (tmp_path / "multi_j.c").write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
     (tmp_path / "rcsfs.toml").write_text(
         '[jsplit]\ninput_csf = "multi_j.c"\nprefix = "cfg"\ncopy_w = false\n'
     )
@@ -333,7 +335,7 @@ def test_cli_jsplit_batch_config_writes_to_cwd_and_copies_input_sibling_w(
 
     source = tmp_path / "inputs"
     source.mkdir()
-    (source / "multi_j.c").write_text(MULTI_J_CSF)
+    (source / "multi_j.c").write_text(MULTI_J_CSF, encoding="utf-8", newline="\n")
     (source / "multi_j.w").write_bytes(MULTI_J_W)
     destination = tmp_path / "outputs"
     destination.mkdir()

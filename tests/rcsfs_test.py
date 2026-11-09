@@ -1,3 +1,4 @@
+import json
 import shutil
 from pathlib import Path
 
@@ -161,7 +162,7 @@ def test_select_interacting_csfs_accepts_extended_candidate_peel_list(
     assert lines[3].split() == ["4f-", "4f", "5d-", "5d"]
     lines[3] = lines[3].rstrip("\n") + "   6s \n"
     candidates = tmp_path / "candidates.csf"
-    _ = candidates.write_text("".join(lines))
+    _ = candidates.write_text("".join(lines), encoding="utf-8", newline="\n")
     output = tmp_path / "selected.csf"
 
     stats = select_interacting_csfs(reference, candidates, output, num_workers=2)
@@ -313,7 +314,7 @@ def test_restore_csfs_cli_roundtrip(
     assert generation_stats["success"] is True
     source_lines = source.read_text().splitlines()
     source_lines.insert(8, " *")
-    source.write_text("\n".join(source_lines) + "\n")
+    source.write_text("\n".join(source_lines) + "\n", encoding="utf-8", newline="\n")
 
     csf_parquet = tmp_path / "complete.parquet"
     stats = convert_csfs(source, csf_parquet, num_workers=2)
@@ -476,9 +477,9 @@ continue_lists = false
 
 [output]
 generate_descriptors = true
-csf = "{csf}"
-parquet = "{parquet}"
-descriptor_parquet = "{descriptors}"
+csf = {json.dumps(str(csf))}
+parquet = {json.dumps(str(parquet))}
+descriptor_parquet = {json.dumps(str(descriptors))}
 """,
         encoding="utf-8",
     )

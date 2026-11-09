@@ -21,17 +21,20 @@ def _events(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def test_batch_log_saves_config_statistics_and_append_history(tmp_path: Path) -> None:
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_batch_log_saves_config_statistics_and_append_history(
+    tmp_path: Path, newline: str
+) -> None:
     config = tmp_path / "batch.toml"
     contents = 'conf = "calc"\n' + _generation(0) + _generation(6)
     contents += '[csfs-split.active_spaces]\nAS1 = "1s"\nAS6 = "2s"\n'
-    config.write_text(contents)
+    config.write_text(contents, encoding="utf-8", newline=newline)
     assert cli.main(["-c", str(config)]) == 0
     log_path = tmp_path / "rcsfs_calc.log"
     before = log_path.read_bytes()
     events = _events(log_path)
     assert events[0]["event"] == "start"
-    assert events[0]["config_contents"] == contents
+    assert events[0]["config_contents"] == config.read_bytes().decode("utf-8")
     assert events[0]["working_directory"] == str(tmp_path)
     assert events[0]["implementation"] == "native Rust"
     starts = [event for event in events if event["event"] == "step_start"]

@@ -119,7 +119,7 @@ def test_config_multiple_lists_union_and_exact_dedup(
     config = tmp_path / "multiple.toml"
     output = tmp_path / "union.c"
     config.write_text(
-        f'[csfsgenerate]\ninactive_core = 0\nrcsfs_out = "{output}"\n'
+        f"[csfsgenerate]\ninactive_core = 0\nrcsfs_out = {json.dumps(str(output))}\n"
         'generate_descriptors = true\ngeneration_storage = "disk"\n'
         '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
         'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
@@ -158,7 +158,7 @@ def test_config_multiple_lists_text_only_and_distinct_j_ranges(
     config = tmp_path / "multiple-text.toml"
     output = tmp_path / "union.c"
     config.write_text(
-        f'[csfsgenerate]\ninactive_core = 0\nrcsfs_out = "{output}"\n'
+        f"[csfsgenerate]\ninactive_core = 0\nrcsfs_out = {json.dumps(str(output))}\n"
         '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
         'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
         "[[csfsgenerate.lists]]\n"
@@ -179,7 +179,7 @@ def test_config_multiple_lists_reject_different_electron_counts(
     config = tmp_path / "different-electrons.toml"
     output = tmp_path / "union.c"
     config.write_text(
-        f'[csfsgenerate]\ninactive_core = 0\nrcsfs_out = "{output}"\n'
+        f"[csfsgenerate]\ninactive_core = 0\nrcsfs_out = {json.dumps(str(output))}\n"
         '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
         'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
         '[[csfsgenerate.lists]]\nreference_configuration = ["2s(1,*)"]\n'

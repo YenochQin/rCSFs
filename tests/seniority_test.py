@@ -53,7 +53,9 @@ def _descriptors(tmp_path: Path) -> tuple[Path, Path, Path]:
         "  4f ( 4)\n   2;   4\n         4+\n"
         "  4f ( 4)\n   4;   4\n         4+\n *\n"
         "  4f ( 4)\n        6\n         6+\n *\n"
-        "  4f ( 4)\n        5\n         5+\n"
+        "  4f ( 4)\n        5\n         5+\n",
+        encoding="utf-8",
+        newline="\n",
     )
     csf_parquet = tmp_path / "source.parquet"
     stats = convert_csfs(source, csf_parquet, num_workers=1)

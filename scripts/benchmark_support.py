@@ -447,7 +447,7 @@ _WINDOWS_UNC = re.compile(r"^\\\\[^\\/]+[\\/][^\\/]+")
 
 def _looks_windows(value: str) -> bool:
     """Whether a path is written in Windows form rather than POSIX form."""
-    return bool(_WINDOWS_DRIVE.match(value)) or "\\" in value
+    return bool(_WINDOWS_DRIVE.match(value) or _WINDOWS_UNC.match(value))
 
 
 def _is_absolute(value: str) -> bool:
@@ -490,6 +490,8 @@ def normalize_path(value: str) -> str:
             return placeholder
         if _matches_prefix(value, prefix):
             remainder = value[len(prefix) :].lstrip("/\\")
+            if _looks_windows(value) or _looks_windows(prefix):
+                remainder = remainder.replace("\\", "/")
             return f"{placeholder}/{remainder}"
     if _is_absolute(value):
         # An absolute path outside the known roots is machine-specific too. Keep

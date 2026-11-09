@@ -52,6 +52,15 @@ The retired pytest-speed plugin is disabled for older environments; performance
 measurements use the repository's benchmark scripts. Windows disk generation
 queries caller-available space and volume/file identity through Win32 APIs.
 
+CSF fixtures written during tests must explicitly use UTF-8 and `newline="\n"`
+(or `write_bytes`): `.gitattributes` controls checkout files, not Python's runtime
+newline translation. Quote interpolated TOML paths with `json.dumps(str(path))`.
+Batch logs preserve the source configuration bytes, including CRLF; assertions
+compare the recorded contents with the file's decoded bytes.
+The Linux CI also runs the Python suite with the opt-in `_windows_text_mode`
+plugin and a temporary path containing backslashes. This exercises Windows text
+defaults and TOML escaping early; native Windows CI still covers Windows APIs.
+
 ## Distributable wheels
 
 For an explicit packaging task, use an isolated tool environment while targeting the local interpreter:

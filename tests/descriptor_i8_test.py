@@ -21,7 +21,7 @@ def _inputs(tmp_path: Path, *, large_j: bool = False) -> tuple[Path, Path, Path]
     )
     if large_j:
         text = text.replace("                  0-", "                 64-")
-    source.write_text(text)
+    source.write_text(text, encoding="utf-8", newline="\n")
     converted = tmp_path / "source.parquet"
     stats = convert_csfs(source, converted, num_workers=1)
     return source, converted, Path(stats["header_file"])

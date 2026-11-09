@@ -243,11 +243,9 @@ def test_generated_descriptors_match_text_pipeline(
     tmp_path: Path, transcript: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import tomllib
-    from unittest.mock import patch
 
+    import _native_cli as cli
     import polars as pl
-
-    from rcsfs import cli
 
     for storage in ("memory", "disk"):
         work = tmp_path / storage
@@ -264,24 +262,24 @@ def test_generated_descriptors_match_text_pipeline(
             work / "text.parquet", work / "features.parquet", shells
         )
         assert derived["success"], derived
-        lines = iter(["*", *transcript.splitlines()[1:]])
-        with patch.object(
-            cli, "_prompt", side_effect=lambda _, lines=lines: next(lines)
-        ):
-            assert (
-                cli.main(
-                    [
-                        "csfsgenerate",
-                        str(work / "cli.c"),
-                        "--generate-descriptors",
-                        "--descriptor-parquet",
-                        str(direct_path),
-                        "--generation-storage",
-                        storage,
-                    ]
-                )
-                == 0
+        transcript_path = work / "input.log"
+        transcript_path.write_text(transcript)
+        assert (
+            cli.main(
+                [
+                    "csfsgenerate",
+                    str(work / "cli.c"),
+                    "--transcript",
+                    str(transcript_path),
+                    "--generate-descriptors",
+                    "--descriptor-parquet",
+                    str(direct_path),
+                    "--generation-storage",
+                    storage,
+                ]
             )
+            == 0
+        )
         direct = pl.read_parquet(direct_path)
         expected = pl.read_parquet(work / "features.parquet")
         assert direct.equals(expected)
@@ -305,7 +303,7 @@ def test_restore_csfs_cli_roundtrip(
     a many-electron manifold GRASP's own state table never labels, so it is
     not a legal V2 record.
     """
-    from rcsfs import cli
+    import _native_cli as cli
 
     monkeypatch.chdir(tmp_path)
 
@@ -456,7 +454,7 @@ def test_config_generation_uses_disk_v2_pipeline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A descriptor-producing TOML run uses bounded disk generation by default."""
-    from rcsfs import cli
+    import _native_cli as cli
 
     monkeypatch.chdir(tmp_path)
 

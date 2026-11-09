@@ -495,13 +495,31 @@ impl Settings {
                     self.flag(key, false)?;
                 }
                 Spaces => {
-                    ensure!(
-                        value.is_table() && matches!(field.kind, Spaces)
-                            || value
-                                .as_array()
-                                .is_some_and(|a| a.iter().all(Value::is_str)),
-                        "{key} must be an array of strings or an active-space table"
-                    );
+                    if let Some(table) = value.as_table() {
+                        ensure!(!table.is_empty(), "{key} must not be empty");
+                        for (label, space) in table {
+                            ensure!(
+                                !label.trim().is_empty()
+                                    && space.as_str().is_some_and(|s| !s.trim().is_empty()),
+                                "{key} labels and spaces must be nonempty strings"
+                            );
+                        }
+                    } else {
+                        let array = value
+                            .as_array()
+                            .context("active_spaces must be an array or table")?;
+                        ensure!(!array.is_empty(), "{key} must not be empty");
+                        for item in array {
+                            let (label, space) = item
+                                .as_str()
+                                .and_then(|s| s.split_once('='))
+                                .context("active_spaces entries must be LABEL=SPACE strings")?;
+                            ensure!(
+                                !label.trim().is_empty() && !space.trim().is_empty(),
+                                "{key} labels and spaces must be nonempty strings"
+                            );
+                        }
+                    }
                 }
                 Numbers => {
                     ensure!(

@@ -15,7 +15,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::ExitCode,
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use toml::Table;
 
@@ -61,10 +61,10 @@ fn run_batch(path: &Path, root: &Table) -> Result<()> {
         !log_path.is_symlink(),
         "run log must not be a symbolic link"
     );
-    files::distinct(&log_path, path)?;
+    files::distinct(&log_path, path).context("run log conflicts with configuration")?;
     for job in &jobs {
         for output in config::output_paths(job)? {
-            files::distinct(&log_path, &output)?;
+            files::distinct(&log_path, &output).context("run log conflicts with output")?;
         }
         for (key, value) in &job.settings.values {
             if [
@@ -83,45 +83,72 @@ fn run_batch(path: &Path, root: &Table) -> Result<()> {
             .contains(&key.as_str())
                 && let Some(value) = value.as_str()
             {
-                files::distinct(&log_path, Path::new(value))?;
+                files::distinct(&log_path, Path::new(value))
+                    .context("run log conflicts with input")?;
             }
         }
     }
     let mut log = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&log_path)?;
+        .open(&log_path)
+        .with_context(|| format!("cannot write run log {}", log_path.display()))?;
     eprintln!("Run log: {}", log_path.display());
+    let run_start = Instant::now();
+    let now = || {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock is before the Unix epoch")
+            .map(|time| time.as_millis())
+    };
     writeln!(
         log,
         "{}",
-        json!({"event": "start", "version": env!("CARGO_PKG_VERSION"), "implementation": "native Rust", "config": path, "config_contents": fs::read_to_string(path)?})
+        json!({
+            "event": "start", "version": env!("CARGO_PKG_VERSION"),
+            "implementation": "native Rust", "config": path,
+            "config_contents": fs::read_to_string(path)?,
+            "working_directory": std::env::current_dir()?, "started_at_unix_ms": now()?
+        })
     )?;
     log.flush()?;
-    for (index, job) in jobs.iter().enumerate() {
-        eprintln!("Running [{} #{}]...", job.command, index + 1);
-        let start = Instant::now();
-        let result = run_job(job);
-        let record = match &result {
-            Ok(stats) => {
-                json!({"event": "result", "command": job.command, "step": index + 1, "elapsed_seconds": start.elapsed().as_secs_f64(), "stats": stats})
-            }
-            Err(error) => {
-                json!({"event": "error", "command": job.command, "step": index + 1, "error": format!("{error:#}")})
-            }
-        };
-        writeln!(log, "{record}")?;
-        log.flush()?;
-        let stats = result?;
-        print_result(&job.command, &stats, job.settings.flag("json", false)?)?;
-    }
+    let mut completed = 0;
+    let outcome = (|| -> Result<()> {
+        for (index, job) in jobs.iter().enumerate() {
+            writeln!(
+                log,
+                "{}",
+                json!({"event": "step_start", "command": job.command,
+                "step": index + 1, "resolved_parameters": job.settings.values})
+            )?;
+            log.flush()?;
+            eprintln!("Running [{} #{}]...", job.command, index + 1);
+            let start = Instant::now();
+            let result = run_job(job);
+            let record = match &result {
+                Ok(stats) => json!({"event": "result", "command": job.command,
+                    "step": index + 1, "elapsed_seconds": start.elapsed().as_secs_f64(), "stats": stats}),
+                Err(error) => json!({"event": "error", "command": job.command,
+                    "step": index + 1, "elapsed_seconds": start.elapsed().as_secs_f64(), "error": format!("{error:#}")}),
+            };
+            writeln!(log, "{record}")?;
+            log.flush()?;
+            let stats = result?;
+            completed += 1;
+            print_result(&job.command, &stats, job.settings.flag("json", false)?)?;
+        }
+        Ok(())
+    })();
     writeln!(
         log,
         "{}",
-        json!({"event": "complete", "success": true, "steps": jobs.len()})
+        json!({"event": "complete", "success": outcome.is_ok(),
+        "exit_code": if outcome.is_ok() { 0 } else { 1 }, "steps": jobs.len(),
+        "completed_steps": completed, "elapsed_seconds": run_start.elapsed().as_secs_f64(),
+        "finished_at_unix_ms": now()?})
     )?;
     log.flush()?;
-    Ok(())
+    outcome
 }
 
 /// Parse process arguments and execute a native command. Errors never start Python.

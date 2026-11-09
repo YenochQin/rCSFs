@@ -237,7 +237,7 @@ def test_split_csfs_by_j_publication_conflict_raises_file_exists_error(
 def test_cli_jsplit_runs_and_prints_summary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from rcsfs import cli
+    import _native_cli as cli
 
     monkeypatch.chdir(tmp_path)
     input_csf = tmp_path / "multi_j.c"
@@ -247,12 +247,11 @@ def test_cli_jsplit_runs_and_prints_summary(
     exit_code = cli.main(["jsplit", str(input_csf)])
     captured = capsys.readouterr()
     assert exit_code == 0
-    lines = captured.out.rstrip("\n").splitlines()
-    assert len(lines) == 3
-    assert "multi_j_8.c: 2 CSFs (2J=8, odd) (+ " in lines[0]
-    assert "multi_j_5.c: 1 CSFs (2J=5, even) (+ " in lines[1]
-    assert "multi_j_0.c: 1 CSFs (2J=0, even) (+ " in lines[2]
-    assert all(line.rstrip(")").endswith(".w") for line in lines)
+    assert "jsplit: completed" in captured.out
+    assert "block_count: 3" in captured.out
+    for j in [8, 5, 0]:
+        assert f"multi_j_{j}.c" in captured.out
+        assert f"multi_j_{j}.w" in captured.out
 
     # Rerunning the command replaces existing output files by default.
     (tmp_path / "multi_j_8.c").write_text("stale CSF output\n")
@@ -271,7 +270,7 @@ def test_cli_jsplit_runs_and_prints_summary(
 def test_cli_jsplit_json_and_alias(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from rcsfs import cli
+    import _native_cli as cli
 
     monkeypatch.chdir(tmp_path)
     input_csf = tmp_path / "multi_j.c"
@@ -300,13 +299,13 @@ def test_cli_jsplit_json_and_alias(
     assert exit_code == 1
     error = json.loads(captured.out)
     assert error["success"] is False
-    assert "CSF input does not exist" in error["error"]
+    assert "failed to open CSF file" in error["error"]
 
 
 def test_cli_jsplit_reads_toml_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from rcsfs import cli
+    import _native_cli as cli
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "multi_j.c").write_text(MULTI_J_CSF)
@@ -317,7 +316,7 @@ def test_cli_jsplit_reads_toml_config(
     exit_code = cli.main(["jsplit"])
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "cfg_8.c: 2 CSFs" in captured.out
+    assert "cfg_8.c" in captured.out
     assert sorted(
         path.name for path in tmp_path.iterdir() if path.name.startswith("cfg")
     ) == [
@@ -330,7 +329,7 @@ def test_cli_jsplit_reads_toml_config(
 def test_cli_jsplit_batch_config_writes_to_cwd_and_copies_input_sibling_w(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from rcsfs import cli
+    import _native_cli as cli
 
     source = tmp_path / "inputs"
     source.mkdir()
@@ -359,10 +358,17 @@ def test_cli_jsplit_batch_config_writes_to_cwd_and_copies_input_sibling_w(
         "rcsfs.log",
     ]
     log = (destination / "rcsfs.log").read_text(encoding="utf-8")
-    assert '"block_count": 3' in log
-    assert all(f'"total_two_j": {two_j}' in log for two_j in (0, 5, 8))
+    assert any(
+        entry.get("stats", {}).get("block_count") == 3
+        for entry in map(json.loads, log.splitlines())
+    )
+    assert {
+        output["total_two_j"]
+        for event in map(json.loads, log.splitlines())
+        for output in event.get("stats", {}).get("outputs", [])
+    } == {0, 5, 8}
     for output in stats["outputs"]:
-        assert Path(output["output_file"]).parent == destination
+        assert Path(output["output_file"]).resolve().parent == destination
         assert output["w_file"] is not None
         assert Path(output["w_file"]).read_bytes() == MULTI_J_W
 
@@ -377,12 +383,12 @@ def test_cli_jsplit_batch_config_writes_to_cwd_and_copies_input_sibling_w(
 def test_cli_jsplit_init_config_adds_section(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from rcsfs import cli
+    import _native_cli as cli
 
     monkeypatch.chdir(tmp_path)
     exit_code = cli.main(["jsplit", "init-config"])
     assert exit_code == 0
     config = (tmp_path / "rcsfs.toml").read_text()
     assert "[jsplit]" in config
-    assert 'input_csf = "generated.c"' in config
+    assert 'input_csf = "input.c"' in config
     assert "# overwrite = true" in config

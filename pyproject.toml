@@ -1,6 +1,7 @@
 [build-system]
-requires = ["maturin>=1.14,<2.0"]
-build-backend = "maturin"
+requires = ["maturin>=1.15,<2.0"]
+build-backend = "build_backend"
+backend-path = ["."]
 
 [project]
 name = "rcsfs"
@@ -30,9 +31,6 @@ dependencies = [
     "polars>=2.1.0",
 ]
 
-[project.scripts]
-rcsfs = "rcsfs.cli:main"
-
 [project.urls]
 Homepage = "https://github.com/YenochQin/rCSFs"
 Source = "https://github.com/YenochQin/rCSFs"
@@ -40,7 +38,7 @@ Issues = "https://github.com/YenochQin/rCSFs/issues"
 
 [dependency-groups]
 dev = [
-    "maturin>=1.14,<2.0",
+    "maturin>=1.15,<2.0",
     "pytest>=9.0.2",
     "pytest-pretty>=1.2.0",
     "pytest-speed>=0.3.5",
@@ -58,12 +56,14 @@ lint = [
 ]
 
 [tool.maturin]
+bindings = "pyo3"
 python-source = "."
 module-name = "rcsfs._rcsfs"
 features = ["pyo3/extension-module", "pyo3/generate-import-lib"]
 strip = true
 # The source archive is a buildable release, not the development workspace.
 include = [
+    { path = "build_backend.py", format = "sdist" },
     { path = "docs/releasing.md", format = "sdist" },
     { path = "scripts/check_release.py", format = "sdist" },
     { path = "tests/fixtures/sample.csf", format = "sdist" },
@@ -78,6 +78,7 @@ cache-keys = [
     { file = "Cargo.toml" },
     { file = "Cargo.lock" },
     { file = "build.rs" },
+    { file = "build_backend.py" },
     { file = "src/**/*.rs" },
     { file = "rcsfs/**/*.py" },
     { file = "rcsfs/**/*.pyi" },

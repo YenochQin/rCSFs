@@ -34,7 +34,7 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 ## 安装
 
 需要独立可执行程序时，使用下方的 [Rust 原生 CLI](#将-rust-原生-cli-加入-path)。
-需要 Python 库和 Python CLI 时，使用 Python 3.15 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
+需要 Python 库和随包提供的原生 Rust CLI 时，使用 Python 3.15 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
 
 本仓库正在准备 **3.0.0**，使用独立的 Python 3.15 `.venv`，详见
 [源码开发说明](docs/development.md)。下方固定版本安装示例需等 3.0.0
@@ -100,7 +100,8 @@ uv run rcsfs --help
 
 在 uv 项目中使用下文的 CLI 示例时，将 `rcsfs` 替换为 `uv run rcsfs` 即可。
 使用 pip 安装时，在安装该包的环境中直接运行 `python` 和 `rcsfs`。
-也可通过 `python -m rcsfs.cli --help` 调用命令行（uv 项目中在前面加 `uv run`）。
+wheel 会安装真正的原生 `rcsfs` 可执行文件，`uv run rcsfs` 默认直接运行 Rust。
+Python CLI 模块已移除；`import rcsfs` 的 Python 库接口保留。
 源码构建和贡献者环境见[开发指南](docs/development.md)，发布维护步骤见[发布指南](docs/releasing.md)。
 
 ### 将 Rust 原生 CLI 加入 PATH
@@ -160,7 +161,7 @@ rcsfs restore-csfs --descriptors descriptors.parquet --header input_header.toml 
 `rcsfs -c FILE` 按配置表顺序执行，失败后停止。普通 CSF 批处理向 `rcsfs.log`
 （有 `conf` 时为 `rcsfs_<conf>.log`）追加 JSON Lines，记录配置快照、各命令结果、耗时和错误；
 进度信息仍输出到 stderr。CSFG 批处理先暂存所有模型，再发布结果并直接报告统计。
-Python CLI 保持原有日志格式。输出按单个文件原子发布，多个输出文件不是一个事务；
+日志采用 JSON Lines，记录工作目录、Unix 毫秒时间、合并后的 TOML/CLI 参数及普通运行错误的结束状态。外部强制终止可能留下没有结束事件的不完整日志。输出按单个文件原子发布，多个输出文件不是一个事务；
 发布失败时会报告已经完成发布的文件。
 
 [原生 CLI 工作流](.github/workflows/native-cli.yml) 独立于 Python wheel，构建并测试 Linux、

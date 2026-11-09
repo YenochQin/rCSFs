@@ -33,7 +33,7 @@ It helps you:
 ## Installation
 
 For a standalone executable, use the [native Rust CLI](#native-rust-cli-on-path).
-For the Python library and Python CLI, install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.15 or newer.
+For the Python library and bundled native Rust CLI, install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.15 or newer.
 
 This checkout prepares version **3.0.0** and uses its own Python 3.15 `.venv`;
 see [source development](docs/development.md). The pinned installation examples
@@ -106,8 +106,9 @@ uv run rcsfs --help
 
 In the CLI examples below, use `uv run rcsfs` in place of `rcsfs` when working
 in a uv project. For a pip installation, run `python` and `rcsfs` directly in
-the environment where you installed the package. The CLI can also be invoked
-as `python -m rcsfs.cli --help` (prefix with `uv run` in a uv project).
+the environment where you installed the package. The wheel installs a native
+`rcsfs` executable, so `uv run rcsfs` executes Rust directly. The Python CLI
+module has been removed; `import rcsfs` continues to provide the library API.
 Source builds and contributor setup are described in
 [development.md](docs/development.md); release maintenance is covered by
 [the release guide](docs/releasing.md).
@@ -179,8 +180,10 @@ stderr. Exit codes are 0 for success, 2 for argument/configuration errors, and
 For regular CSF batches, `rcsfs.log` (or `rcsfs_<conf>.log`) appends JSON Lines
 containing the configuration snapshot, command results, timings and failures;
 progress messages remain on stderr. CSFG batches stage all models before
-publishing and report their results directly. The Python CLI retains its
-existing log format. Publication is atomic per file, not a transaction across
+publishing and report their results directly. Logs include the invocation directory,
+Unix-millisecond timestamps, merged configuration/CLI parameters and a terminal
+success/failure record for ordinary command errors. A forcibly terminated process
+may leave an incomplete log without a terminal event. Publication is atomic per file, not a transaction across
 all output files; failures report files already published.
 
 The [native CLI workflow](.github/workflows/native-cli.yml) builds and tests
@@ -545,7 +548,7 @@ only the CSF Parquet and header alongside the CSF text.
 Batch runs (`rcsfs -c rcsfs.toml`) automatically append to `rcsfs_{conf}.log`
 in the invocation directory, for example `rcsfs_e1_vv.log` for
 `conf = "e1_vv"`; without `conf`, the filename is `rcsfs.log`. Each run records
-the original TOML, effective step parameters, Python CLI summaries/errors,
+the original TOML, merged configuration/CLI parameters, native command errors,
 complete returned statistics (CSF/block counts, AS split counts, and available
 generation timing/resource statistics), start/end times, step/total elapsed
 time, and exit status. Native Rust progress messages remain on the console.
@@ -991,7 +994,7 @@ rCSFs expects CSF text files in this layout:
 
 Source builds, extension setup and contributor checks are described in
 [development.md](docs/development.md). The Rust examples above require a
-source checkout; they are not part of the installed Python CLI.
+source checkout; they are not part of the installed CLI.
 
 ## License
 

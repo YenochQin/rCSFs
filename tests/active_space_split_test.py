@@ -3,9 +3,9 @@
 from pathlib import Path
 
 import pytest
+from _native_cli import main
 
 from rcsfs import convert_csfs, split_csfs_by_active_spaces
-from rcsfs.cli import main
 
 
 def _source(tmp_path: Path) -> tuple[Path, Path]:
@@ -77,7 +77,7 @@ def test_split_active_cli_rejects_bad_labels_before_writing(tmp_path: Path) -> N
                 "../outside=5s,5g",
             ]
         )
-        == 1
+        == 2
     )
     assert not (tmp_path / "sourceoutside.c").exists()
 
@@ -112,8 +112,7 @@ def test_csfs_split_rejects_removed_output_directory(
     )
     monkeypatch.chdir(tmp_path)
 
-    with pytest.raises(SystemExit):
-        main(["csfs-split"])
+    assert main(["csfs-split"]) == 2
     assert not (tmp_path / "split").exists()
 
 

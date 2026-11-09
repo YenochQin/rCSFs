@@ -1,3 +1,5 @@
+import _native_cli as cli
+
 """Generated descriptor bindings survive CLI publication and reject stale headers."""
 
 import hashlib
@@ -6,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from rcsfs import (
-    cli,
     generate_disk_outputs_from_transcript,
     get_parquet_info,
     restore_csfs_from_descriptors,
@@ -68,7 +69,9 @@ def test_generated_descriptor_binding_survives_cli_publication(
     assert restored.read_bytes() == (tmp_path / "full.c").read_bytes()
 
     # Regenerating the same filenames with a different source must refresh the binding.
-    config.write_text(config.read_text().replace("1s(2,*)", "2s(2,*)"), encoding="utf-8")
+    config.write_text(
+        config.read_text().replace("1s(2,*)", "2s(2,*)"), encoding="utf-8"
+    )
     assert cli.main(arguments) == 0
     assert _assert_binding(descriptors, header) != original_hash
     assert (tmp_path / "full.c").read_bytes() != original_csf

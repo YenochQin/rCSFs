@@ -3,9 +3,8 @@
 import shutil
 from pathlib import Path
 
+import _native_cli as cli
 import pytest
-
-from rcsfs import cli
 
 pytestmark = pytest.mark.usefixtures("cli_cwd")
 
@@ -117,9 +116,7 @@ def test_external_output_paths_fail_before_processing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str, table: str
 ) -> None:
     (tmp_path / "rcsfs.toml").write_text(table, encoding="utf-8")
-    with pytest.raises(SystemExit) as exc:
-        cli.main([command, "-c", "rcsfs.toml"])
-    assert exc.value.code == 2
+    assert cli.main([command, "-c", "rcsfs.toml"]) == 1
     assert "current directory" in capsys.readouterr().err
     assert not (tmp_path / "elsewhere").exists()
 
@@ -133,5 +130,4 @@ def test_external_output_paths_fail_before_processing(
     ],
 )
 def test_removed_directory_and_retention_flags_are_rejected(tokens: list[str]) -> None:
-    with pytest.raises(SystemExit):
-        cli.main(tokens)
+    assert cli.main(tokens) == 2

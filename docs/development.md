@@ -9,9 +9,9 @@ uv sync --python 3.15 --no-editable --group lint
 source .venv/bin/activate
 ```
 
-This repository's `pyproject.toml` declares Maturin as the build backend and tracks Rust/Python source files in uv cache keys. Sync rebuilds and reinstalls the wheel when those inputs change. `--no-editable` preserves wheel installation. The `dev` dependency group includes Maturin for explicit local builds.
+This repository's `pyproject.toml` declares a local PEP 517 backend that combines two Maturin builds and tracks Rust/Python source files in uv cache keys. Sync rebuilds and reinstalls the wheel when those inputs change. `--no-editable` preserves wheel installation. The `dev` dependency group includes Maturin for explicit local builds.
 
-The paired Tools environment remains separate. Its current Python 3.14 runtime cannot install this checkout, whose metadata requires Python 3.15. Migrate Tools and its dependency constraints separately before testing it against this source.
+The paired Tools environment remains separate. Follow its own environment and dependency instructions when testing it against this source, which requires Python 3.15.
 
 ## In-tree extension used by this repository's Python tests
 
@@ -45,10 +45,10 @@ Rust tests use `cargo test --release --locked` with the local environment activa
 For an explicit packaging task, use an isolated tool environment while targeting the local interpreter:
 
 ```sh
-uvx --python .venv/bin/python --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --compatibility pypi --interpreter .venv/bin/python
+uv build --python .venv/bin/python --out-dir dist
 ```
 
-Use `.venv/Scripts/python.exe` on Windows. Wheels are written under `target/wheels/`. This command does not refresh the in-tree extension or install the wheel into the environment. Keep the Maturin version constraint aligned with `pyproject.toml` when updating build dependencies.
+Use `.venv/Scripts/python.exe` on Windows. The combined wheel and source archive are written under `dist/`. This command does not refresh the in-tree extension or install the wheel into the environment. Keep the Maturin version constraint aligned with `pyproject.toml` when updating build dependencies.
 
 Avoid `maturin develop`: its editable extension installation differs from the intended wheel installation. Restore the local installation with `uv sync --no-editable --group lint` when needed.
 
@@ -82,10 +82,33 @@ cargo install --path . --locked --no-default-features --features cli --bin rcsfs
 
 Put the installation root's `bin` directory on `PATH`. Cargo's default root is
 `~/.cargo`. Use `rcsfs --version` to identify the native entry point; it includes
-`(native Rust)`. Python wheels retain the `rcsfs.cli:main` console script.
+`(native Rust)`. Wheels contain this executable in their scripts installation scheme
+and keep the PyO3 library. There is no Python CLI or console-script wrapper.
 
 After changing shared Rust code, also rebuild the Python extension and run the
 Python suite using the instructions above. The two builds select different
 features; do not copy a Python-free shared library into the Python package.
 Run `python scripts/collect_licenses.py` after dependency changes: it collects
 all features so notices cover both the Python extension and native executable.
+
+
+## Combined wheel backend
+
+`build_backend.py` implements PEP 517 and PEP 660. It asks Maturin to build the
+CLI with `--bindings bin --no-default-features --features cli --auditwheel check`,
+then builds the PyO3 wheel. It accepts only identical package/version and platform
+tags, copies the real native executable to `.data/scripts`, and rewrites RECORD.
+Both regular and editable installs therefore expose the same native command.
+
+Use `uv build`, `python -m build`, or pip/uv source installation so this backend
+runs. A single direct `maturin build` produces only one component. The release
+workflow explicitly builds and audits both components before calling the same
+merger. A native build requiring a Python repair launcher is rejected; resolve
+its native linkage instead of silently reintroducing Python command startup.
+
+The Python CLI integration tests now invoke a real executable through the
+private test driver `tests/_native_cli.py`; they do not ship a Python adapter.
+It builds the CLI once per test process, or uses `RCSFS_TEST_CLI` when an installed
+wheel executable is explicitly supplied. Python implementation-mock tests were
+retired; configuration, names, publication, logs and round trips are exercised
+through actual native commands and `tests/native_cli_test.rs`.

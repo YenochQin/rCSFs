@@ -2,7 +2,7 @@
 
 ## Ownership and interfaces
 
-`rCSFs` owns CSF conversion, generation, V2 descriptors, restoration, and splitting. Rust code is in `src/`, the Python API in `rcsfs/`, and maintained tests in `tests/`. The public package is `rcsfs`; the compiled extension is `rcsfs._rcsfs`.
+`rCSFs` owns CSF conversion, generation, V2 descriptors, restoration, and splitting. Rust code is in `src/`, the Python API in `rcsfs/`, and maintained tests in `tests/`. The public package is `rcsfs`; the compiled extension is `rcsfs._rcsfs`. The product CLI is the native Rust executable in `src/cli/`; keep Python library APIs independent of command parsing.
 
 - Keep PyO3 bindings in `src/lib.rs` thin and put algorithms in Rust modules.
 - Public Python functions and types are defined by `rcsfs/__init__.py` and `rcsfs/_rcsfs.pyi`; update them together. Internal Rust types are not automatically Python exports.
@@ -23,7 +23,7 @@ Choose the build output the task actually uses:
 - Rust algorithms: `cargo test` or a relevant test-name filter needs no wheel build.
 - Local installed wheel: `uv sync --no-editable --group lint` rebuilds the package when its source cache keys change.
 - Python tests here: pytest's `pythonpath = ["."]` selects the in-tree `rcsfs/` package. Refresh its extension after Rust changes; syncing the environment alone does not update it.
-- Distributable wheel: target `.venv/bin/python` explicitly with Maturin.
+- Distributable wheel: use the PEP 517 backend through `uv build --python .venv/bin/python`; it combines separately audited native-CLI and PyO3 wheels. A single direct Maturin build is only a component. Keep wheel and editable hooks, `.data/scripts` permissions, RECORD, sdist inclusion and release checks in sync.
 - Tools consumers: this checkout requires Python 3.15. Keep Tools on its declared released dependency until its environment and dependency constraints have been migrated separately.
 
 For in-tree tests and distributable wheels, read [development.md](docs/development.md). Use wheel installation for this environment; avoid `maturin develop`, which replaces it with an editable installation.

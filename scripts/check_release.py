@@ -7,8 +7,12 @@ Run with this repository's Python 3.15 interpreter.
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
 import fnmatch
 import hashlib
+import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -27,7 +31,6 @@ LICENSE = "MIT"
 WHEEL_ROOTS = {"rcsfs", "rcsfs.libs"}
 WHEEL_REQUIRED = {
     "rcsfs/__init__.py",
-    "rcsfs/cli.py",
     "rcsfs/_rcsfs.pyi",
     "rcsfs/py.typed",
 }
@@ -40,6 +43,7 @@ SDIST_PATTERNS = {
     "Cargo.toml.orig",
     "Cargo.lock",
     "build.rs",
+    "build_backend.py",
     "pyproject.toml",
     "PKG-INFO",
     "LICENSE",
@@ -55,6 +59,7 @@ SDIST_REQUIRED = {
     "Cargo.toml",
     "Cargo.lock",
     "build.rs",
+    "build_backend.py",
     "src/lib.rs",
     "rcsfs/__init__.py",
     "rcsfs/py.typed",
@@ -93,11 +98,45 @@ def check_archive(path: Path) -> tuple[str, bool]:
         with zipfile.ZipFile(path) as archive:
             names = {name for name in archive.namelist() if not name.endswith("/")}
             assert WHEEL_REQUIRED <= names, WHEEL_REQUIRED - names
+            command_name = (
+                "rcsfs.exe"
+                if all(tag.platform.startswith("win") for tag in tags)
+                else "rcsfs"
+            )
+            native_path = f"{NAME}-{filename_version}.data/scripts/{command_name}"
+            assert native_path in names, "Missing native CLI in wheel scripts"
             assert all(
                 PurePosixPath(name).parts[0] in WHEEL_ROOTS
                 or PurePosixPath(name).parts[0].endswith(".dist-info")
+                or name == native_path
                 for name in names
             ), f"Unexpected wheel contents: {names}"
+            assert not any(
+                name in names
+                for name in [
+                    "rcsfs/cli.py",
+                    "rcsfs/_cli_config.py",
+                    "rcsfs/_cli_log.py",
+                    "rcsfs/_csfg_cli.py",
+                ]
+            ), "Retired Python CLI modules are packaged"
+            assert archive.read(native_path).startswith(
+                (
+                    b"\x7fELF",
+                    b"MZ",
+                    b"\xfe\xed\xfa\xce",
+                    b"\xce\xfa\xed\xfe",
+                    b"\xfe\xed\xfa\xcf",
+                    b"\xcf\xfa\xed\xfe",
+                    b"\xca\xfe\xba\xbe",
+                    b"\xbe\xba\xfe\xca",
+                    b"\xca\xfe\xba\xbf",
+                    b"\xbf\xba\xfe\xca",
+                )
+            ), "Native CLI was replaced with a launcher"
+            assert archive.getinfo(native_path).external_attr >> 16 & 0o111, (
+                "CLI is not executable"
+            )
             assert not any(
                 "__pycache__" in name or name.endswith((".pyc", ".pdb"))
                 for name in names
@@ -146,7 +185,26 @@ def check_archive(path: Path) -> tuple[str, bool]:
                     else ".so"
                 )
                 assert binaries[0].endswith(expected_suffix), binaries
-                assert f"{dist_info}/entry_points.txt" in names
+                entry_points = f"{dist_info}/entry_points.txt"
+                assert entry_points not in names or b"rcsfs" not in archive.read(
+                    entry_points
+                )
+                record = {
+                    row[0]: row[1:]
+                    for row in csv.reader(
+                        archive.read(f"{dist_info}/RECORD").decode().splitlines()
+                    )
+                }
+                for name in names - {f"{dist_info}/RECORD"}:
+                    data = archive.read(name)
+                    digest = (
+                        base64.urlsafe_b64encode(hashlib.sha256(data).digest())
+                        .rstrip(b"=")
+                        .decode()
+                    )
+                    assert record[name] == [f"sha256={digest}", str(len(data))], (
+                        f"Bad RECORD entry: {name}"
+                    )
         return version, bool(tags & set(sys_tags()))
 
     with tarfile.open(path, "r:gz") as archive:
@@ -205,18 +263,39 @@ def smoke(unpacked: Path) -> None:
     )
     assert descriptor["descriptor_version"] == 2
     assert descriptor["descriptor_count"] == stats["csf_count"]
-    (entry,) = [
-        entry
+    assert not any(
+        entry.group == "console_scripts" and entry.name == "rcsfs"
         for entry in metadata.entry_points
-        if entry.group == "console_scripts" and entry.name == "rcsfs"
-    ]
-    assert entry.value == "rcsfs.cli:main"
-    try:
-        entry.load()(["--help"])
-    except SystemExit as exc:
-        assert exc.code == 0
+    )
+    binary_name = "rcsfs.exe" if sys.platform == "win32" else "rcsfs"
+    binary = unpacked / f"{NAME}-{metadata.version}.data" / "scripts" / binary_name
+    binary.chmod(binary.stat().st_mode | 0o111)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTHONHOME", "PYTHONPATH"}
+    }
+    env["PATH"] = ""
+    version_result = subprocess.run(
+        [str(binary), "--version"], env=env, capture_output=True, text=True, check=True
+    )
+    assert (
+        metadata.version in version_result.stdout
+        and "native Rust" in version_result.stdout
+    )
+    result = subprocess.run(
+        [str(binary), "info", str(unpacked / "descriptor.parquet"), "--json"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    info = json.loads(result.stdout)
+    assert info["num_rows"] == stats["csf_count"]
+    assert info["key_value_metadata"]["descriptor_dtype"] == "int8"
+    assert rcsfs.seniority_to_printed_v(7, 4, 12, 2) == -1
     print(
-        f"Wheel extension, Parquet, V2 descriptors and CLI passed: {metadata.version}"
+        f"Wheel library, Int8 descriptors and Python-free CLI passed: {metadata.version}"
     )
 
 

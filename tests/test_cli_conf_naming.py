@@ -2,10 +2,8 @@
 
 from pathlib import Path
 
+import _native_cli as cli
 import pytest
-
-from rcsfs import cli
-from rcsfs._cli_config import parse_cli_args
 
 
 @pytest.mark.parametrize("conf", ["e1_cv1", "e1_cv1_"])
@@ -40,14 +38,6 @@ def test_batch_generation_and_split_share_conf_as_names(
     config = tmp_path / "rcsfs.toml"
     config.write_text(contents, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-
-    generated = parse_cli_args(
-        cli.build_parser(), ["csfsgenerate", "-c"], config_index=0
-    )
-    assert generated.rcsfs_out == Path("e1_cv1_as0raw.c")
-    split = parse_cli_args(cli.build_parser(), ["csfs-split", "-c", "rcsfs.toml"])
-    assert split.split_csfs_parquet == Path("e1_cv1_as6raw.parquet")
-    assert split.csfs_header == Path("e1_cv1_as6raw_header.toml")
 
     assert cli.main(["-c", "rcsfs.toml"]) == 0
     for level in range(7):

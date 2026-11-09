@@ -6,10 +6,10 @@ import json
 from pathlib import Path
 
 import pytest
+from _native_cli import main
 
 from rcsfs import CsfgGenerationStats, generate_csfgs
 from rcsfs._publication import PartialPublicationError
-from rcsfs.cli import main
 
 FIXTURES = Path(__file__).parent / "fixtures/csfg"
 INPUT = """[csfggenerate]

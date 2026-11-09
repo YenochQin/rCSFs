@@ -14,23 +14,28 @@ platform linker are required. From `rCSFs/`, choose an empty output directory:
 
 ```bash
 source .venv/bin/activate
-uvx --python .venv/bin/python --from 'maturin[patchelf]>=1.14,<2.0' maturin build --release --locked --sdist --compatibility pypi --interpreter .venv/bin/python --out dist
+uv build --python .venv/bin/python --out-dir dist
 uvx --python .venv/bin/python --from 'twine>=6.2' twine check --strict dist/*
 python scripts/check_release.py dist --smoke
 ```
 
-`--sdist` builds the wheel from the source archive, checking that it is
-self-contained. `--locked` uses the versioned Cargo.lock; update the lockfile
-intentionally with dependency changes. Maturin and patchelf live in an isolated
-tool environment. The Windows interpreter path is
-`.venv/Scripts/python.exe`; initialize the compiler/linker
-before building. These commands neither install the new wheel into Tools nor
-replace the in-tree extension. See [development.md](https://github.com/YenochQin/rCSFs/blob/HEAD/docs/development.md) for those
-separate workflows. Build tools must have access to their package registries.
+`uv build` builds the source archive and then the wheel from that archive. The
+custom PEP 517 backend is included in the sdist. It builds the Python-free CLI
+and PyO3 extension separately through Maturin, checks that their platform tags
+match, and combines them into one wheel with a fresh RECORD. CLI auditing uses
+`check`, so a Python launcher or unbundled non-system dependency is not accepted.
+The extension may use normal Maturin repair. Cargo.lock remains required.
 
-For a local wheel that was already built, create the source archive separately
-with `maturin sdist --out dist` through the same uvx tool environment. Before
-publication, still rebuild a wheel from the source archive with `--sdist`.
+Build tools run in uv's isolated environment. For an already provisioned local
+build environment, `uv build --no-build-isolation --python .venv/bin/python`
+uses its installed Maturin. The Windows interpreter path is
+`.venv/Scripts/python.exe`; initialize the compiler/linker before building.
+These commands do not install into Tools or upload anything.
+
+A single direct `maturin build` is a component build, not a complete release
+wheel. The CI workflow builds both audited components from source archives and
+uses `build_backend.merge_wheels` to assemble the final wheel. It publishes only
+the combined wheel and one source archive from `dist`, not `native-dist`.
 Do not upload historical files from `target/wheels/` alongside a new build.
 
 ## Linux compatibility and platform matrix

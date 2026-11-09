@@ -1,3 +1,5 @@
+import _native_cli as cli
+
 """Generation CLI output safety and metadata regressions."""
 
 import hashlib
@@ -11,7 +13,6 @@ import pytest
 
 from rcsfs import (
     CsfGenerationEstimate,
-    cli,
     estimate_disk_generation,
     generate_disk_outputs_from_transcript,
     get_parquet_info,
@@ -112,34 +113,6 @@ def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
     assert restored.read_bytes() == (tmp_path / "out.c").read_bytes()
 
 
-def test_disk_generation_uses_invocation_directory_for_scratch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = config_file(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    observed: dict[str, Path] = {}
-    original_estimate = cli.estimate_disk_generation
-    original_generate = cli.generate_disk_outputs_from_transcript
-
-    def estimate(*args: object, **kwargs: object) -> object:
-        observed["estimate_scratch"] = Path(str(kwargs["scratch_dir"]))
-        observed["staging"] = Path(str(kwargs["staging_dir"]))
-        return original_estimate(*args, **kwargs)
-
-    def generate(*args: object, **kwargs: object) -> object:
-        observed["generation_scratch"] = Path(str(args[5]))
-        return original_generate(*args, **kwargs)
-
-    monkeypatch.setattr(cli, "estimate_disk_generation", estimate)
-    monkeypatch.setattr(cli, "generate_disk_outputs_from_transcript", generate)
-
-    assert cli.main(["csfsgenerate", "--config", str(config)]) == 0
-    assert observed["estimate_scratch"] == tmp_path
-    assert observed["staging"] == tmp_path
-    assert observed["generation_scratch"].parent == tmp_path
-    assert not observed["generation_scratch"].exists()
-
-
 def test_config_multiple_lists_union_and_exact_dedup(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
@@ -221,10 +194,8 @@ def test_config_generation_rejects_retired_normalize_key_without_outputs(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     config = config_file(tmp_path, normalize=True)
-    with pytest.raises(SystemExit) as error:
-        cli.main(["csfsgenerate", "--config", str(config)])
-    assert error.value.code == 2
-    assert "unknown output keys: normalize" in capfd.readouterr().err
+    assert cli.main(["csfsgenerate", "--config", str(config)]) == 2
+    assert "normalize" in capfd.readouterr().err
     assert set(tmp_path.iterdir()) == {config}
 
 
@@ -550,28 +521,6 @@ def test_symlink_output_replaced_without_touching_target(tmp_path: Path) -> None
     assert not (tmp_path / "out.parquet").is_symlink()
 
 
-def test_publication_race_replaces_other_writer(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capfd: pytest.CaptureFixture[str],
-) -> None:
-    config = config_file(tmp_path)
-    original = cli.generate_disk_outputs_from_transcript
-    sentinel = tmp_path / "out.parquet"
-
-    def racing_writer(*args: object, **kwargs: object) -> object:
-        result = original(*args, **kwargs)
-        sentinel.write_bytes(b"another writer")
-        return result
-
-    monkeypatch.setattr(cli, "generate_disk_outputs_from_transcript", racing_writer)
-    assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 0
-    result = json.loads(capfd.readouterr().out)
-    assert result["success"] is True
-    assert sentinel.read_bytes() != b"another writer"
-    assert (tmp_path / "out.c").is_file()
-
-
 def test_extension_positional_signature(tmp_path: Path) -> None:
     transcript = "* ! Orbital order\n0\n1s(2,*)\n\n1s\n0,0\n0\nn\n"
     assert generate_csfs_from_transcript(transcript, str(tmp_path / "out.c"), 1)[
@@ -645,7 +594,7 @@ def test_estimate_only_rejects_the_in_memory_path(
         == 1
     )
     captured = capfd.readouterr()
-    assert "estimate_only requires disk generation storage" in captured.err
+    assert "estimate_only requires disk generation" in captured.err
     assert set(tmp_path.iterdir()) == {config}
 
 

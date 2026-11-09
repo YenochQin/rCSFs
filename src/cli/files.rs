@@ -38,13 +38,14 @@ pub(super) fn validate_output(path: &Path, config: Option<&Path>) -> Result<()> 
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
+    let cwd = std::env::current_dir()?;
     ensure!(
-        parent.canonicalize()? == std::env::current_dir()?,
+        parent.canonicalize().is_ok_and(|parent| parent == cwd),
         "output must name a file in the current directory: {}",
         path.display()
     );
     ensure!(
-        path.file_name().is_some() && !path.is_dir() && !path.is_symlink(),
+        path.file_name().is_some() && !path.is_dir(),
         "invalid output path: {}",
         path.display()
     );

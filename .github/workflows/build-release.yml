@@ -36,7 +36,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.15"
-      - uses: PyO3/maturin-action@v1
+      - name: Build extension wheel and source archive
+        uses: PyO3/maturin-action@v1
         with:
           command: build
           maturin-version: v1.15.0
@@ -44,14 +45,34 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: "2_28"
           args: --release --locked --sdist --interpreter ${{ matrix.interpreter }} --out dist
+      - name: Build and audit Python-free CLI from source archive
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          maturin-version: v1.15.0
+          rust-toolchain: stable
+          target: ${{ matrix.target }}
+          manylinux: "2_28"
+          args: --release --locked --sdist --bindings bin --no-default-features --features cli --auditwheel check --interpreter ${{ matrix.interpreter }} --out native-dist
+      - name: Combine audited wheels
+        run: |
+          python - <<'PYTHON'
+          from pathlib import Path
+          from build_backend import merge_wheels
+          library, = Path("dist").glob("*.whl")
+          native, = Path("native-dist").glob("*.whl")
+          print(merge_wheels(library, native, Path("dist")))
+          PYTHON
       - name: Install wheel and validation tools
         run: |
-          python -m pip install 'twine>=6.2'
+          python -m pip install 'twine>=6.2' uv
           python -m pip install --only-binary=:all: dist/*.whl
       - name: Check archives and exercise extracted wheel
         run: |
           python -m twine check --strict dist/*
           python scripts/check_release.py dist --smoke
+          rcsfs --version
+          uv run --no-project --no-sync rcsfs --version
       - uses: actions/upload-artifact@v6
         with:
           name: rcsfs-${{ matrix.target }}

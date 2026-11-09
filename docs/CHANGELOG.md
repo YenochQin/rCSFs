@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+- 简化 CI：原生 Rust 测试同时构建 CLI，移除独立 CLI build 和默认 Python features 下的重复 Rust 测试；保留 Python 扩展构建及 Python API/CLI 测试，继续覆盖 Linux、Windows、macOS。
+
 - 修复 Windows 磁盘生成预检：使用系统 API 查询用户可用字节和卷身份，正确合并同卷 scratch、staging、发布产物的空间需求；保留无法查询时显式选择 unchecked 的策略。Windows 硬链接检查复用卷和文件身份。
 - 移除未使用且与 pytest 9.2 冲突的 pytest-speed，CI 与本地共享 test 依赖组（含打包测试必需的 Maturin），并在编译前检查 pytest 启动和测试导入。清理 Windows 测试的 unused_mut 警告。
 

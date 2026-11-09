@@ -43,6 +43,11 @@ Rust tests use `cargo test --release --locked` with the local environment activa
 The `test` dependency group supplies the CI test dependencies, including Maturin
 for backend tests. CI installs it with `python -m pip install --group test` and
 checks pytest startup before compiling. Local `dev` includes this group.
+CI runs the Rust suite once with `--no-default-features --features cli`;
+`cargo test` also builds the executable used by the integration tests, so a
+separate CLI build is unnecessary. It then builds the Python extension and runs
+the Python API/native CLI tests against those artifacts. There is no second
+full Rust test run with the default Python features.
 The retired pytest-speed plugin is disabled for older environments; performance
 measurements use the repository's benchmark scripts. Windows disk generation
 queries caller-available space and volume/file identity through Win32 APIs.

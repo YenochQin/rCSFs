@@ -38,12 +38,9 @@ jobs:
         run: python -m pip install --group test
       - name: Check pytest startup and packaging-test imports
         run: python -m pytest --collect-only -q tests/test_github_release.py tests/build_backend_test.py
-      - name: Build without Python
-        run: cargo build --release --locked --no-default-features --features cli --bin rcsfs
-      - name: Test Rust algorithms and Python-free CLI
+      # cargo test also builds the CLI used by CARGO_BIN_EXE_rcsfs integration tests.
+      - name: Build and test Rust algorithms and Python-free CLI
         run: cargo test --release --locked --no-default-features --features cli
-      - name: Test Rust with Python bindings
-        run: cargo test --release --locked
       - name: Build the in-tree Python extension
         run: cargo build --release --locked --features pyo3/extension-module,pyo3/generate-import-lib
       - name: Stage the extension and select the native test executable
@@ -61,6 +58,8 @@ jobs:
               raise SystemExit("Python extension suffix is missing")
           shutil.copy2(Path("target/release") / artifact, Path("rcsfs") / f"_rcsfs{suffix}")
           executable = Path("target/release") / ("rcsfs.exe" if sys.platform == "win32" else "rcsfs")
+          if not executable.is_file():
+              raise SystemExit("Native CLI was not produced by the Rust tests")
           with open(os.environ["GITHUB_ENV"], "a") as env:
               env.write(f"RCSFS_TEST_CLI={executable.resolve()}\n")
           PYTHON

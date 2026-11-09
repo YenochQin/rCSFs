@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+- 修复 Windows 原生 CLI 输出目录检查：当前目录与目标父目录均规范化后比较，避免 verbatim 路径前缀导致误拒绝；测试夹具固定 LF，避免 Windows checkout 转换为 CRLF。
+
+- GitHub Actions 整理为 `ci.yml`（Linux/Windows/macOS Rust 与 Python 编译测试）和 `publish.yml`（内置三平台构建、验证及可选发布）；移除独立 native/build workflow，保持手动发布及默认关闭上传。
+
 - wheel 同时包含独立原生 Rust CLI 和 PyO3 库；移除 `rcsfs.cli`、Python console-script 入口及其配置/日志模块，保留全部 Python 库接口。安装后 `rcsfs` 和 `uv run rcsfs` 直接执行原生程序。
 - 增加 PEP 517/660 混合构建后端：分别审计 CLI 与扩展，核对平台标签，合并 `.data/scripts` 并重建 RECORD；支持源码包重建和 editable 安装，同步发布工作流与归档/运行校验。
 - CLI 测试迁移到真实原生进程，补充批次日志的工作目录、时间、合并参数和普通错误终态，并在批处理执行前拒绝空活动空间。文本输出样式和批次日志采用原生 CLI 的结构化格式。

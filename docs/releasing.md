@@ -43,7 +43,7 @@ Do not upload historical files from `target/wheels/` alongside a new build.
 `--compatibility pypi` rejects plain `linux_x86_64` wheels and audits/repairs
 native dependencies. It does not guarantee compatibility with old glibc.
 A wheel built on a new Linux host may need a newer glibc than cluster nodes.
-Use the build-only workflow for the intended distribution baseline:
+Run `publish.yml` with both publication options off to validate this distribution baseline:
 
 | Runner / architecture | Wheel target | Interpreter |
 | --- | --- | --- |
@@ -57,27 +57,16 @@ artifact assembly and publishing jobs also use `ubuntu-24.04`.
 
 The workflow builds from the source archive, installs the produced wheel and
 its public dependencies on the runner, runs archive and functional checks,
-and retains GitHub Actions artifacts. It runs by manual dispatch or by an
-explicit push to a `codex/release-build-check-*` branch. It is also reusable
-through `workflow_call`, so the publishing workflow builds the same commit.
-The build workflow contains no PyPI upload job, credentials or OIDC permission.
+and retains GitHub Actions artifacts. Its build matrix lives directly in
+`publish.yml`; there is no separate reusable build workflow. Run it manually
+from `main` with the exact source version and both publication options off for
+a build-only check. Pushes and tags never publish packages.
+
+The separate `ci.yml` runs Rust and Python compilation/tests on all three
+runners for pushes to `main`, pull requests and manual dispatch. It does not
+publish packages. Review all three platform jobs before using release artifacts.
 The matrix is a validation target, not a claim that unrun platforms passed.
-Intel macOS, Linux ARM, musl, free-threaded Python and future Python versions
-are outside this initial wheel matrix. Without a matching wheel, pip may build
-from source and require Rust; successful source builds on those targets have
-not been established by this preparation.
-
-Until the workflow reaches the default branch, start a check from the release
-commit by pushing it to a dedicated branch, for example:
-
-```bash
-git push origin HEAD:refs/heads/codex/release-build-check-20261020
-```
-
-Choose a fresh suffix for a separate run of an unchanged commit. Normal
-development-branch pushes and tags do not trigger this workflow. Once the
-workflow is on the default branch, the Actions page also offers **Run workflow**
-with a branch selector. Review all three platform jobs before using the artifacts.
+Intel macOS, Linux ARM, musl and free-threaded Python remain outside this matrix.
 
 ## Artifact checks
 

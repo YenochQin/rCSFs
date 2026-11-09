@@ -186,7 +186,7 @@ success/failure record for ordinary command errors. A forcibly terminated proces
 may leave an incomplete log without a terminal event. Publication is atomic per file, not a transaction across
 all output files; failures report files already published.
 
-The [native CLI workflow](.github/workflows/native-cli.yml) builds and tests
+The [cross-platform CI workflow](.github/workflows/ci.yml) builds and tests
 Linux, Windows and macOS executables independently of Python wheels. Local
 validation does not establish that all platform CI jobs have passed. See
 [development.md](docs/development.md#native-rust-cli) for validation commands.

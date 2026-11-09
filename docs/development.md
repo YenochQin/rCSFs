@@ -71,7 +71,7 @@ The dependency tree must not contain `pyo3` or `pyo3-arrow`. The executable is
 `PATH` and exercise generation, configuration, file protection and descriptor
 round trips. They use only maintained fixtures and small synthetic models.
 They do not run GRASP or validate scientific accuracy. The separate
-[native workflow](../.github/workflows/native-cli.yml) tests the three release
+[cross-platform CI workflow](../.github/workflows/ci.yml) tests the three release
 platforms; executing one platform locally does not validate the others.
 
 To install from source:

@@ -38,7 +38,8 @@ pub(super) fn validate_output(path: &Path, config: Option<&Path>) -> Result<()> 
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let cwd = std::env::current_dir()?;
+    // Windows canonicalize() adds a verbatim prefix; normalize both operands.
+    let cwd = std::env::current_dir()?.canonicalize()?;
     ensure!(
         parent.canonicalize().is_ok_and(|parent| parent == cwd),
         "output must name a file in the current directory: {}",

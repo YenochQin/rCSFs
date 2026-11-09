@@ -1,0 +1,66 @@
+name: Cross-platform build and test
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-15]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: "2"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build without Python
+        run: cargo build --release --locked --no-default-features --features cli --bin rcsfs
+      - name: Test Rust algorithms and Python-free CLI
+        run: cargo test --release --locked --no-default-features --features cli
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.15"
+      - name: Select Python for PyO3
+        run: python -c 'import os, sys; open(os.environ["GITHUB_ENV"], "a").write(f"PYO3_PYTHON={sys.executable}\n")'
+      - name: Install Python test dependencies
+        run: python -m pip install 'polars>=2.1.0' 'pyarrow>=26.0.0' 'pytest>=9.0.2' 'pytest-speed>=0.3.5'
+      - name: Test Rust with Python bindings
+        run: cargo test --release --locked
+      - name: Build the in-tree Python extension
+        run: cargo build --release --locked --features pyo3/extension-module,pyo3/generate-import-lib
+      - name: Stage the extension and select the native test executable
+        run: |
+          python - <<'PYTHON'
+          import os
+          from pathlib import Path
+          import shutil
+          import sys
+          import sysconfig
+
+          artifact = {"darwin": "lib_rcsfs.dylib", "win32": "_rcsfs.dll"}.get(sys.platform, "lib_rcsfs.so")
+          suffix = sysconfig.get_config_var("EXT_SUFFIX")
+          if not suffix:
+              raise SystemExit("Python extension suffix is missing")
+          shutil.copy2(Path("target/release") / artifact, Path("rcsfs") / f"_rcsfs{suffix}")
+          executable = Path("target/release") / ("rcsfs.exe" if sys.platform == "win32" else "rcsfs")
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"RCSFS_TEST_CLI={executable.resolve()}\n")
+          PYTHON
+      - name: Test Python APIs and native CLI integration
+        run: python -m pytest tests/

@@ -80,6 +80,45 @@ fn prepare_descriptor(dir: &Path) {
     );
 }
 #[test]
+fn output_paths_accept_current_directory_and_reject_other_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    fs::write(p.join("input.log"), TRANSCRIPT).unwrap();
+    let absolute = p.join("absolute.c");
+    let canonical = p.canonicalize().unwrap().join("canonical.c");
+    for output in [
+        "relative.c",
+        "./explicit.c",
+        absolute.to_str().unwrap(),
+        canonical.to_str().unwrap(),
+    ] {
+        success(
+            p,
+            &[
+                "csfsgenerate",
+                output,
+                "--transcript",
+                "input.log",
+                "--threads",
+                "1",
+            ],
+        );
+        assert!(p.join(output).is_file());
+    }
+    fs::create_dir(p.join("child")).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let external = outside.path().join("outside.c");
+    for output in ["child/nested.c", external.to_str().unwrap()] {
+        let result = invoke(p, &["csfsgenerate", output, "--transcript", "input.log"]);
+        assert!(!result.status.success());
+        assert!(
+            String::from_utf8_lossy(&result.stderr)
+                .contains("output must name a file in the current directory")
+        );
+        assert!(!p.join(output).exists());
+    }
+}
+#[test]
 fn help_version_and_each_command_run_without_python() {
     let dir = tempfile::tempdir().unwrap();
     assert!(

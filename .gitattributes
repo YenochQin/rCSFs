@@ -8,3 +8,7 @@ Cargo.lock text eol=lf
 licenses/** text eol=lf
 # Preserve whitespace inside upstream license notices in this generated bundle.
 licenses/RUST-DEPENDENCIES.txt whitespace=-blank-at-eol
+
+# CSF parsers and byte-for-byte reference tests require canonical LF on Windows too.
+# Use auto detection so binary fixtures remain untouched.
+tests/fixtures/** text=auto eol=lf

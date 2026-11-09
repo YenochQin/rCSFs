@@ -164,7 +164,7 @@ rcsfs restore-csfs --descriptors descriptors.parquet --header input_header.toml 
 日志采用 JSON Lines，记录工作目录、Unix 毫秒时间、合并后的 TOML/CLI 参数及普通运行错误的结束状态。外部强制终止可能留下没有结束事件的不完整日志。输出按单个文件原子发布，多个输出文件不是一个事务；
 发布失败时会报告已经完成发布的文件。
 
-[原生 CLI 工作流](.github/workflows/native-cli.yml) 独立于 Python wheel，构建并测试 Linux、
+[跨平台编译测试工作流](.github/workflows/ci.yml) 独立于 Python wheel，构建并测试 Linux、
 Windows 和 macOS 可执行程序。本地验证不代表所有平台的 CI 已通过；验证命令见
 [开发指南](docs/development.md#native-rust-cli)。
 

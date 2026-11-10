@@ -1,5 +1,9 @@
 # rCSFs Guidelines
 
+## Shell commands
+
+All shell commands shown to the user, including replies, documentation, and copyable examples, must use fish shell syntax. Label shell code blocks as `fish`; do not output Bash commands or Bash-specific syntax. Use fish-compatible variable assignments, environment variables, control flow, and virtual-environment activation.
+
 ## Ownership and interfaces
 
 `rCSFs` owns CSF conversion, generation, V2 descriptors, restoration, and splitting. Rust code is in `src/`, the Python API in `rcsfs/`, and maintained tests in `tests/`. The public package is `rcsfs`; the compiled extension is `rcsfs._rcsfs`. The product CLI is the native Rust executable in `src/cli/`; keep Python library APIs independent of command parsing.
@@ -13,9 +17,9 @@
 
 This subrepository uses its own Python 3.15 `.venv`, independently of the paired workspace's Tools environment. Run setup and synchronization here, then activate it before Cargo so PyO3 finds the intended interpreter.
 
-```sh
+```fish
 uv sync --python 3.15 --no-editable --group lint
-source .venv/bin/activate
+source .venv/bin/activate.fish
 ```
 
 Choose the build output the task actually uses:

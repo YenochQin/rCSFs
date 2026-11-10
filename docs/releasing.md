@@ -63,8 +63,9 @@ from `main` with the exact source version and both publication options off for
 a build-only check. Pushes and tags never publish packages.
 
 The separate `ci.yml` runs Rust and Python compilation/tests on all three
-runners for pushes to `main`, pull requests and manual dispatch. It does not
-publish packages. Review all three platform jobs before using release artifacts.
+runners for pull requests and manual dispatch. Pushes to `main` do not start
+this workflow. It does not publish packages. Review all three platform jobs
+before using release artifacts.
 The matrix is a validation target, not a claim that unrun platforms passed.
 Intel macOS, Linux ARM, musl and free-threaded Python remain outside this matrix.
 

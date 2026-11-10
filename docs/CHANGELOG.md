@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+- 取消 `ci.yml` 的 push 自动触发，保留 pull request 检查和手动运行；`publish.yml` 继续仅由手动操作触发。
+
 ## [3.0.1] - 2026-11-10
 
 本次准备并提交源码补丁版本；本次操作不发布 PyPI、crates.io 或 GitHub Release。

@@ -35,9 +35,9 @@ It helps you:
 For a standalone executable, use the [native Rust CLI](#native-rust-cli-on-path).
 For the Python library and bundled native Rust CLI, install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.15 or newer.
 
-This checkout prepares version **3.0.0** and uses its own Python 3.15 `.venv`;
+This checkout prepares version **3.0.1** and uses its own Python 3.15 `.venv`;
 see [source development](docs/development.md). The pinned installation examples
-below apply once 3.0.0 has been published to PyPI; pushing the source does not
+below apply once 3.0.1 has been published to PyPI; pushing the source does not
 publish a package.
 The distribution name, Python import name and command-line entry point are all
 `rcsfs`.
@@ -47,7 +47,7 @@ The distribution name, Python import name and command-line entry point are all
 Use [uv](https://docs.astral.sh/uv/getting-started/installation/) to manage the
 environment and dependencies of your own analysis project. For a new project:
 
-```bash
+```fish
 uv init --python 3.15 csf-analysis
 cd csf-analysis
 uv add rcsfs
@@ -58,7 +58,7 @@ For an existing uv project using Python 3.15 or newer, run `uv add rcsfs` in its
 directory. This records the dependency in `pyproject.toml`, updates `uv.lock`,
 and installs it in the project's `.venv`. Run your own script with
 `uv run python analysis.py`; manual environment activation is not required.
-To pin a particular release, use `uv add "rcsfs==3.0.0"`.
+To pin a particular release, use `uv add "rcsfs==3.0.1"`.
 
 You can also add the dependency to an existing `pyproject.toml` manually:
 
@@ -68,7 +68,7 @@ name = "csf-analysis"
 version = "0.1.0"
 requires-python = ">=3.15"
 dependencies = [
-    "rcsfs==3.0.0",
+    "rcsfs==3.0.1",
 ]
 ```
 
@@ -80,11 +80,11 @@ your analysis code to record the dependency choices.
 
 To install into an existing Python environment:
 
-```bash
+```fish
 python -m pip install rcsfs
 ```
 
-For a fixed release, use `python -m pip install "rcsfs==3.0.0"`.
+For a fixed release, use `python -m pip install "rcsfs==3.0.1"`.
 Both installation methods provide the same Python API and `rcsfs` command.
 
 The release workflow targets CPython 3.15 wheels for Linux x86_64
@@ -99,7 +99,7 @@ compatible linker; see [development.md](docs/development.md).
 
 For a uv-managed project:
 
-```bash
+```fish
 uv run python -c "import rcsfs; print(rcsfs.__version__)"
 uv run rcsfs --help
 ```
@@ -172,15 +172,22 @@ rcsfs restore-csfs --descriptors descriptors.parquet --header input_header.toml 
 `--transcript FILE`; disk generation, estimates and continuation lists use the
 shared Rust pipeline. CSFG supports numbered models and active-space layers.
 Output filenames must be in the invocation directory. CLI arguments override
-TOML values. `--json` writes a result to stdout; progress and diagnostics go to
-stderr. Exit codes are 0 for success, 2 for argument/configuration errors, and
+TOML values. The default terminal summary shows key counts with thousands separators,
+J/parity or split results, output paths and elapsed time. File sizes use B, KB, MB,
+GB or larger SI units (1 MB = 1,000,000 bytes). Detailed stages and resource statistics
+go to the run log; warnings and errors remain on stderr. `--json` keeps the full
+result on stdout, with numeric counts and raw byte values unchanged. Exit codes are 0 for success, 2 for argument/configuration errors, and
 1 for processing failures.
 
+When non-JSON `zero-first` output is redirected, its legacy three-column block
+table remains on stderr for existing GRASP input generators. Interactive terminals
+use the concise summary; the full table is always retained in the run log.
+
 `rcsfs -c FILE` runs configured tables in file order and stops on failure.
-For regular CSF batches, `rcsfs.log` (or `rcsfs_<conf>.log`) appends JSON Lines
-containing the configuration snapshot, command results, timings and failures;
-progress messages remain on stderr. CSFG batches stage all models before
-publishing and report their results directly. Logs include the invocation directory,
+All commands, including standalone subcommands, estimates and CSFG batches, append
+JSON Lines to `rcsfs.log` (or `rcsfs_<conf>.log`). These retain the configuration
+snapshot, full command results, detailed diagnostics, timings and failures.
+CSFG batches stage all models before publishing. Logs include the invocation directory,
 Unix-millisecond timestamps, merged configuration/CLI parameters and a terminal
 success/failure record for ordinary command errors. A forcibly terminated process
 may leave an incomplete log without a terminal event. Publication is atomic per file, not a transaction across
@@ -549,16 +556,19 @@ the batch runner generates these automatically from a matching earlier
 generation, set `generate_parquet = true` or pass `--generate-parquet` to write
 only the CSF Parquet and header alongside the CSF text.
 
-Batch runs (`rcsfs -c rcsfs.toml`) automatically append to `rcsfs_{conf}.log`
+CLI runs (both `rcsfs -c rcsfs.toml` and standalone subcommands) append to `rcsfs_{conf}.log`
 in the invocation directory, for example `rcsfs_e1_vv.log` for
 `conf = "e1_vv"`; without `conf`, the filename is `rcsfs.log`. Each run records
 the original TOML, merged configuration/CLI parameters, native command errors,
 complete returned statistics (CSF/block counts, AS split counts, and available
 generation timing/resource statistics), start/end times, step/total elapsed
-time, and exit status. Native Rust progress messages remain on the console.
+time, and exit status. Detailed native diagnostics are logged instead of printed.
+The console shows a concise result summary, comma-separated counts and automatic
+file-size units; warnings and errors stay visible. JSON/log statistics retain raw
+numbers for scripts. Estimates create a log but no calculation outputs.
 Previous runs are retained. Validation happens before the log is opened; a log
 that aliases an input/output is rejected, and an unwritable log prevents the
-batch from starting. Standalone subcommands do not create this batch log.
+command from starting.
 
 Every CLI command writes final outputs in the directory where it is invoked.
 Output arguments specify filenames; paths to other output directories are

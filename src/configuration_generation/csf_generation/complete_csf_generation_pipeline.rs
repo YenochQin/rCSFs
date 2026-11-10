@@ -31,7 +31,14 @@ fn header(labels: impl IntoIterator<Item = String>) -> String {
         .to_owned()
 }
 
-fn print_memory_j_value_summary(chunks: &[CompleteCsfFile]) {
+#[derive(Debug, serde::Serialize)]
+pub struct GenerationBlockStats {
+    pub total_two_j: u16,
+    pub parity: &'static str,
+    pub record_count: usize,
+}
+
+fn memory_j_value_summary(chunks: &[CompleteCsfFile]) -> Vec<GenerationBlockStats> {
     let mut blocks = BTreeMap::<(u16, bool), usize>::new();
     for chunk in chunks {
         for block in &chunk.blocks {
@@ -41,13 +48,20 @@ fn print_memory_j_value_summary(chunks: &[CompleteCsfFile]) {
         }
     }
 
-    eprintln!("\nCSFs per J value:");
-    for ((total_two_j, odd), count) in blocks {
+    crate::reporting::detail!("\nCSFs per J value:");
+    for (&(total_two_j, odd), count) in &blocks {
         let parity = if odd { "odd" } else { "even" };
         let j_value = f64::from(total_two_j) / 2.0;
-        eprintln!("  J = {:4.1} ({:>4}): {:10} CSFs", j_value, parity, count);
+        crate::reporting::detail!("  J = {:4.1} ({:>4}): {:10} CSFs", j_value, parity, count);
     }
-    eprintln!();
+    blocks
+        .into_iter()
+        .map(|((total_two_j, odd), record_count)| GenerationBlockStats {
+            total_two_j,
+            parity: if odd { "-" } else { "+" },
+            record_count,
+        })
+        .collect()
 }
 
 /// Statistics from ordering, merging and writing already-generated CSF chunks.
@@ -139,6 +153,7 @@ pub struct TranscriptGenerationStats {
     pub block_count: usize,
     pub output_bytes: u64,
     pub descriptor_count: Option<usize>,
+    pub blocks: Vec<GenerationBlockStats>,
 }
 
 /// Parse an `rcsfgenerate.log`-format transcript, enumerate and generate the
@@ -153,15 +168,15 @@ pub fn generate_csfs_from_transcript(
 
     threads: Option<usize>,
 ) -> Result<TranscriptGenerationStats> {
-    eprintln!("Parsing transcript and enumerating configurations...");
+    crate::reporting::detail!("Parsing transcript and enumerating configurations...");
     let request = ExcitationRequest::from_transcript(transcript)?;
     let occupations = enumerate_occupations(&request)?;
-    eprintln!(
+    crate::reporting::detail!(
         "Enumerated {} unique occupation configurations",
         occupations.configurations.len()
     );
 
-    eprintln!("Generating CSFs in memory...");
+    crate::reporting::detail!("Generating CSFs in memory...");
     let requests = occupations
         .configurations
         .iter()
@@ -174,13 +189,14 @@ pub fn generate_csfs_from_transcript(
         .collect::<Vec<_>>();
     let chunks = generate_csfs_parallel(&requests, threads)?;
 
-    eprintln!("Writing CSF text file...");
+    crate::reporting::detail!("Writing CSF text file...");
     let write_stats = write_generated_csfs(&occupations.core_subshells, &chunks, output_path)?;
-    eprintln!(
+    crate::reporting::detail!(
         "Generated {} CSFs across {} symmetry blocks",
-        write_stats.record_count, write_stats.block_count
+        write_stats.record_count,
+        write_stats.block_count
     );
-    print_memory_j_value_summary(&chunks);
+    let blocks = memory_j_value_summary(&chunks);
 
     Ok(TranscriptGenerationStats {
         unique_occupations: occupations.configurations.len(),
@@ -188,5 +204,6 @@ pub fn generate_csfs_from_transcript(
         block_count: write_stats.block_count,
         output_bytes: write_stats.output_bytes,
         descriptor_count: write_stats.descriptor_count,
+        blocks,
     })
 }

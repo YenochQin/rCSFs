@@ -9,7 +9,8 @@ mod disk_space_preflight;
 pub(crate) mod python_csf_bindings;
 
 pub use complete_csf_generation_pipeline::{
-    TranscriptGenerationStats, WriteStats, generate_csfs_from_transcript, write_generated_csfs,
+    GenerationBlockStats, TranscriptGenerationStats, WriteStats, generate_csfs_from_transcript,
+    write_generated_csfs,
 };
 pub(crate) use csf_output_capacity_estimation::{
     ArtifactKind, CapacityEstimate, estimate_capacity,

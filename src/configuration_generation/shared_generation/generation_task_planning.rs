@@ -220,25 +220,32 @@ pub(crate) struct PlanStats {
 pub(crate) fn report_plan(plan: &GenerationPlan) {
     let stats = plan.stats();
     let distribution = stats.estimated_records_per_task;
-    eprintln!(
+    crate::reporting::detail!(
         "Planned {} tasks from {} configurations: estimated {} CSFs before de-duplication",
-        stats.task_count, stats.unique_occupations, stats.estimated_total_records
+        stats.task_count,
+        stats.unique_occupations,
+        stats.estimated_total_records
     );
-    eprintln!(
+    crate::reporting::detail!(
         "Task size target {} CSFs; per-task p50 {} p95 {} max {}",
-        stats.target_records_per_task, distribution.p50, distribution.p95, distribution.maximum
+        stats.target_records_per_task,
+        distribution.p50,
+        distribution.p95,
+        distribution.maximum
     );
     if stats.zero_record_configurations > 0 {
-        eprintln!(
+        crate::reporting::detail!(
             "{} configurations are expected to produce no CSF",
             stats.zero_record_configurations
         );
     }
     if stats.unsplittable_tasks > 0 {
-        eprintln!(
+        crate::reporting::detail!(
             "{} tasks stay above the {} CSF size target because neither their configuration \
              nor their state prefixes can be divided further; largest {} CSFs",
-            stats.unsplittable_tasks, stats.target_records_per_task, stats.unsplittable_records
+            stats.unsplittable_tasks,
+            stats.target_records_per_task,
+            stats.unsplittable_records
         );
     }
 }

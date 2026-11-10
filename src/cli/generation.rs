@@ -409,7 +409,7 @@ pub(super) fn run(s: &Settings) -> Result<Json> {
         if outputs.write_parquet {
             commands::convert(&csf, &parquet, s)?;
         }
-        json!({"record_count": stats.record_count, "block_count": stats.block_count, "unique_occupations": stats.unique_occupations, "output_bytes": stats.output_bytes})
+        json!({"record_count": stats.record_count, "block_count": stats.block_count, "blocks": stats.blocks, "unique_occupations": stats.unique_occupations, "output_bytes": stats.output_bytes})
     };
     let mut sources = vec![csf.clone()];
     if outputs.write_parquet {

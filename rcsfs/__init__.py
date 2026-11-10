@@ -98,7 +98,7 @@ from ._types import (
 try:
     __version__ = version("rcsfs")
 except PackageNotFoundError:
-    __version__ = "3.0.0"
+    __version__ = "3.0.1"
 
 from ._csfg import generate_csfgs
 from ._rcsfs import (

@@ -338,7 +338,7 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
             let reference = s.path("reference")?;
             let candidates = s.path("candidates")?;
             let output = s.output("output", Some(Path::new("rcsf.out")))?;
-            eprintln!(
+            crate::reporting::warning!(
                 "STRUCTURAL UPPER BOUND ONLY: this is not an exact rcsfinteract90 angular-algebra calculation; false positives may be retained."
             );
             let stats = interaction::select_interacting_csfs(

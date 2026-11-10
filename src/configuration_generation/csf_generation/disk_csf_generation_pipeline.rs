@@ -173,7 +173,7 @@ impl RangeProgress {
             return;
         }
         *last_report = Instant::now();
-        eprintln!(
+        crate::reporting::detail!(
             "Range progress: started {}/{}; completed {}/{}; generated {} CSFs",
             self.started.load(Ordering::Relaxed),
             self.total,
@@ -291,6 +291,7 @@ pub(crate) struct DiskGenerationStats {
     pub(crate) unique_count: usize,
     pub(crate) duplicate_count: usize,
     pub(crate) block_count: usize,
+    pub(crate) blocks: Vec<super::GenerationBlockStats>,
     pub(crate) csf_bytes: u64,
     pub(crate) descriptor_bytes: u64,
     /// The codec the temporary segments were written with. The byte model
@@ -413,7 +414,7 @@ fn generate_disk_outputs_from_requests(
         scratch_dir.display()
     );
     let mut stage_stats = Vec::new();
-    eprintln!("Parsing transcript and enumerating configurations...");
+    crate::reporting::detail!("Parsing transcript and enumerating configurations...");
     // Parsing and scratch creation are part of the call the caller times, so
     // they are part of what the stages must account for.
     let setup_timer = StageTimer::start();
@@ -424,7 +425,7 @@ fn generate_disk_outputs_from_requests(
         )
     })?;
     stage_stats.push(setup_timer.finish("setup", 0, 0, 0, 0));
-    eprintln!("Generating CSFs and V2 descriptors to disk segments...");
+    crate::reporting::detail!("Generating CSFs and V2 descriptors to disk segments...");
     // Refuse a run whose estimate does not fit the scratch or staging volumes,
     // while the scratch directory still holds nothing but the empty root.
     let outputs = [
@@ -450,7 +451,7 @@ fn generate_disk_outputs_from_requests(
         generate_multiple_list_segments(requests, scratch_dir, options, preflight)?
     };
     stage_stats.extend(generated.stage_stats.iter().cloned());
-    eprintln!(
+    crate::reporting::detail!(
         "Generated {} CSFs across {} symmetry blocks",
         generated.record_count,
         count_blocks(&generated.segments)
@@ -469,11 +470,11 @@ fn generate_disk_outputs_from_requests(
         .context("generated segment byte count overflow")?;
     let deduplicated = match options.deduplication {
         DeduplicationStrategy::VerifiedUnique => {
-            eprintln!("Verifying generated CSFs are unique (proof-backed path)...");
+            crate::reporting::detail!("Verifying generated CSFs are unique (proof-backed path)...");
             verified_unique_deduplication(&generated, &scratch_dir.join("dedup"))?
         }
         DeduplicationStrategy::Exact => {
-            eprintln!("Deduplicating descriptor segments...");
+            crate::reporting::detail!("Deduplicating descriptor segments...");
             deduplicate_v2_descriptor_segments(
                 &generated,
                 &scratch_dir.join("dedup"),
@@ -490,21 +491,22 @@ fn generate_disk_outputs_from_requests(
         dedup_bytes,
     ));
     if options.deduplication == DeduplicationStrategy::Exact {
-        eprintln!(
+        crate::reporting::detail!(
             "Deduplicated: {} unique CSFs ({} duplicates removed)",
-            deduplicated.unique_count, deduplicated.duplicate_count
+            deduplicated.unique_count,
+            deduplicated.duplicate_count
         );
     } else {
         // Say what was and was not checked: the count below is zero because the
         // generator cannot repeat a record, not because a comparison found none.
-        eprintln!(
+        crate::reporting::detail!(
             "Verified {} CSFs unique by construction (exact comparison not run; \
              set RCSFS_DEDUPLICATION=exact to measure it)",
             deduplicated.unique_count
         );
     }
 
-    eprintln!("Writing generation header...");
+    crate::reporting::detail!("Writing generation header...");
     let header_timer = StageTimer::start();
     let header_lines = generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
     write_generation_header(header_output, header_lines.clone(), &deduplicated)?;
@@ -520,7 +522,7 @@ fn generate_disk_outputs_from_requests(
         ),
     );
 
-    eprintln!("Building final descriptor and CSF outputs from segments...");
+    crate::reporting::detail!("Building final descriptor and CSF outputs from segments...");
     let final_stats = super::csf_artifact_encoding::build_final_outputs_from_segments(
         &deduplicated,
         &header_lines,
@@ -565,13 +567,24 @@ fn generate_disk_outputs_from_requests(
             output_bytes,
         });
     }
-    eprintln!("Generation complete!");
+    crate::reporting::detail!("Generation complete!");
     Ok(DiskGenerationStats {
         unique_occupations: generated.unique_occupations,
         generated_count: deduplicated.generated_count,
         unique_count: deduplicated.unique_count,
         duplicate_count: deduplicated.duplicate_count,
         block_count: deduplicated.block_lengths.len(),
+        blocks: grouped_segments(&deduplicated.segments)
+            .keys()
+            .zip(&deduplicated.block_lengths)
+            .map(
+                |(&(total_two_j, odd), &record_count)| super::GenerationBlockStats {
+                    total_two_j,
+                    parity: if odd { "-" } else { "+" },
+                    record_count,
+                },
+            )
+            .collect(),
         csf_bytes,
         descriptor_bytes,
         segment_codec: generated.segment_codec.name(),
@@ -900,22 +913,23 @@ fn estimate_space_checks(estimate: &DiskEstimate, layout: &SpaceLayout) -> Resul
     }
 }
 
-/// Report one pre-flight space check on stderr.
+/// Report one pre-flight space check through the diagnostic sink.
 ///
 /// A check the platform cannot answer is reported as unchecked rather than as
 /// sufficient: an unknown value is not a clearance.
 fn report_space_check(check: &SpaceCheck) {
     match (check.free_bytes, check.sufficient) {
-        (Some(free), Some(sufficient)) => eprintln!(
+        (Some(free), Some(sufficient)) => crate::reporting::detail!(
             "Pre-flight: {} needs {} bytes, {} available{}",
             check.path,
             check.required_bytes,
             free,
             if sufficient { "" } else { " (INSUFFICIENT)" }
         ),
-        _ => eprintln!(
+        _ => crate::reporting::detail!(
             "Pre-flight: {} needs {} bytes; free space is not reported on this platform",
-            check.path, check.required_bytes
+            check.path,
+            check.required_bytes
         ),
     }
 }
@@ -2097,13 +2111,12 @@ fn print_j_value_summary(segments: &[DescriptorSegment]) {
             .or_insert(0) += segment.record_count;
     }
 
-    eprintln!("\nCSFs per J value:");
+    crate::reporting::detail!("\nCSFs per J value:");
     for ((total_two_j, odd), count) in blocks {
         let parity = if odd { "odd" } else { "even" };
         let j_value = f64::from(total_two_j) / 2.0;
-        eprintln!("  J = {:4.1} ({:>4}): {:10} CSFs", j_value, parity, count);
+        crate::reporting::detail!("  J = {:4.1} ({:>4}): {:10} CSFs", j_value, parity, count);
     }
-    eprintln!();
 }
 
 fn generated_header_lines(core_subshells: &[Subshell], peel_subshells: &[String]) -> [String; 5] {

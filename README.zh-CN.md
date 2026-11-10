@@ -36,8 +36,8 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 需要独立可执行程序时，使用下方的 [Rust 原生 CLI](#将-rust-原生-cli-加入-path)。
 需要 Python 库和随包提供的原生 Rust CLI 时，使用 Python 3.15 或更新版本，从 [PyPI 安装 rcsfs](https://pypi.org/project/rcsfs/)。
 
-本仓库正在准备 **3.0.0**，使用独立的 Python 3.15 `.venv`，详见
-[源码开发说明](docs/development.md)。下方固定版本安装示例需等 3.0.0
+本仓库正在准备 **3.0.1**，使用独立的 Python 3.15 `.venv`，详见
+[源码开发说明](docs/development.md)。下方固定版本安装示例需等 3.0.1
 发布到 PyPI 后使用；推送源码不会自动发布安装包。
 分发包名、Python 导入名和命令行入口都叫 `rcsfs`。
 
@@ -45,7 +45,7 @@ rCSFs 是一个基于 Rust + PyO3 的库，面向原子结构计算、光谱分�
 
 可以用 [uv](https://docs.astral.sh/uv/getting-started/installation/) 管理你自己的分析项目环境和依赖。新建项目时：
 
-```bash
+```fish
 uv init --python 3.15 csf-analysis
 cd csf-analysis
 uv add rcsfs
@@ -55,7 +55,7 @@ uv run rcsfs --help
 已有 uv 项目使用 Python 3.15 或更新版本时，直接在其目录运行 `uv add rcsfs`。
 该命令会将依赖写入 `pyproject.toml`，更新 `uv.lock`，并安装到项目的 `.venv` 中。
 运行自己的分析脚本时使用 `uv run python analysis.py`，无需手动激活环境。
-需要固定版本时，使用 `uv add "rcsfs==3.0.0"`。
+需要固定版本时，使用 `uv add "rcsfs==3.0.1"`。
 
 也可以手动将依赖加入已有的 `pyproject.toml`：
 
@@ -65,7 +65,7 @@ name = "csf-analysis"
 version = "0.1.0"
 requires-python = ">=3.15"
 dependencies = [
-    "rcsfs==3.0.0",
+    "rcsfs==3.0.1",
 ]
 ```
 
@@ -76,11 +76,11 @@ dependencies = [
 
 安装到已有的 Python 环境：
 
-```bash
+```fish
 python -m pip install rcsfs
 ```
 
-需要固定版本时，使用 `python -m pip install "rcsfs==3.0.0"`。
+需要固定版本时，使用 `python -m pip install "rcsfs==3.0.1"`。
 两种安装方式提供相同的 Python API 和 `rcsfs` 命令。
 
 发布工作流的目标是 CPython 3.15 wheel，覆盖 Linux x86_64（glibc 2.28+）、
@@ -93,7 +93,7 @@ Windows x86_64 和 macOS Apple Silicon。这是构建矩阵，不代表所有平
 
 使用 uv 管理项目时：
 
-```bash
+```fish
 uv run python -c "import rcsfs; print(rcsfs.__version__)"
 uv run rcsfs --help
 ```
@@ -155,12 +155,18 @@ rcsfs restore-csfs --descriptors descriptors.parquet --header input_header.toml 
 
 `csfsgenerate` 支持交互问答、TOML 模型和 `--transcript FILE`；磁盘生成、容量估算和多列表
 合并均复用 Rust 实现。CSFG 支持编号模型和活动空间分层。输出文件必须位于调用时的当前目录，
-命令行参数覆盖 TOML 设置。`--json` 将结果写入 stdout，进度和错误写入 stderr。
+命令行参数覆盖 TOML 设置。终端默认仅显示关键数量、J/宇称或拆分结果、输出路径和耗时；
+数量使用千位逗号，文件大小按 B、KB、MB、GB 等十进制单位自动换算（1 MB = 1,000,000 bytes）。
+详细阶段与资源统计写入日志，告警和错误仍显示在 stderr。`--json` 将完整结果写入 stdout，
+计数和原始字节值保留数值类型。
 退出码为：成功 0，参数或配置错误 2，处理失败 1。
 
-`rcsfs -c FILE` 按配置表顺序执行，失败后停止。普通 CSF 批处理向 `rcsfs.log`
-（有 `conf` 时为 `rcsfs_<conf>.log`）追加 JSON Lines，记录配置快照、各命令结果、耗时和错误；
-进度信息仍输出到 stderr。CSFG 批处理先暂存所有模型，再发布结果并直接报告统计。
+非 JSON 的 `zero-first` 输出被重定向时，stderr 保留旧三列表格，兼容现有 GRASP 输入生成脚本；
+交互终端使用简洁摘要，完整表格始终保存在运行日志中。
+
+`rcsfs -c FILE` 按配置表顺序执行，失败后停止。所有命令（含单独子命令、估算和 CSFG 批处理）向 `rcsfs.log`
+（有 `conf` 时为 `rcsfs_<conf>.log`）追加 JSON Lines，记录配置快照、完整结果、详细诊断、耗时和错误。
+CSFG 批处理先暂存所有模型，再发布结果并显示简洁摘要。
 日志采用 JSON Lines，记录工作目录、Unix 毫秒时间、合并后的 TOML/CLI 参数及普通运行错误的结束状态。外部强制终止可能留下没有结束事件的不完整日志。输出按单个文件原子发布，多个输出文件不是一个事务；
 发布失败时会报告已经完成发布的文件。
 
@@ -464,14 +470,15 @@ cargo run --release --example generate_csfs -- \
 
 安装 `rcsfs` 会同时安装 `rcsfs` 命令行入口，使用 `rcsfs --help` 查看子命令。
 
-使用 `rcsfs -c rcsfs.toml` 批量执行配置表时，会在当前运行目录自动追加
+批处理和单独子命令都会在当前运行目录自动追加
 `rcsfs_{conf}.log`：例如 `conf = "e1_vv"` 对应 `rcsfs_e1_vv.log`；
 未设置 `conf` 时使用 `rcsfs.log`，无需修改现有 TOML。每次运行保存原始配置、
 各步骤实际参数、CLI 摘要及错误、完整返回统计（CSF/块数量、各 AS 拆分数量、
 可用的生成阶段耗时和资源统计）、开始/结束时间、步骤及总耗时、退出状态。
-原生 Rust 进度消息仍显示在终端。重复运行保留之前的日志。
+底层阶段和资源细节写入日志，终端仅显示关键结果；计数添加千位逗号，文件大小自动换算单位。
+告警和错误仍显示，JSON/日志统计保留原始数值。重复运行保留之前的日志。
 配置预检通过后才打开日志；日志与输入/输出冲突时拒绝运行，日志不可写时在处理前报错。
-单独执行子命令时不会创建此批处理日志。
+估算模式仅创建日志，不生成计算产物。
 
 ### `rcsfs csfsgenerate` —— 生成新的 CSF 列表
 

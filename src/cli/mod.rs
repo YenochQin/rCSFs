@@ -5,150 +5,85 @@ mod config;
 mod csfg;
 mod files;
 mod generation;
+mod logging;
+mod output;
 mod templates;
 
 use anyhow::{Context, Result, ensure};
 use arguments::Settings;
 use serde_json::{Value, json};
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
     path::{Path, PathBuf},
     process::ExitCode,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::Instant,
 };
 use toml::Table;
 
-fn print_result(command: &str, result: &Value, json_output: bool) -> Result<()> {
+fn print_result(command: &str, result: &Value, json_output: bool, elapsed: f64) -> Result<()> {
     if json_output {
         println!("{}", serde_json::to_string_pretty(result)?);
     } else {
-        println!("{command}: completed");
-        if let Some(object) = result.as_object() {
-            for (key, value) in object {
-                if key == "success" {
-                    continue;
-                }
-                if value.is_string() {
-                    println!("{key}: {}", value.as_str().unwrap());
-                } else {
-                    println!("{key}: {value}");
-                }
-            }
-        }
+        print!("{}", output::summary(command, result, elapsed));
     }
     Ok(())
 }
-fn run_job(job: &config::Job) -> Result<Value> {
-    commands::run(&job.command, &job.settings)
-}
-fn run_batch(path: &Path, root: &Table) -> Result<()> {
-    if root.contains_key("csfggenerate") {
-        let overrides = Settings {
-            values: Table::new(),
-            config: Some(path.to_path_buf()),
-            conf: None,
-        };
-        return print_result("csfggenerate", &csfg::run(root, path, &overrides)?, false);
-    }
-    let jobs = config::batch(root, path)?;
-    let conf = root.get("conf").and_then(toml::Value::as_str);
-    let log_path = PathBuf::from(
-        conf.map(|c| format!("rcsfs_{c}.log"))
-            .unwrap_or_else(|| "rcsfs.log".into()),
-    );
-    ensure!(
-        !log_path.is_symlink(),
-        "run log must not be a symbolic link"
-    );
-    files::distinct(&log_path, path).context("run log conflicts with configuration")?;
-    for job in &jobs {
-        for output in config::output_paths(job)? {
-            files::distinct(&log_path, &output).context("run log conflicts with output")?;
-        }
-        for (key, value) in &job.settings.values {
-            if [
-                "input_csf",
-                "input_parquet",
-                "zero_csf",
-                "full_csf",
-                "split_csfs_parquet",
-                "csfs_header",
-                "header",
-                "descriptors",
-                "reference",
-                "candidates",
-                "transcript",
-            ]
-            .contains(&key.as_str())
-                && let Some(value) = value.as_str()
-            {
-                files::distinct(&log_path, Path::new(value))
-                    .context("run log conflicts with input")?;
-            }
-        }
-    }
-    let mut log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .with_context(|| format!("cannot write run log {}", log_path.display()))?;
-    eprintln!("Run log: {}", log_path.display());
+
+fn run_logged(jobs: &[config::Job], path: Option<&Path>, root: &Table) -> Result<()> {
+    let log = logging::RunLog::open(jobs, path, root)?;
     let run_start = Instant::now();
-    let now = || {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .context("system clock is before the Unix epoch")
-            .map(|time| time.as_millis())
-    };
-    writeln!(
-        log,
-        "{}",
-        json!({
-            "event": "start", "version": env!("CARGO_PKG_VERSION"),
-            "implementation": "native Rust", "config": path,
-            "config_contents": fs::read_to_string(path)?,
-            "working_directory": std::env::current_dir()?, "started_at_unix_ms": now()?
-        })
-    )?;
-    log.flush()?;
     let mut completed = 0;
     let outcome = (|| -> Result<()> {
         for (index, job) in jobs.iter().enumerate() {
-            writeln!(
-                log,
-                "{}",
-                json!({"event": "step_start", "command": job.command,
-                "step": index + 1, "resolved_parameters": job.settings.values})
-            )?;
-            log.flush()?;
-            eprintln!("Running [{} #{}]...", job.command, index + 1);
+            log.step(index + 1, job)?;
+            if job.command == "csfggenerate" {
+                log.event(json!({"event": "models", "configuration": root}))?;
+            }
             let start = Instant::now();
-            let result = run_job(job);
+            let result = if job.command == "csfggenerate" {
+                csfg::run(root, path.context("CSFG requires a config")?, &job.settings)
+            } else {
+                commands::run(&job.command, &job.settings)
+            };
+            let elapsed = start.elapsed().as_secs_f64();
             let record = match &result {
                 Ok(stats) => json!({"event": "result", "command": job.command,
-                    "step": index + 1, "elapsed_seconds": start.elapsed().as_secs_f64(), "stats": stats}),
+                    "step": index + 1, "elapsed_seconds": elapsed, "stats": stats}),
                 Err(error) => json!({"event": "error", "command": job.command,
-                    "step": index + 1, "elapsed_seconds": start.elapsed().as_secs_f64(), "error": format!("{error:#}")}),
+                    "step": index + 1, "elapsed_seconds": elapsed, "error": format!("{error:#}")}),
             };
-            writeln!(log, "{record}")?;
-            log.flush()?;
+            log.event(record)?;
             let stats = result?;
             completed += 1;
-            print_result(&job.command, &stats, job.settings.flag("json", false)?)?;
+            print_result(
+                &job.command,
+                &stats,
+                job.settings.flag("json", false)?,
+                elapsed,
+            )?;
         }
         Ok(())
     })();
-    writeln!(
-        log,
-        "{}",
-        json!({"event": "complete", "success": outcome.is_ok(),
+    log.event(json!({"event": "complete", "success": outcome.is_ok(),
         "exit_code": if outcome.is_ok() { 0 } else { 1 }, "steps": jobs.len(),
         "completed_steps": completed, "elapsed_seconds": run_start.elapsed().as_secs_f64(),
-        "finished_at_unix_ms": now()?})
-    )?;
-    log.flush()?;
+        "finished_at_unix_ms": logging::now()?}))?;
     outcome
+}
+
+fn run_batch(path: &Path, root: &Table) -> Result<()> {
+    let jobs = if root.contains_key("csfggenerate") {
+        vec![config::Job {
+            command: "csfggenerate".into(),
+            settings: Settings {
+                values: Table::new(),
+                config: Some(path.to_path_buf()),
+                conf: None,
+            },
+        }]
+    } else {
+        config::batch(root, path)?
+    };
+    run_logged(&jobs, Some(path), root)
 }
 
 /// Parse process arguments and execute a native command. Errors never start Python.
@@ -246,22 +181,8 @@ pub fn main() -> ExitCode {
     };
     let execution = (|| -> Result<()> {
         if let Some((command, settings, root)) = prepared {
-            let result = if command == "csfggenerate" {
-                csfg::run(
-                    &root,
-                    settings
-                        .config
-                        .as_deref()
-                        .context("CSFG requires a config")?,
-                    &settings,
-                )?
-            } else {
-                run_job(&config::Job {
-                    command: command.clone(),
-                    settings,
-                })?
-            };
-            print_result(&command, &result, json_output)
+            let path = settings.config.clone();
+            run_logged(&[config::Job { command, settings }], path.as_deref(), &root)
         } else {
             let path = Path::new(matches.get_one::<String>("config").unwrap());
             run_batch(path, &config::read(path)?)

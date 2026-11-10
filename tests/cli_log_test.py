@@ -102,7 +102,8 @@ def test_unwritable_log_fails_before_processing(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("role", ["config", "input", "output", "hardlink", "symlink"])
-def test_log_cannot_modify_input_or_output(tmp_path: Path, role: str) -> None:
+@pytest.mark.parametrize("batch", [True, False])
+def test_log_cannot_modify_input_or_output(tmp_path: Path, role: str, batch: bool) -> None:
     log = tmp_path / "rcsfs_calc.log"
     config = log if role == "config" else tmp_path / "batch.toml"
     source = log if role == "input" else tmp_path / "input.c"
@@ -118,14 +119,22 @@ def test_log_cannot_modify_input_or_output(tmp_path: Path, role: str) -> None:
         f'candidates = "input.c"\noutput = "{output}"\n'
     )
     before = {path: path.read_bytes() for path in {source, config} if path.exists()}
-    assert cli.main(["-c", str(config)]) != 0
+    assert cli.main([*(["interacting"] if not batch else []), "-c", str(config)]) != 0
     assert all(path.read_bytes() == contents for path, contents in before.items())
     assert not (tmp_path / "selected.c").exists()
 
 
-def test_single_command_creates_no_batch_log(tmp_path: Path) -> None:
+def test_single_command_logs_details_without_console_noise(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     (tmp_path / "batch.toml").write_text(
         'conf = "calc"\n' + _generation(0).replace("[[csfsgenerate]]", "[csfsgenerate]")
     )
     assert cli.main(["csfsgenerate", "-c", "batch.toml"]) == 0
-    assert not (tmp_path / "rcsfs_calc.log").exists()
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "Run log: rcsfs_calc.log"
+    assert "CSFs" in captured.out and "J / parity" in captured.out
+    assert "Parsing transcript" not in captured.out
+    events = _events(tmp_path / "rcsfs_calc.log")
+    assert any(event["event"] == "diagnostic" for event in events)
+    assert events[-1]["success"] is True

@@ -1,6 +1,6 @@
 # Preparing an rcsfs release
 
-The prepared source version is **3.0.0**, read from `Cargo.toml` by Maturin.
+The prepared source version is **3.0.1**, read from `Cargo.toml` by Maturin.
 It includes the Python 3.15 migration. The in-tree fallback in
 `rcsfs/__init__.py` must match it when the version changes.
 The local build commands do not upload files or create Git tags. The separate
@@ -12,8 +12,8 @@ Use this repository's `.venv` (Python 3.15), set up with
 `uv sync --python 3.15 --no-editable --group lint`. A Rust toolchain and
 platform linker are required. From `rCSFs/`, choose an empty output directory:
 
-```bash
-source .venv/bin/activate
+```fish
+source .venv/bin/activate.fish
 uv build --python .venv/bin/python --out-dir dist
 uvx --python .venv/bin/python --from 'twine>=6.2' twine check --strict dist/*
 python scripts/check_release.py dist --smoke
@@ -98,7 +98,7 @@ They include all resolved targets and build dependencies, with identical license
 texts deduplicated by SHA-256. The wheel checker verifies the Cargo.lock fingerprint.
 After changing dependencies, from the full development checkout run:
 
-```bash
+```fish
 cargo fetch --locked
 python scripts/collect_licenses.py
 python scripts/collect_licenses.py --check
@@ -111,7 +111,7 @@ Review newly introduced license terms and any additional bundled native librarie
 
 Before a separately authorized publication:
 
-1. Confirm ownership/availability of the `rcsfs` PyPI name and that 3.0.0 is
+1. Confirm ownership/availability of the `rcsfs` PyPI name and that 3.0.1 is
    unused. A missing project page does not establish name availability.
 2. Review the exact release commit and all changes since the prior release.
    `docs/CHANGELOG.md` retains the development history; finalize its release
@@ -135,7 +135,7 @@ completing a build does not start a publication. Its inputs are:
 
 | Input | Default | Purpose |
 | --- | --- | --- |
-| `version` | Required | Exact source version, currently `3.0.0`. |
+| `version` | Required | Exact source version, currently `3.0.1`. |
 | `publish_pypi` | Off | Upload the validated packages to PyPI. |
 | `github_release` | Off | Create a GitHub Release using the same packages. |
 | `draft` | On | Keep the GitHub Release as a draft; turn off only for formal publication. |
@@ -151,7 +151,7 @@ source version, and select the destinations you intend to use:
 | On | On | Build and validate once, then upload the same files to both destinations. |
 
 A prior dry run is optional. No separate workflow, run ID or tag input is
-needed. The GitHub tag is derived as `v{version}`, for example `v3.0.0`.
+needed. The GitHub tag is derived as `v{version}`, for example `v3.0.1`.
 The `draft` option has no effect when `github_release` is off.
 
 ### One build, two independent destinations

@@ -170,7 +170,7 @@ def test_config_multiple_lists_text_only_and_distinct_j_ranges(
     assert stats["record_count"] == 2
     assert stats["block_count"] == 2
     assert "descriptor_file" not in stats
-    assert set(tmp_path.iterdir()) == {config, output}
+    assert set(tmp_path.iterdir()) == {config, output, tmp_path / "rcsfs.log"}
 
 
 def test_config_multiple_lists_reject_different_electron_counts(
@@ -544,7 +544,7 @@ def test_estimate_only_reports_capacity_without_writing(
     assert payload["success"] is True
     assert payload["estimate_only"] is True
     # An estimate must not create scratch, staging or output files.
-    assert set(tmp_path.iterdir()) == {config}
+    assert set(tmp_path.iterdir()) == {config, tmp_path / "rcsfs.log"}
     assert payload["unique_occupations"] == payload["plan_stats"]["unique_occupations"]
     assert payload["pre_deduplication_records"] > 0
     assert payload["bytes"]["required_scratch"] > payload["bytes"]["scratch_peak"]
@@ -595,7 +595,7 @@ def test_estimate_only_rejects_the_in_memory_path(
     )
     captured = capfd.readouterr()
     assert "estimate_only requires disk generation" in captured.err
-    assert set(tmp_path.iterdir()) == {config}
+    assert set(tmp_path.iterdir()) == {config, tmp_path / "rcsfs.log"}
 
 
 def test_estimate_checks_every_volume_it_is_given(

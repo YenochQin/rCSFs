@@ -311,7 +311,9 @@ fn estimate_creates_no_outputs_and_cli_overrides_config() {
     );
     assert_eq!(stats["estimate_only"], true);
     assert!(stats["pre_deduplication_records"].as_u64().unwrap() > 0);
-    assert_eq!(fs::read_dir(p).unwrap().count(), 1);
+    // An estimate writes only its run log, never calculation artifacts.
+    assert_eq!(fs::read_dir(p).unwrap().count(), 2);
+    assert!(p.join("rcsfs.log").is_file());
     success(
         p,
         &[
@@ -377,6 +379,104 @@ fn continuation_lists_are_merged_in_disk_mode() {
         stats["generated_count"].as_u64().unwrap(),
         stats["record_count"].as_u64().unwrap() * 2
     );
+    assert_eq!(
+        stats["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|block| block["record_count"].as_u64().unwrap())
+            .sum::<u64>(),
+        stats["record_count"].as_u64().unwrap()
+    );
+}
+
+#[test]
+fn human_console_is_concise_and_full_details_are_logged() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    let source = fs::read_to_string(fixture("complete.csf")).unwrap();
+    let lines: Vec<_> = source.lines().collect();
+    let text = format!(
+        "{}\n{}",
+        lines[..5].join("\n"),
+        format!("{}\n", lines[5..8].join("\n")).repeat(1234)
+    );
+    fs::write(p.join("many.c"), text).unwrap();
+    let converted = success(
+        p,
+        &["convert", "many.c", "many.parquet", "--num-workers", "1"],
+    );
+    let stdout = String::from_utf8(converted.stdout).unwrap();
+    let stderr = String::from_utf8(converted.stderr).unwrap();
+    assert!(stdout.contains("1,234"), "{stdout}");
+    assert!(stdout.contains("KB)"), "{stdout}");
+    assert!(
+        !stdout.contains("csf_count") && !stdout.contains("{"),
+        "{stdout}"
+    );
+    assert_eq!(stderr.trim(), "Run log: rcsfs.log");
+    let log = fs::read_to_string(p.join("rcsfs.log")).unwrap();
+    let events: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(events.iter().any(|event| event["event"] == "diagnostic"));
+    assert_eq!(
+        events
+            .iter()
+            .find(|event| event["event"] == "result")
+            .unwrap()["stats"]["csf_count"],
+        1234
+    );
+    assert_eq!(events.last().unwrap()["success"], true);
+    let info = success(p, &["info", "many.parquet"]);
+    let stdout = String::from_utf8(info.stdout).unwrap();
+    assert!(
+        stdout.contains("1,234") && stdout.contains("KB"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("key_value_metadata"), "{stdout}");
+    let result = json(p, &["info", "many.parquet", "--json"]);
+    assert_eq!(result["num_rows"], 1234);
+    assert_eq!(
+        result["file_size"],
+        fs::metadata(p.join("many.parquet")).unwrap().len()
+    );
+}
+
+#[test]
+fn warnings_and_errors_remain_visible_and_are_logged() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    let mut source = fs::read_to_string(fixture("complete.csf")).unwrap();
+    source.push_str("incomplete trailing record\n");
+    fs::write(p.join("warning.c"), source).unwrap();
+    let output = success(
+        p,
+        &[
+            "convert",
+            "warning.c",
+            "out.parquet",
+            "--num-workers",
+            "1",
+            "--json",
+        ],
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("警告:"));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["csf_count"], 2);
+    let log = fs::read_to_string(p.join("rcsfs.log")).unwrap();
+    assert!(
+        log.lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .any(|event| event["level"] == "warning")
+    );
+    let failed = invoke(p, &["info", "missing.parquet", "--json"]);
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("error:"));
+    let log = fs::read_to_string(p.join("rcsfs.log")).unwrap();
+    let last: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+    assert_eq!(last["success"], false);
 }
 #[test]
 fn csfg_matches_independent_fixture_and_protects_existing_files() {
@@ -410,6 +510,17 @@ fn csfg_numbered_layers_are_published_only_after_all_models_succeed() {
     for name in ["he_as2raw.g", "he_as2raw.l", "he_as1raw.g", "he_as1raw.l"] {
         assert!(p.join(name).exists());
     }
+    let log = fs::read_to_string(p.join("rcsfs_he.log")).unwrap();
+    let events: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let result = events
+        .iter()
+        .find(|event| event["event"] == "result")
+        .unwrap();
+    assert_eq!(result["stats"]["results"].as_array().unwrap().len(), 2);
+    assert_eq!(events.last().unwrap()["success"], true);
     let failing = model.replace("'he'", "'bad'").replace("'2s,2p'", "'2p'");
     fs::write(p.join("bad.toml"), failing).unwrap();
     assert!(!invoke(p, &["-c", "bad.toml"]).status.success());
@@ -473,6 +584,31 @@ fn zero_first_and_interaction_use_shared_algorithms() {
         ],
     );
     assert_eq!(stats["first_order_count"], 0);
+    let redirected = success(
+        p,
+        &[
+            "zero-first",
+            "reference.c",
+            "full.c",
+            "zf.c",
+            "--num-workers",
+            "1",
+        ],
+    );
+    let stderr = String::from_utf8(redirected.stderr).unwrap();
+    assert!(stderr.contains("Zero-order Space"));
+    let rows: Vec<Vec<u64>> = stderr
+        .lines()
+        .filter_map(|line| {
+            line.split_whitespace()
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()
+        })
+        .filter(|row| row.len() == 3)
+        .collect();
+    assert_eq!(rows, vec![vec![1, 1, 1], vec![2, 1, 1]]);
+    assert!(!stderr.contains("开始"));
     assert_eq!(
         CompleteCsfFile::parse_path(&p.join("full.c")).unwrap(),
         CompleteCsfFile::parse_path(&p.join("zf.c")).unwrap()

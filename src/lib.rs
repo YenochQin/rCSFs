@@ -14,6 +14,7 @@ pub mod descriptor_v2;
 pub mod interaction;
 #[cfg(feature = "python")]
 mod interaction_py;
+mod reporting;
 pub mod seniority;
 #[cfg(windows)]
 mod windows_filesystem;

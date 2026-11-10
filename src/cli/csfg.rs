@@ -185,6 +185,10 @@ fn plan(root: &Table) -> Result<(Vec<Model>, bool)> {
     }
     Ok((jobs, batch))
 }
+pub(super) fn output_paths(root: &Table) -> Result<Vec<PathBuf>> {
+    Ok(plan(root)?.0.iter().flat_map(Model::paths).collect())
+}
+
 pub(super) fn run(root: &Table, config: &Path, overrides: &Settings) -> Result<Json> {
     let (jobs, batch) = plan(root)?;
     let mut destinations = Vec::new();

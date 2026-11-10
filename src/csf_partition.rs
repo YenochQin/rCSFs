@@ -227,10 +227,10 @@ pub fn partition_csfs(
     full_header: &Path,
     output_csf: &Path,
 ) -> Result<PartitionStats, Box<dyn std::error::Error + Send + Sync>> {
-    eprintln!("开始 zero-first 划分");
-    eprintln!("零阶 Parquet: {:?}", zero_parquet);
-    eprintln!("完整 Parquet: {:?}", full_parquet);
-    eprintln!("输出 CSF: {:?}", output_csf);
+    crate::reporting::detail!("开始 zero-first 划分");
+    crate::reporting::detail!("零阶 Parquet: {:?}", zero_parquet);
+    crate::reporting::detail!("完整 Parquet: {:?}", full_parquet);
+    crate::reporting::detail!("输出 CSF: {:?}", output_csf);
 
     // --- 1. 读取两份 header TOML（单一真相源：csfs_conversion 的 HeaderData）---
     let zero_hdr: HeaderData = {
@@ -287,7 +287,8 @@ pub fn partition_csfs(
     // ============================================================
     // 输出格式契约 —— 不可随意修改（DO NOT MODIFY FORMAT）
     // ------------------------------------------------------------
-    // 下方表头 eprintln! 和 for 循环内的每块数据行 eprintln!（格式
+    // 下方表头和每块数据行保留旧格式；CLI 仅在非 JSON 重定向输出中显示，
+    // 终端使用摘要，完整表格始终保存在运行日志中。数据行格式
     // "{:>5}{:>20}{:>20}"）刻意按 GRASP Fortran 程序 RCSFzerofirst
     // 的 stdout 格式书写，是 graspkit-tools/scripts/rzf_arg.py 的隐式
     // 输入契约：
@@ -303,8 +304,8 @@ pub fn partition_csfs(
     //
     // 如需调整，必须同步修改 rzf_arg.py 的解析逻辑并补回归测试。
     // ============================================================
-    eprintln!("==========================================");
-    eprintln!("   Block    Zero-order Space   Complete Space");
+    crate::reporting::detail!("==========================================");
+    crate::reporting::legacy_table!("   Block    Zero-order Space   Complete Space");
     for b in 0..block_count {
         let zlen = zero_lengths[b];
         let flen = full_lengths[b];
@@ -358,20 +359,20 @@ pub fn partition_csfs(
         }
 
         // 见上方"输出格式契约"：此行格式是 rzf_arg.py 的输入契约，不可修改。
-        eprintln!("{:>5}{:>20}{:>20}", b + 1, zlen, flen);
+        crate::reporting::legacy_table!("{:>5}{:>20}{:>20}", b + 1, zlen, flen);
     }
 
     out.flush()?;
 
-    eprintln!("\n划分完成！");
-    eprintln!("================ 统计信息 ================");
-    eprintln!("块数: {}", block_count);
-    eprintln!("零阶 CSF 数: {}", zero_csf_count);
-    eprintln!("完整 CSF 数: {}", full_csf_count);
-    eprintln!("输出 CSF 数: {}", output_csf_count);
-    eprintln!("一阶补集 CSF 数: {}", first_order_count);
-    eprintln!("输出文件: {:?}", output_csf);
-    eprintln!("==========================================");
+    crate::reporting::detail!("\n划分完成！");
+    crate::reporting::detail!("================ 统计信息 ================");
+    crate::reporting::detail!("块数: {}", block_count);
+    crate::reporting::detail!("零阶 CSF 数: {}", zero_csf_count);
+    crate::reporting::detail!("完整 CSF 数: {}", full_csf_count);
+    crate::reporting::detail!("输出 CSF 数: {}", output_csf_count);
+    crate::reporting::detail!("一阶补集 CSF 数: {}", first_order_count);
+    crate::reporting::detail!("输出文件: {:?}", output_csf);
+    crate::reporting::detail!("==========================================");
 
     Ok(PartitionStats {
         block_count,

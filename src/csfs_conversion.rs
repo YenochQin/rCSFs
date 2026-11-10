@@ -97,7 +97,7 @@ fn process_csf_data_line(
     }
 
     if line.len() > MAX_LINE_WARNING_THRESHOLD {
-        eprintln!(
+        crate::reporting::warning!(
             "警告: 第 {} 条 CSF 数据行过长 ({} bytes)",
             data_line_number,
             line.len()
@@ -129,7 +129,7 @@ fn extract_header_lines(
             }
             Some(Err(e)) => return Err(e.into()),
             None => {
-                eprintln!("警告: 文件少于 {} 行 Header", CSF_HEADER_LINE_COUNT);
+                crate::reporting::warning!("警告: 文件少于 {} 行 Header", CSF_HEADER_LINE_COUNT);
                 break;
             }
         }
@@ -274,7 +274,7 @@ pub fn convert_csfs_to_parquet_parallel(
 
     let thread_pool = match num_workers {
         Some(n) => {
-            eprintln!("配置 Rayon 线程池，使用 {} 个 worker", n);
+            crate::reporting::detail!("配置 Rayon 线程池，使用 {} 个 worker", n);
             Some(
                 rayon::ThreadPoolBuilder::new()
                     .num_threads(n)
@@ -285,11 +285,11 @@ pub fn convert_csfs_to_parquet_parallel(
         None => None,
     };
 
-    eprintln!("开始并行转换 CSF 文件");
-    eprintln!("输入文件: {:?}", csfs_path);
-    eprintln!("输出文件: {:?}", output_path);
-    eprintln!("最大行长度: {}", max_line_len);
-    eprintln!("批处理大小: {}", chunk_size);
+    crate::reporting::detail!("开始并行转换 CSF 文件");
+    crate::reporting::detail!("输入文件: {:?}", csfs_path);
+    crate::reporting::detail!("输出文件: {:?}", output_path);
+    crate::reporting::detail!("最大行长度: {}", max_line_len);
+    crate::reporting::detail!("批处理大小: {}", chunk_size);
 
     // --- 1. 读取 Header (5行) ---
     let headers = extract_header_lines(csfs_path)?;
@@ -309,7 +309,7 @@ pub fn convert_csfs_to_parquet_parallel(
         .build();
     let writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
     let mut writer_guard = ParquetFileGuard::new(writer, output_path);
-    eprintln!("Parquet 写入器已创建，使用无压缩");
+    crate::reporting::detail!("Parquet 写入器已创建，使用无压缩");
 
     // --- 3. 流式读取 + 批量并行处理 ---
     let input_file = File::open(csfs_path)?;
@@ -329,7 +329,7 @@ pub fn convert_csfs_to_parquet_parallel(
     let mut truncated_count = 0;
     let mut block_tracker = BlockTracker::new();
 
-    eprintln!("开始并行处理 CSF 数据...");
+    crate::reporting::detail!("开始并行处理 CSF 数据...");
 
     loop {
         let pending_lines_before_read = batch_lines.len();
@@ -368,7 +368,7 @@ pub fn convert_csfs_to_parquet_parallel(
         let num_full_csfs = batch_lines.len() / 3;
         if num_full_csfs == 0 {
             if hit_eof {
-                eprintln!(
+                crate::reporting::warning!(
                     "警告: 文件末尾有 {} 行不完整的数据，将被忽略",
                     batch_lines.len()
                 );
@@ -379,7 +379,7 @@ pub fn convert_csfs_to_parquet_parallel(
         }
 
         if hit_eof && batch_lines.len() % 3 != 0 {
-            eprintln!(
+            crate::reporting::warning!(
                 "警告: 文件末尾有 {} 行不完整的数据，将被忽略",
                 batch_lines.len() % 3
             );
@@ -467,12 +467,12 @@ pub fn convert_csfs_to_parquet_parallel(
     };
     let block_info = block_tracker.into_block_info();
 
-    eprintln!("\n并行转换完成！");
-    eprintln!("CSF 数据行数: {}", total_lines);
-    eprintln!("CSF 数量: {}", csf_count);
-    eprintln!("截断行数: {}", truncated_count);
+    crate::reporting::detail!("\n并行转换完成！");
+    crate::reporting::detail!("CSF 数据行数: {}", total_lines);
+    crate::reporting::detail!("CSF 数量: {}", csf_count);
+    crate::reporting::detail!("截断行数: {}", truncated_count);
     if truncated_count > 0 {
-        eprintln!(
+        crate::reporting::warning!(
             "警告: {} 行被截断，考虑增加 max_line_len 参数",
             truncated_count
         );
@@ -497,7 +497,7 @@ pub fn convert_csfs_to_parquet_parallel(
     let toml_string = toml::to_string_pretty(&header_data)?;
     std::fs::write(&header_path, toml_string)?;
 
-    eprintln!("Header 文件: {:?}", header_path);
+    crate::reporting::detail!("Header 文件: {:?}", header_path);
 
     Ok(final_stats)
 }
@@ -540,9 +540,9 @@ pub fn convert_csfs_to_parquet(
     max_line_len: usize,
     chunk_size: usize,
 ) -> Result<ConversionStats, Box<dyn std::error::Error + Send + Sync>> {
-    eprintln!("开始转换，最大行长度: {}", max_line_len);
-    eprintln!("输入文件: {:?}", csfs_path);
-    eprintln!("输出文件: {:?}", output_path);
+    crate::reporting::detail!("开始转换，最大行长度: {}", max_line_len);
+    crate::reporting::detail!("输入文件: {:?}", csfs_path);
+    crate::reporting::detail!("输出文件: {:?}", output_path);
 
     // 打开输入文件
     let input_file = File::open(csfs_path)?;
@@ -576,7 +576,7 @@ pub fn convert_csfs_to_parquet(
 
     let writer = ArrowWriter::try_new(output_file, schema.clone(), Some(props))?;
     let mut writer_guard = ParquetFileGuard::new(writer, output_path);
-    eprintln!("Parquet 写入器已创建，使用无压缩");
+    crate::reporting::detail!("Parquet 写入器已创建，使用无压缩");
 
     // --- 4. 批量处理 ---
     let mut batch_lines = Vec::with_capacity(chunk_size);
@@ -585,7 +585,7 @@ pub fn convert_csfs_to_parquet(
     let mut truncated_count = 0;
     let mut block_tracker = BlockTracker::new();
 
-    eprintln!("开始处理 CSF 数据...");
+    crate::reporting::detail!("开始处理 CSF 数据...");
 
     loop {
         let mut hit_eof = false;
@@ -610,7 +610,7 @@ pub fn convert_csfs_to_parquet(
                         truncated_count += 1;
                         if truncated_count <= 5 {
                             // 只打印前5个截断警告
-                            eprintln!(
+                            crate::reporting::warning!(
                                 "警告: 第 {} 条 CSF 数据行被截断 ({} > {})",
                                 total_lines,
                                 line.len(),
@@ -640,7 +640,7 @@ pub fn convert_csfs_to_parquet(
         let num_full_csfs = batch_lines.len() / 3;
         if num_full_csfs == 0 {
             if hit_eof {
-                eprintln!(
+                crate::reporting::warning!(
                     "警告: 文件末尾有 {} 行不完整的数据，将被忽略",
                     batch_lines.len()
                 );
@@ -688,7 +688,7 @@ pub fn convert_csfs_to_parquet(
 
         csf_count += num_full_csfs;
         if csf_count % 100000 == 0 {
-            eprintln!("已处理 {} 个 CSF", csf_count);
+            crate::reporting::detail!("已处理 {} 个 CSF", csf_count);
         }
     }
 
@@ -720,20 +720,20 @@ pub fn convert_csfs_to_parquet(
     std::fs::write(&header_path, toml_string)?;
 
     // 统计信息
-    eprintln!("\n转换完成！");
-    eprintln!("================ 统计信息 ================");
-    eprintln!("CSF 数据行数: {}", total_lines);
-    eprintln!("CSF 数量: {}", csf_count);
-    eprintln!("截断行数: {}", truncated_count);
+    crate::reporting::detail!("\n转换完成！");
+    crate::reporting::detail!("================ 统计信息 ================");
+    crate::reporting::detail!("CSF 数据行数: {}", total_lines);
+    crate::reporting::detail!("CSF 数量: {}", csf_count);
+    crate::reporting::detail!("截断行数: {}", truncated_count);
     if truncated_count > 0 {
-        eprintln!(
+        crate::reporting::warning!(
             "警告: {} 行被截断，考虑增加 max_line_len 参数",
             truncated_count
         );
     }
-    eprintln!("输出文件: {:?}", output_path);
-    eprintln!("Header 文件: {:?}", header_path);
-    eprintln!("==========================================");
+    crate::reporting::detail!("输出文件: {:?}", output_path);
+    crate::reporting::detail!("Header 文件: {:?}", header_path);
+    crate::reporting::detail!("==========================================");
 
     Ok(header_data.conversion_stats)
 }

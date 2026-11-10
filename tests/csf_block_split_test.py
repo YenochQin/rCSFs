@@ -250,7 +250,7 @@ def test_cli_jsplit_runs_and_prints_summary(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "jsplit: completed" in captured.out
-    assert "block_count: 3" in captured.out
+    assert "Symmetry blocks         3" in captured.out
     for j in [8, 5, 0]:
         assert f"multi_j_{j}.c" in captured.out
         assert f"multi_j_{j}.w" in captured.out
@@ -261,7 +261,7 @@ def test_cli_jsplit_runs_and_prints_summary(
     exit_code = cli.main(["jsplit", str(input_csf)])
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.err == ""
+    assert captured.err.strip() == "Run log: rcsfs.log"
     assert (tmp_path / "multi_j_8.c").read_text().startswith("Core subshells:\n")
     assert (tmp_path / "multi_j_8.w").read_bytes() == MULTI_J_W
 

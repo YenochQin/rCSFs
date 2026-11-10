@@ -379,6 +379,10 @@ stats = generate_descriptors_from_parquet(
 
 ### 3a. Restore CSFs from a V2 descriptor file
 
+For proposed direct GRASP integration and an alternative that avoids linking Rust,
+see the [3.0.0 descriptor integration discussion (Chinese)](docs/grasp_descriptor_integration_discussion_20261110.md).
+These interfaces are proposals, not implemented APIs.
+
 `restore_csfs_from_descriptors(...)` rebuilds a CSF text file from a V2 descriptor Parquet file
 and its source `{stem}_header.toml`. If the descriptor file recorded a `source_header_sha256`,
 the header is verified against it before anything is written — a mismatch means the header was

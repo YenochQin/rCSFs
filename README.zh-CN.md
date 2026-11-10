@@ -300,6 +300,10 @@ peel_subshells = read_peel_subshells("output_header.toml")
 
 ### 3. 生成描述符 Parquet
 
+描述符直接接入 GRASP 的接口分工，以及避免链接 Rust 的二进制输入方案，见
+[3.0.0 描述符接入讨论记录](docs/grasp_descriptor_integration_discussion_20261110.md)。
+其中的直接加载接口仍是设计建议，尚未实现。
+
 `generate_descriptors_from_parquet(...)` 会读取转换后的 CSF Parquet，并输出描述符表。
 `descriptor_version` 只接受 `2`，统一输出可逆 V2 描述符：
 

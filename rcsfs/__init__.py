@@ -155,7 +155,10 @@ def read_csfs(
     Arrow buffers produced by Rust are
     transferred to Polars through the Arrow C Stream interface without a
     Parquet round trip. The returned header dictionary has the same schema as
-    the TOML sidecar written by :func:`convert_csfs`. For calculation-quality
+    the TOML sidecar written by :func:`convert_csfs`. Its optional
+    ``header_info.electron_count`` includes the closed core and is inferred
+    from the first complete CSF before truncation; it is omitted when the
+    source does not supply parseable physical metadata. For calculation-quality
     input, require ``header["conversion_stats"]["truncated_count"] == 0``.
     """
     header, arrow_stream = _read_csfs_arrow(

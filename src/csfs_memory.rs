@@ -9,7 +9,9 @@ use std::io::{BufRead, BufReader, Error as IoError, ErrorKind};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::csfs_conversion::{BlockInfo, ConversionStats, HeaderData, HeaderInfo};
+use crate::csfs_conversion::{
+    BlockInfo, ConversionStats, HeaderData, HeaderInfo, electron_count_from_csf,
+};
 use crate::csfs_descriptor::{CSFDescriptorGenerator, parse_peel_subshells_from_header_lines};
 
 const CSF_HEADER_LINE_COUNT: usize = 5;
@@ -142,6 +144,9 @@ pub fn read_csfs_to_record_batch(
         data_lines.truncate(data_lines.len() - incomplete_line_count);
     }
 
+    let electron_count = data_lines
+        .first()
+        .and_then(|line| electron_count_from_csf(&header_lines, &line.value));
     let process = || -> Result<ProcessResult, IoError> {
         let rows = data_lines
             .into_par_iter()
@@ -193,7 +198,10 @@ pub fn read_csfs_to_record_batch(
         block_lengths.push(current_block_line_count / 3);
     }
     let header_data = HeaderData {
-        header_info: HeaderInfo { header_lines },
+        header_info: HeaderInfo {
+            header_lines,
+            electron_count,
+        },
         block_info: BlockInfo {
             block_count: block_lengths.len(),
             block_lengths,

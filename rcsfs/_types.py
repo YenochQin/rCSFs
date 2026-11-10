@@ -10,9 +10,10 @@ type InteractionMethod = Literal["structural_upper_bound"]
 
 
 class CsfHeaderInfo(TypedDict):
-    """The five source header lines retained from a CSF file."""
+    """Source header lines and total electrons, including the closed core."""
 
     header_lines: list[str]
+    electron_count: NotRequired[int]
 
 
 class CsfBlockInfo(TypedDict):

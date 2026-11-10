@@ -132,6 +132,9 @@ fn read_csfs_arrow(
 
     let header_info = PyDict::new(py);
     header_info.set_item("header_lines", &header_data.header_info.header_lines)?;
+    if let Some(electron_count) = header_data.header_info.electron_count {
+        header_info.set_item("electron_count", electron_count)?;
+    }
     let block_info = PyDict::new(py);
     block_info.set_item("block_lengths", &header_data.block_info.block_lengths)?;
     block_info.set_item("block_count", header_data.block_info.block_count)?;

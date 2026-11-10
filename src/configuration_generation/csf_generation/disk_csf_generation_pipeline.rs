@@ -219,6 +219,7 @@ pub(crate) struct SegmentGeneration {
     pub(crate) layout: DescriptorLayout,
     pub(crate) peel_subshells: Vec<String>,
     pub(crate) core_subshells: Vec<Subshell>,
+    pub(crate) electron_count: usize,
     /// The counted workload and the schedule derived from it.
     pub(crate) plan: GenerationPlan,
     pub(crate) segments: Vec<DescriptorSegment>,
@@ -509,7 +510,12 @@ fn generate_disk_outputs_from_requests(
     crate::reporting::detail!("Writing generation header...");
     let header_timer = StageTimer::start();
     let header_lines = generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
-    write_generation_header(header_output, header_lines.clone(), &deduplicated)?;
+    write_generation_header(
+        header_output,
+        header_lines.clone(),
+        generated.electron_count,
+        &deduplicated,
+    )?;
     stage_stats.push(
         header_timer.finish(
             "header_write",
@@ -1214,10 +1220,21 @@ fn generate_v2_descriptor_segments_with_peel(
     // and merge buffers.
     drop(occupation_charge);
     let resource_stats = options.budget.snapshot(occupation_bytes);
+    let electron_count = occupations
+        .core_subshells
+        .iter()
+        .map(|shell| usize::from(shell.capacity()))
+        .sum::<usize>()
+        + occupations.configurations[0]
+            .occupations
+            .iter()
+            .map(|entry| usize::from(entry.electrons))
+            .sum::<usize>();
     Ok(SegmentGeneration {
         layout,
         peel_subshells,
         core_subshells: occupations.core_subshells,
+        electron_count,
         segments,
         unique_occupations: occupations.configurations.len(),
         record_count,
@@ -2148,6 +2165,7 @@ fn format_header_labels(labels: impl IntoIterator<Item = String>) -> String {
 fn write_generation_header(
     path: &Path,
     header_lines: [String; 5],
+    electron_count: usize,
     deduplicated: &DeduplicatedSegments,
 ) -> Result<()> {
     use crate::csfs_conversion::{BlockInfo, ConversionStats, HeaderData, HeaderInfo};
@@ -2155,6 +2173,7 @@ fn write_generation_header(
     let header = HeaderData {
         header_info: HeaderInfo {
             header_lines: header_lines.into(),
+            electron_count: Some(electron_count),
         },
         block_info: BlockInfo {
             block_lengths: deduplicated.block_lengths.clone(),
@@ -3308,6 +3327,7 @@ mod tests {
             layout: generated.layout,
             peel_subshells: generated.peel_subshells.clone(),
             core_subshells: generated.core_subshells.clone(),
+            electron_count: generated.electron_count,
             plan: generated.plan.clone(),
             segments: generated
                 .segments
@@ -3450,6 +3470,7 @@ mod tests {
             layout: generated.layout,
             peel_subshells: generated.peel_subshells.clone(),
             core_subshells: generated.core_subshells.clone(),
+            electron_count: generated.electron_count,
             plan: generated.plan.clone(),
             segments: generated
                 .segments
@@ -3616,6 +3637,7 @@ mod tests {
             write_generation_header(
                 &directory.join("header.toml"),
                 header_lines.clone(),
+                generated.electron_count,
                 &deduplicated,
             )
             .unwrap();
@@ -3743,6 +3765,7 @@ mod tests {
             write_generation_header(
                 &directory.join("header.toml"),
                 header_lines.clone(),
+                generated.electron_count,
                 &deduplicated,
             )
             .unwrap();

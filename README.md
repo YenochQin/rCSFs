@@ -283,8 +283,17 @@ It also writes a companion TOML file named:
 That file contains:
 
 - the original 5 header lines
+- `header_info.electron_count`: total electrons, including the fully occupied core
 - block metadata, including `block_info.block_lengths`
 - conversion statistics
+
+Disk and memory generation write the electron count before descriptors are
+bound to the completed header's SHA-256. Text conversion and `read_csfs` infer
+it from the core capacities and the first complete CSF's occupation line,
+before line truncation. Legacy headers remain readable; conversions of empty
+or opaque text omit the count when it cannot be determined. Missing means
+unknown, not zero. Editing the count changes the header hash and requires
+regenerating the associated descriptors.
 
 Example:
 

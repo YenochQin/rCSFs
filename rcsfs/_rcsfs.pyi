@@ -33,6 +33,7 @@ class ArrowRecordBatchReader(Protocol):
 
     def __arrow_c_stream__(self, requested_schema: object | None = None) -> object: ...
 
+# Header metadata includes electron_count (core + peel) when inferable.
 def read_csfs_arrow(
     input_path: str,
     max_line_len: int | None = None,

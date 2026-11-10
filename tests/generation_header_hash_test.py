@@ -1,10 +1,10 @@
-import _native_cli as cli
-
 """Generated descriptor bindings survive CLI publication and reject stale headers."""
 
 import hashlib
+import tomllib
 from pathlib import Path
 
+import _native_cli as cli
 import pytest
 
 from rcsfs import (
@@ -25,6 +25,7 @@ def _assert_binding(descriptors: Path, header: Path) -> str:
 
 
 @pytest.mark.parametrize("storage", ["disk", "memory"])
+@pytest.mark.parametrize("core", [0, 1])
 @pytest.mark.parametrize(
     "descriptor_setting, descriptor_args, descriptor_name",
     [
@@ -41,6 +42,7 @@ def _assert_binding(descriptors: Path, header: Path) -> str:
 def test_generated_descriptor_binding_survives_cli_publication(
     tmp_path: Path,
     storage: str,
+    core: int,
     descriptor_setting: str,
     descriptor_args: list[str],
     descriptor_name: str,
@@ -48,8 +50,8 @@ def test_generated_descriptor_binding_survives_cli_publication(
     config = tmp_path / "rcsfs.toml"
     config.write_text(
         'conf = "calc"\n[csfsgenerate]\nrcsfs_out = "full.c"\n'
-        'inactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
-        'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
+        f'inactive_core = {core}\nreference_configuration = ["2s(2,*)"]\n'
+        'active_space = "3s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
         f'generation_storage = "{storage}"\nthreads = 2\n'
         "generate_descriptors = true\n" + descriptor_setting,
         encoding="utf-8",
@@ -63,6 +65,9 @@ def test_generated_descriptor_binding_survives_cli_publication(
     descriptors = tmp_path / descriptor_name
     header = tmp_path / "full_header.toml"
     original_hash = _assert_binding(descriptors, header)
+    assert tomllib.loads(header.read_text())["header_info"]["electron_count"] == (
+        2 + 2 * core
+    )
     original_csf = (tmp_path / "full.c").read_bytes()
     restored = tmp_path / "restored.c"
     restore_csfs_from_descriptors(descriptors, header, restored)
@@ -70,7 +75,7 @@ def test_generated_descriptor_binding_survives_cli_publication(
 
     # Regenerating the same filenames with a different source must refresh the binding.
     config.write_text(
-        config.read_text().replace("1s(2,*)", "2s(2,*)"), encoding="utf-8"
+        config.read_text().replace("2s(2,*)", "3s(2,*)"), encoding="utf-8"
     )
     assert cli.main(arguments) == 0
     assert _assert_binding(descriptors, header) != original_hash
@@ -81,11 +86,12 @@ def test_generated_descriptor_binding_survives_cli_publication(
 
 
 @pytest.mark.parametrize("multiple_lists", [False, True])
+@pytest.mark.parametrize("core", [0, 1])
 def test_disk_api_binds_completed_header_and_rejects_tampering(
-    tmp_path: Path, multiple_lists: bool
+    tmp_path: Path, multiple_lists: bool, core: int
 ) -> None:
-    first = "* ! Orbital order\n0\n1s(2,*)\n\n2s\n0,0\n0\nn\n"
-    second = "* ! Orbital order\n0\n2s(2,*)\n\n2s\n0,0\n0\nn\n"
+    first = f"* ! Orbital order\n{core}\n2s(2,*)\n\n3s\n0,0\n0\nn\n"
+    second = f"* ! Orbital order\n{core}\n3s(2,*)\n\n3s\n0,0\n0\nn\n"
     descriptors = tmp_path / "desc.parquet"
     header = tmp_path / "custom_header.toml"
     csf = tmp_path / "full.c"
@@ -100,12 +106,19 @@ def test_disk_api_binds_completed_header_and_rejects_tampering(
     )
     assert stats["success"] is True
     _assert_binding(descriptors, header)
+    electrons = 2 + 2 * core
+    assert tomllib.loads(header.read_text())["header_info"]["electron_count"] == electrons
     restored = tmp_path / "restored.c"
     restore_csfs_from_descriptors(descriptors, header, restored)
     assert restored.read_bytes() == csf.read_bytes()
 
-    # Even a comment changes the exact header bytes, while preserving valid TOML.
-    header.write_bytes(header.read_bytes() + b"\n# edited header\n")
+    # The electron count is part of the exact header bytes bound to the descriptors.
+    header.write_bytes(
+        header.read_bytes().replace(
+            f"electron_count = {electrons}".encode(),
+            f"electron_count = {electrons + 1}".encode(),
+        )
+    )
     for label, indices in (("all", None), ("subset", [0])):
         output = tmp_path / f"stale_{label}.c"
         with pytest.raises(OSError, match="does not match the hash"):

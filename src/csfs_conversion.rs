@@ -146,6 +146,67 @@ fn extract_header_lines(
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HeaderInfo {
     pub header_lines: Vec<String>,
+    /// Total electrons, including the fully occupied core. Older sidecars and
+    /// text-only conversions without parseable occupations omit this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub electron_count: Option<usize>,
+}
+
+/// Infer the same total as GRASP from the core and first complete CSF's
+/// occupation line, before any text truncation. Conversion also accepts opaque
+/// text fixtures, so unavailable physical metadata is omitted, never guessed.
+pub(crate) fn electron_count_from_csf(
+    header_lines: &[String],
+    occupation_line: &str,
+) -> Option<usize> {
+    use crate::configuration_generation::shared_generation::Subshell;
+    use std::collections::HashSet;
+
+    for (index, label) in [
+        (0, "Core subshells:"),
+        (2, "Peel subshells:"),
+        (4, "CSF(s):"),
+    ] {
+        if header_lines.get(index)?.trim() != label {
+            return None;
+        }
+    }
+    let mut core = HashSet::new();
+    let mut total = 0usize;
+    for label in header_lines.get(1)?.split_whitespace() {
+        let shell = label.parse::<Subshell>().ok()?;
+        if !core.insert(shell) {
+            return None;
+        }
+        total = total.checked_add(usize::from(shell.capacity()))?;
+    }
+    let mut peel = HashSet::new();
+    for label in header_lines.get(3)?.split_whitespace() {
+        let shell = label.parse::<Subshell>().ok()?;
+        if core.contains(&shell) || !peel.insert(shell) {
+            return None;
+        }
+    }
+    let mut remaining = occupation_line.trim();
+    let mut occupied = HashSet::new();
+    while !remaining.is_empty() {
+        let (label, rest) = remaining.split_once('(')?;
+        let shell = label.trim().parse::<Subshell>().ok()?;
+        if !peel.contains(&shell) || !occupied.insert(shell) {
+            return None;
+        }
+        let (population, rest) = rest.split_once(')')?;
+        let population = population.trim().parse::<u8>().ok()?;
+        if population > shell.capacity() {
+            return None;
+        }
+        total = total.checked_add(usize::from(population))?;
+        remaining = rest.trim();
+    }
+    if occupied.is_empty() && !peel.is_empty() {
+        return None;
+    }
+    Some(total)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -293,6 +354,7 @@ pub fn convert_csfs_to_parquet_parallel(
 
     // --- 1. 读取 Header (5行) ---
     let headers = extract_header_lines(csfs_path)?;
+    let mut first_occupation_line = None;
 
     // --- 2. 创建 Parquet 写入器 ---
     let schema = Arc::new(Schema::new(vec![
@@ -345,6 +407,9 @@ pub fn convert_csfs_to_parquet_parallel(
                     if is_block_separator(&line) {
                         block_tracker.finish_block(total_lines)?;
                     } else {
+                        if first_occupation_line.is_none() {
+                            first_occupation_line = Some(line.clone());
+                        }
                         block_tracker.record_csf_line();
                         batch_lines.push(line);
                     }
@@ -481,6 +546,10 @@ pub fn convert_csfs_to_parquet_parallel(
     // --- 5. 创建 TOML 头部文件 ---
     let header_data = HeaderData {
         header_info: HeaderInfo {
+            electron_count: first_occupation_line
+                .as_deref()
+                .filter(|_| csf_count > 0)
+                .and_then(|line| electron_count_from_csf(&headers, line)),
             header_lines: headers,
         },
         block_info,
@@ -551,6 +620,7 @@ pub fn convert_csfs_to_parquet(
 
     // --- 1. 处理 Header (5行) ---
     let headers = extract_header_lines(csfs_path)?;
+    let mut first_occupation_line = None;
 
     // Skip header lines in the main iterator since extract_header_lines uses its own file handle
     for _ in 0..CSF_HEADER_LINE_COUNT {
@@ -603,6 +673,9 @@ pub fn convert_csfs_to_parquet(
                         continue;
                     }
 
+                    if first_occupation_line.is_none() {
+                        first_occupation_line = Some(line.clone());
+                    }
                     block_tracker.record_csf_line();
                     let (processed_line, truncated) =
                         process_csf_data_line(&line, max_line_len, total_lines)?;
@@ -698,6 +771,10 @@ pub fn convert_csfs_to_parquet(
     // 创建 TOML 头部数据
     let header_data = HeaderData {
         header_info: HeaderInfo {
+            electron_count: first_occupation_line
+                .as_deref()
+                .filter(|_| csf_count > 0)
+                .and_then(|line| electron_count_from_csf(&headers, line)),
             header_lines: headers.clone(),
         },
         block_info: block_tracker.into_block_info(),

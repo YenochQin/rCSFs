@@ -33,6 +33,25 @@ def test_read_csfs_runtime_return_annotation_resolves() -> None:
     assert get_type_hints(read_csfs)["return"] == tuple[CsfHeaderData, pl.DataFrame]
 
 
+@pytest.mark.parametrize("max_line_len", [6, 256])
+def test_read_csfs_counts_electrons_including_core_before_truncation(
+    tmp_path: Path, max_line_len: int
+) -> None:
+    source = tmp_path / "core.c"
+    source.write_text(
+        "Core subshells:\n  1s   2s   2p-  2p\n"
+        "Peel subshells:\n  3s   3p-  3p\nCSF(s):\n"
+        "  3s ( 2)  3p-( 2)  3p ( 3)\nstate\ncoupling\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    header, _ = read_csfs(source, max_line_len=max_line_len)
+    assert header["header_info"]["electron_count"] == 17
+    convert_csfs(source, tmp_path / "core.parquet", max_line_len=max_line_len)
+    disk_header = tomllib.loads((tmp_path / "core_header.toml").read_text())
+    assert disk_header == header
+
+
 def test_read_csfs_returns_polars_dataframe_and_skips_block_separators(
     tmp_path: Path,
 ) -> None:

@@ -2,6 +2,8 @@
 
 [English README](README.md)
 
+Fortran 程序可使用[独立描述符 reader 和 C ABI](docs/native_descriptor_reader.md)，直接读取 Parquet/header，无需 Python 运行时。
+
 rCSFs 是一个基于 Rust 的高性能工具库，用于在 Python 中处理原子物理里的 CSF（Configuration State Function）数据。
 
 这个库主要解决两类问题：

@@ -1,0 +1,33 @@
+[package]
+name = "rcsfs-descriptor-reader"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[features]
+default = ["descriptor-ffi"]
+descriptor-ffi = []
+
+[lib]
+name = "rcsfs_descriptor"
+path = "lib.rs"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+anyhow = "1.0.100"
+arrow-array = "59.0.0"
+arrow-schema = "59.0.0"
+parquet = { version = "59.0.0", default-features = false, features = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd"] }
+serde_json = "1.0"
+sha2 = "0.10"
+toml = "0.9.8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "unwind"

@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+- 新增无 Python 的原生描述符 reader 和版本化 C ABI，提供严格 footer/header/schema 校验、流式预扫描、调用方缓冲及受控错误。`native-reader/` 单独构建，不引入 CLI 或 CSF 生成器；与原生产者共享 `descriptor_transport`，原 `descriptor_schema` 保留重导出接口。V2 文件格式和 Python 导出不变。见 [Fortran reader](native_descriptor_reader.md)。
+
 - header 新增可选的 `header_info.electron_count`，表示包含满占据 core 在内的总电子数；磁盘生成直接从占据配置写出，内存生成、文本转换及 `read_csfs` 从原始头部与第一个完整 CSF 提取，保持旧 header 和无法推断电子数的文本输入兼容。描述符继续绑定包含该字段的最终 header 字节哈希；补充 core、分块、截断、CLI 发布、多列表及字段篡改的回归测试。
 
 - 取消 `ci.yml` 的 push 自动触发，保留 pull request 检查和手动运行；`publish.yml` 继续仅由手动操作触发。

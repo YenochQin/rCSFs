@@ -2,6 +2,8 @@
 
 [中文说明](README.zh-CN.md)
 
+Native Fortran consumers can use the [standalone descriptor reader and C ABI](docs/native_descriptor_reader.md), without a Python runtime.
+
 High-performance Rust-powered tools for working with atomic-physics CSF (Configuration State Function) data in Python.
 
 rCSFs focuses on two jobs:

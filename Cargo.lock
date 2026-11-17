@@ -1224,7 +1224,6 @@ version = "3.0.1"
 dependencies = [
  "anyhow",
  "arrow",
- "arrow-array",
  "arrow-ipc",
  "arrow-schema",
  "clap",

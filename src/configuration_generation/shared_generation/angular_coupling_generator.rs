@@ -730,6 +730,8 @@ impl<'a, S: GeneratedRecordSink> Generator<'a, S> {
 mod tests {
     use super::*;
 
+    type CountingCase = (&'static [(&'static str, u8)], u16, u16);
+
     fn four_d_shell_request() -> GenerationRequest {
         request(&[("3d", 3), ("4d", 3), ("5d", 3), ("6d", 3)], 0, 4)
     }
@@ -789,7 +791,7 @@ mod tests {
     /// seniority, labelled tables, a closed shell, several coupling chains per
     /// selection, and a configuration whose intermediate couplings exceed
     /// GRASP's output field.
-    const COUNTING_COVERAGE: [(&[(&str, u8)], u16, u16); 8] = [
+    const COUNTING_COVERAGE: [CountingCase; 8] = [
         (&[("5g", 4)], 0, 8),
         (&[("4f", 4)], 0, 8),
         (&[("3d", 6)], 0, 4),

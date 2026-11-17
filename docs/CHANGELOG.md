@@ -6,7 +6,7 @@
 
 ## [Unreleased]
 
-- 新增无 Python 的原生描述符 reader 和版本化 C ABI，提供严格 footer/header/schema 校验、流式预扫描、调用方缓冲及受控错误。`native-reader/` 单独构建，不引入 CLI 或 CSF 生成器；与原生产者共享 `descriptor_transport`，原 `descriptor_schema` 保留重导出接口。V2 文件格式和 Python 导出不变。见 [Fortran reader](native_descriptor_reader.md)。
+- 移除专供 Fortran 使用的原生描述符 reader、C ABI、`descriptor-ffi` feature 及 `native-reader/` 独立构建入口；该读取库已由 grasp-atomic-suite 内置并独立维护。rCSFs 保留 `descriptor_transport` / `descriptor_schema` 格式契约，以及原有描述符生成、读取、解码和文本恢复功能；V2 文件格式和 Python 导出不变。清理相应 CI、打包清单和文档入口，移除 reader 专用的直接依赖，`serde_json` 恢复为 CLI 可选依赖。
 
 - header 新增可选的 `header_info.electron_count`，表示包含满占据 core 在内的总电子数；磁盘生成直接从占据配置写出，内存生成、文本转换及 `read_csfs` 从原始头部与第一个完整 CSF 提取，保持旧 header 和无法推断电子数的文本输入兼容。描述符继续绑定包含该字段的最终 header 字节哈希；补充 core、分块、截断、CLI 发布、多列表及字段篡改的回归测试。
 
@@ -1055,6 +1055,6 @@ CODE_REVIEW.md 的建议基于旧版 PyO3，不适用于当前版本。
 
 ## 相关文档
 
-- [代码审查报告](./CODE_REVIEW.md)
+- [历史代码审查报告（删除前版本）](https://github.com/YenochQin/rCSFs/blob/463ffda77499ed957e54c062d482d6908200ada4/docs/CODE_REVIEW.md)
 - [性能优化日志](./performance_optimization_log.md)
 - [CSF 描述符指南](./CSF_DESCRIPTOR_GUIDE.md)

@@ -2968,6 +2968,9 @@ mod tests {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    type CsfParquetRow = (u64, String, String, String);
+    type PublishedArtifacts = (Vec<u8>, Vec<Vec<i8>>, Vec<CsfParquetRow>);
+
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     fn transcript() -> &'static str {
@@ -3740,8 +3743,7 @@ mod tests {
     fn the_combined_final_pass_is_thread_invariant() {
         let root = temporary_directory("final-encoding-threads");
         fs::create_dir(&root).unwrap();
-        let mut publications: Vec<(Vec<u8>, Vec<Vec<i8>>, Vec<(u64, String, String, String)>)> =
-            Vec::new();
+        let mut publications: Vec<PublishedArtifacts> = Vec::new();
         for threads in [1usize, 2, 4, 8] {
             let directory = root.join(format!("threads-{threads}"));
             fs::create_dir(&directory).unwrap();
@@ -3810,7 +3812,7 @@ mod tests {
     }
 
     /// Read the logical rows of a three-line CSF Parquet file.
-    fn read_csf_parquet_rows(path: &Path) -> Result<Vec<(u64, String, String, String)>> {
+    fn read_csf_parquet_rows(path: &Path) -> Result<Vec<CsfParquetRow>> {
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
         let file = File::open(path)?;

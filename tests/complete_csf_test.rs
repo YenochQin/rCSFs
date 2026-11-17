@@ -171,7 +171,10 @@ fn individual_records_export_without_headers_or_block_separators() {
         .skip(5)
         .filter(|line| *line != " *")
         .collect::<Vec<_>>();
-    for (record, lines) in parsed.records.iter().zip(expected.chunks_exact(3)) {
+    let (expected_records, remainder) = expected.as_chunks::<3>();
+    assert!(remainder.is_empty());
+    assert_eq!(parsed.records.len(), expected_records.len());
+    for (record, lines) in parsed.records.iter().zip(expected_records) {
         let mut output = Vec::new();
         parsed.write_record_to(record, &mut output).unwrap();
         assert_eq!(
@@ -179,7 +182,7 @@ fn individual_records_export_without_headers_or_block_separators() {
             format!("{}\n", lines.join("\n"))
         );
     }
-    let mut record = parsed.records[0].clone();
+    let mut record = parsed.records[0];
     record.total_two_j = u16::MAX;
     assert!(parsed.write_record_to(&record, Vec::new()).is_err());
 }

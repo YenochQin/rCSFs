@@ -1,6 +1,6 @@
 //! Shared descriptor transport contract: version, row layout and metadata.
 //!
-//! Shared verbatim by the producer crate and the lightweight native reader.
+//! Shared by descriptor producers and the descriptor restoration paths.
 
 use anyhow::{Context, Result, ensure};
 use parquet::file::metadata::KeyValue;

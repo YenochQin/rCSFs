@@ -438,16 +438,16 @@ mod tests {
         ] {
             for policy in policies {
                 let outcome = check_space(estimate, entries, policy);
-                let expected_refusal = match (verdict, policy) {
-                    ("insufficient", SpacePolicy::Require { .. }) => true,
-                    (
-                        "unmeasurable",
-                        SpacePolicy::Require {
-                            allow_unchecked: false,
-                        },
-                    ) => true,
-                    _ => false,
-                };
+                let expected_refusal = matches!(
+                    (verdict, policy),
+                    ("insufficient", SpacePolicy::Require { .. })
+                        | (
+                            "unmeasurable",
+                            SpacePolicy::Require {
+                                allow_unchecked: false,
+                            },
+                        )
+                );
                 assert_eq!(
                     outcome.is_err(),
                     expected_refusal,

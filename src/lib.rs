@@ -9,9 +9,6 @@ pub mod csf_partition;
 pub mod csfs_conversion;
 pub mod csfs_descriptor;
 pub mod csfs_memory;
-#[cfg(feature = "descriptor-ffi")]
-pub mod descriptor_ffi;
-pub mod descriptor_reader;
 pub mod descriptor_schema;
 pub mod descriptor_transport;
 pub mod descriptor_v2;

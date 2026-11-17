@@ -21,31 +21,6 @@ pub(super) fn read(path: &Path) -> Result<Table> {
     )
     .with_context(|| format!("invalid TOML: {}", path.display()))
 }
-pub(super) fn canonicalize(command: &str, table: Table) -> Result<Table> {
-    let mut result = Table::new();
-    for (key, value) in table {
-        let canonical = match (command, key.as_str()) {
-            ("csfsgenerate", "order") => "orbital_order",
-            ("csfsgenerate", "core") => "inactive_core",
-            ("csfsgenerate", "references") => "reference_configuration",
-            ("csfsgenerate", "active_orbitals") => "active_space",
-            ("csfsgenerate", "output" | "csf") => "rcsfs_out",
-            ("csfsgenerate", "parquet") => "rcsfs_parquet",
-            ("csfsgenerate", "descriptor_parquet") => "descriptor",
-            ("csfsgenerate", "storage") => "generation_storage",
-            ("csfs-split", "input_parquet") => "split_csfs_parquet",
-            ("csfs-split", "header") => "csfs_header",
-            ("csfs-split", "space") => "active_spaces",
-            _ => &key,
-        };
-        ensure!(
-            !result.contains_key(canonical),
-            "[{command}] sets {canonical} more than once"
-        );
-        result.insert(canonical.into(), value);
-    }
-    Ok(result)
-}
 fn conf(root: &Table) -> Result<Option<String>> {
     root.get("conf")
         .map(|v| {
@@ -61,29 +36,7 @@ fn model_values(
     index: Option<usize>,
     explicit: bool,
 ) -> Result<Table> {
-    if command == "csfsgenerate" && root.contains_key("generate") {
-        ensure!(
-            !root.contains_key("csfsgenerate"),
-            "cannot combine [generate] and [csfsgenerate]"
-        );
-        let mut values = root["generate"]
-            .as_table()
-            .context("generate must be a table")?
-            .clone();
-        if let Some(output) = root.get("output") {
-            values.extend(output.as_table().context("output must be a table")?.clone());
-        }
-        return canonicalize(command, values);
-    }
-    let name = if command == "csfs-split" && root.contains_key("split-active") {
-        ensure!(
-            !root.contains_key(command),
-            "cannot combine csfs-split and split-active"
-        );
-        "split-active"
-    } else {
-        command
-    };
+    let name = command;
     let Some(raw) = root.get(name) else {
         ensure!(!explicit, "config has no [{command}] table");
         return Ok(Table::new());
@@ -94,13 +47,12 @@ fn model_values(
     } else {
         raw
     };
-    canonicalize(
-        command,
-        raw.as_table()
-            .with_context(|| format!("{command} must be a table"))?
-            .clone(),
-    )
+    Ok(raw
+        .as_table()
+        .with_context(|| format!("{command} must be a table"))?
+        .clone())
 }
+
 pub(super) fn settings(
     root: &Table,
     command: &str,
@@ -112,10 +64,12 @@ pub(super) fn settings(
     let mut values = model_values(root, command, index, explicit)?;
     let conf = conf(root)?;
     if command == "csfsgenerate" {
-        if let Some(conf) = &conf {
+        if let Some(conf) = &conf
+            && !values.contains_key("as")
+        {
             values
-                .entry("descriptor".to_string())
-                .or_insert_with(|| format!("{conf}_desc.parquet").into());
+                .entry("output".to_string())
+                .or_insert_with(|| format!("{conf}_descriptors.parquet").into());
         }
         if let Some(level) = values.remove("as") {
             let level = level
@@ -124,12 +78,12 @@ pub(super) fn settings(
                 .context("as must be a nonnegative integer")?;
             if let Some(conf) = &conf {
                 values
-                    .entry("rcsfs_out".to_string())
+                    .entry("output".to_string())
                     .or_insert_with(|| files::raw_name(conf, level).into());
             } else {
                 ensure!(
-                    values.contains_key("rcsfs_out") || overrides.contains_key("rcsfs_out"),
-                    "as requires conf or rcsfs_out"
+                    values.contains_key("output") || overrides.contains_key("output"),
+                    "as requires conf or output"
                 );
             }
         }
@@ -147,7 +101,7 @@ pub(super) fn settings(
         let outputs = generation::Outputs::from_settings(&source)?;
         values
             .entry("split_csfs_parquet".to_string())
-            .or_insert_with(|| outputs.parquet.display().to_string().into());
+            .or_insert_with(|| outputs.descriptor.display().to_string().into());
         values
             .entry("csfs_header".to_string())
             .or_insert_with(|| outputs.header.display().to_string().into());
@@ -162,7 +116,6 @@ pub(super) fn settings(
     let required: &[&str] = match command {
         "convert" => &["input_csf", "output_parquet"],
         "info" => &["input_parquet"],
-        "gen-descriptors" => &["input_parquet", "output_parquet", "header"],
         "zero-first" => &["zero_csf", "full_csf"],
         "csfs-split" => &["split_csfs_parquet", "csfs_header"],
         "jsplit" => &["input_csf"],
@@ -238,17 +191,13 @@ pub(super) fn batch(root: &Table, path: &Path) -> Result<Vec<Job>> {
                 continue;
             }
             let outputs = generation::Outputs::from_settings(&earlier.settings)?;
-            if files::resolved(&input)? == files::resolved(&outputs.parquet)?
+            if files::resolved(&input)? == files::resolved(&outputs.descriptor)?
                 && files::resolved(&header)? == files::resolved(&outputs.header)?
             {
                 ensure!(
                     !earlier.settings.flag("estimate_only", false)?,
                     "split cannot consume estimate-only generation"
                 );
-                earlier
-                    .settings
-                    .values
-                    .insert("generate_parquet".into(), true.into());
                 found = true;
                 break;
             }
@@ -281,26 +230,30 @@ pub(super) fn output_paths(job: &Job) -> Result<Vec<PathBuf>> {
             let output = s.output("output_parquet", None)?;
             vec![
                 output.clone(),
-                files::header(&s.path("input_csf")?, &output)?,
+                crate::descriptor_dataset::header_path(&output)?,
             ]
         }
-        "gen-descriptors" => {
-            let output = s.output("output_parquet", None)?;
-            vec![output.clone(), output.with_extension("toml")]
-        }
         "restore-csfs" => vec![s.output("output", None)?],
-        "interacting" => vec![s.output("output", Some(Path::new("rcsf.out")))?],
-        "zero-first" => vec![s.output(
-            "output_csf",
-            Some(Path::new(&format!(
-                "{}_zf.csf",
-                files::stem(&s.path("full_csf")?)?
-            ))),
-        )?],
-        "csfs-split" => commands::split_targets(s)?
-            .into_iter()
-            .map(|t| t.output)
-            .collect(),
+        "interacting" | "zero-first" => {
+            let (key, default) = if job.command == "zero-first" {
+                ("output_csf", "zero_first_descriptors.parquet")
+            } else {
+                ("output", "interacting_descriptors.parquet")
+            };
+            let output = s.output(key, Some(Path::new(default)))?;
+            vec![
+                output.clone(),
+                crate::descriptor_dataset::header_path(&output)?,
+            ]
+        }
+        "csfs-split" => {
+            let mut outputs = Vec::new();
+            for target in commands::split_targets(s)? {
+                outputs.push(crate::descriptor_dataset::header_path(&target.output)?);
+                outputs.push(target.output);
+            }
+            outputs
+        }
         _ => vec![],
     })
 }

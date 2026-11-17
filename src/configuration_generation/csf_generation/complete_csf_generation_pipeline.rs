@@ -6,14 +6,17 @@
 
 use anyhow::{Context, Result, ensure};
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{self, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::fs;
 use std::path::Path;
 
 use super::{
     ExcitationRequest, GenerationRequest, Subshell, enumerate_occupations, generate_csfs_parallel,
 };
 use crate::complete_csf::{CompleteCsfFile, Parity};
+use crate::descriptor_dataset::{DatasetHeader, DatasetWriter, header_path};
+use crate::descriptor_schema::DescriptorLayout;
+use crate::descriptor_schema::DescriptorVersion;
+use crate::descriptor_v2::encode_v2;
 
 fn header(labels: impl IntoIterator<Item = String>) -> String {
     labels
@@ -72,8 +75,8 @@ pub struct WriteStats {
     pub descriptor_count: Option<usize>,
 }
 
-/// Order generated chunks into GRASP's final J/P block order, merge them into
-/// one CSF text file. Descriptor Parquet is produced by the Python pipeline.
+/// Order generated chunks into GRASP's final J/P block order and publish a
+/// descriptor/header dataset. Text export is a separate explicit operation.
 ///
 /// `output_path` must not already exist.
 pub fn write_generated_csfs(
@@ -111,18 +114,10 @@ pub fn write_generated_csfs(
         header(used.iter().map(ToString::to_string)),
         "CSF(s):".to_owned(),
     ];
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(output_path)?;
-    let mut writer = BufWriter::new(file);
-    for line in headers {
-        writeln!(writer, "{line}")?;
-    }
+    let destination = DatasetHeader::from_lines(headers)?;
+    let header_output = header_path(output_path)?;
+    let mut writer = DatasetWriter::new(destination.clone(), output_path, &header_output, &[])?;
     for (index, block_refs) in order.values().enumerate() {
-        if index > 0 {
-            writeln!(writer, " *")?;
-        }
         for &(chunk_index, block_index) in block_refs {
             let chunk = &chunks[chunk_index];
             let block = &chunk.blocks[block_index];
@@ -131,18 +126,31 @@ pub fn write_generated_csfs(
                 .checked_add(usize::try_from(block.record_len)?)
                 .context("block range overflow")?;
             for record in &chunk.records[start..end] {
-                chunk.write_record_to(record, &mut writer)?;
+                let layout = DescriptorLayout::new(DescriptorVersion::V2, chunk.subshells.len());
+                let mut row = vec![0; layout.row_len()];
+                encode_v2(chunk, record, &mut row)?;
+                let mut mapped = [0, -1, 0, -1].repeat(destination.peel.len());
+                for (source, label) in chunk.subshells.iter().enumerate() {
+                    let target = destination
+                        .peel
+                        .iter()
+                        .position(|s| s == label)
+                        .context("missing generated orbital")?;
+                    mapped[4 * target..4 * target + 4]
+                        .copy_from_slice(&row[4 * source..4 * source + 4]);
+                }
+                mapped.extend_from_slice(&row[row.len() - 2..]);
+                writer.push(&mapped, index)?;
             }
         }
     }
-    writer.flush()?;
-    drop(writer);
+    writer.finish()?;
 
     Ok(WriteStats {
         record_count: count,
         block_count: order.len(),
         output_bytes: fs::metadata(output_path)?.len(),
-        descriptor_count: None,
+        descriptor_count: Some(count),
     })
 }
 
@@ -189,7 +197,7 @@ pub fn generate_csfs_from_transcript(
         .collect::<Vec<_>>();
     let chunks = generate_csfs_parallel(&requests, threads)?;
 
-    crate::reporting::detail!("Writing CSF text file...");
+    crate::reporting::detail!("Writing descriptor/header dataset...");
     let write_stats = write_generated_csfs(&occupations.core_subshells, &chunks, output_path)?;
     crate::reporting::detail!(
         "Generated {} CSFs across {} symmetry blocks",

@@ -33,7 +33,7 @@ macro_rules! field {
 pub(super) const COMMANDS: &[(&str, &str)] = &[
     (
         "convert",
-        "Convert CSF text to ordered Parquet and a header TOML.",
+        "Import CSF text to V2 descriptor Parquet and a bound header TOML.",
     ),
     ("info", "Inspect Parquet metadata."),
     (
@@ -43,10 +43,6 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
     (
         "csfggenerate",
         "Generate GRASPG-compatible CSFG and label files from TOML.",
-    ),
-    (
-        "gen-descriptors",
-        "Generate reversible V2 descriptor Parquet and metadata.",
     ),
     (
         "zero-first",
@@ -67,73 +63,32 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
     ),
 ];
 pub(super) fn canonical(name: &str) -> &str {
-    match name {
-        "split-active" | "rcsfsplit" => "csfs-split",
-        "split-j" | "rasfsplit" => "jsplit",
-        _ => name,
-    }
+    name
 }
 pub(super) fn fields(command: &str) -> Vec<Field> {
     let mut result = match command {
         "convert" => vec![
-            field!("input_csf", None, Text, "Input CSF file."),
-            field!("output_parquet", None, Text, "Output Parquet filename."),
+            field!("input_csf", None, Text, "Text CSF input to import."),
             field!(
-                "max_line_len",
-                Some("max-line-len"),
-                Number,
-                "Maximum line length (default: 256)."
-            ),
-            field!(
-                "chunk_size",
-                Some("chunk-size"),
-                Number,
-                "Lines per batch (default: 3000000)."
-            ),
-            field!(
-                "num_workers",
-                Some("num-workers"),
-                Number,
-                "Worker threads (positive integer)."
+                "output_parquet",
+                None,
+                Text,
+                "Output descriptor Parquet; a matching header is also written."
             ),
         ],
         "info" => vec![field!("input_parquet", None, Text, "Parquet input.")],
         "csfsgenerate" => vec![
             field!(
-                "rcsfs_out",
-                None,
+                "output",
+                Some("output"),
                 Text,
-                "Output CSF filename (default: rcsf.out)."
+                "Output descriptor Parquet (default: rcsf_descriptors.parquet)."
             ),
             field!(
                 "transcript",
                 Some("transcript"),
                 Text,
                 "Read an rcsfgenerate transcript instead of prompting."
-            ),
-            field!(
-                "generate_parquet",
-                Some("generate-parquet"),
-                Flag,
-                "Also publish CSF Parquet and header."
-            ),
-            field!(
-                "generate_descriptors",
-                Some("generate-descriptors"),
-                Flag,
-                "Also publish V2 descriptors and metadata."
-            ),
-            field!(
-                "rcsfs_parquet",
-                Some("rcsfs-parquet"),
-                Text,
-                "CSF Parquet filename."
-            ),
-            field!(
-                "descriptor",
-                Some("descriptor"),
-                Text,
-                "Descriptor Parquet filename."
             ),
             field!(
                 "threads",
@@ -175,34 +130,6 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
                 "Replace existing CSFG outputs."
             ),
         ],
-        "gen-descriptors" => vec![
-            field!("input_parquet", None, Text, "Input CSF Parquet."),
-            field!("output_parquet", None, Text, "Output descriptor filename."),
-            field!(
-                "header",
-                Some("header"),
-                Text,
-                "Matching source header TOML (required)."
-            ),
-            field!(
-                "num_workers",
-                Some("num-workers"),
-                Number,
-                "Worker threads."
-            ),
-            field!(
-                "descriptor_version",
-                Some("descriptor-version"),
-                Number,
-                "Descriptor version (only 2)."
-            ),
-            field!(
-                "compression",
-                Some("compression"),
-                Text,
-                "Parquet compression, e.g. zstd-3 or snappy."
-            ),
-        ],
         "zero-first" => vec![
             field!("zero_csf", None, Text, "Zero-order reference CSF file."),
             field!("full_csf", None, Text, "Full CSF file."),
@@ -210,23 +137,16 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
                 "output_csf",
                 None,
                 Text,
-                "Output filename (default: FULL_zf.csf)."
-            ),
-            field!(
-                "num_workers",
-                Some("num-workers"),
-                Number,
-                "Worker threads."
-            ),
-            field!(
-                "max_line_len",
-                Some("max-line-len"),
-                Number,
-                "Maximum line length (default: 256)."
+                "Output descriptor Parquet (default: zero_first_descriptors.parquet)."
             ),
         ],
         "csfs-split" => vec![
-            field!("split_csfs_parquet", None, Text, "Input CSF Parquet."),
+            field!(
+                "split_csfs_parquet",
+                None,
+                Text,
+                "Input descriptor Parquet."
+            ),
             field!(
                 "csfs_header",
                 Some("header"),
@@ -242,7 +162,7 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
             field!("prefix", Some("prefix"), Text, "Output filename prefix."),
         ],
         "jsplit" => vec![
-            field!("input_csf", None, Text, "Input CSF file."),
+            field!("input_csf", None, Text, "Input descriptor Parquet."),
             field!("prefix", Some("prefix"), Text, "Output filename prefix."),
             field!(
                 "copy_w",
@@ -264,7 +184,7 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
                 "output",
                 Some("output"),
                 Text,
-                "Output filename (default: rcsf.out)."
+                "Output descriptor Parquet (default: interacting_descriptors.parquet)."
             ),
             field!(
                 "hamiltonian",
@@ -339,12 +259,6 @@ pub(super) fn parser() -> Command {
         let mut sub = Command::new(name).about(about)
             .after_help("Use 'rcsfs COMMAND init-config' to append a commented example to rcsfs.toml. Output files are placed in the current directory.")
             .arg(Arg::new("config").short('c').long("config").num_args(0..=1).default_missing_value("rcsfs.toml").value_name("FILE"));
-        if name == "csfs-split" {
-            sub = sub.visible_aliases(["split-active", "rcsfsplit"]);
-        }
-        if name == "jsplit" {
-            sub = sub.visible_aliases(["split-j", "rasfsplit"]);
-        }
         for f in fields(name) {
             let mut arg = Arg::new(f.key).help(f.help);
             if let Some(long) = f.long {
@@ -364,12 +278,6 @@ pub(super) fn parser() -> Command {
             }
             if name == "interacting" && f.key == "num_workers" {
                 arg = arg.visible_alias("num-workers");
-            }
-            if name == "csfsgenerate" && f.key == "rcsfs_parquet" {
-                arg = arg.visible_alias("parquet");
-            }
-            if name == "csfsgenerate" && f.key == "descriptor" {
-                arg = arg.visible_alias("descriptor-parquet");
             }
             sub = sub.arg(arg);
         }

@@ -1,20 +1,18 @@
 """Type declarations for the native :mod:`rcsfs._rcsfs` extension."""
 
-from typing import Protocol
+from typing import Literal, Protocol
 
 from ._types import (
-    ActiveSpaceSplitStats,
-    ConversionStats,
+    CsfDatasetStats,
+    CsfDatasetSplitStats,
     CsfGenerationEstimate,
     CsfGenerationStats,
     CsfgGenerationStats,
     CsfHeaderData,
     CsfRestoreStats,
-    DescriptorGenerationStats,
     InteractionHamiltonian,
     InteractionMethod,
     InteractionStats,
-    JBlockSplitStats,
     ParquetInfo,
     PartitionStats,
 )
@@ -35,72 +33,52 @@ class ArrowRecordBatchReader(Protocol):
 
 # Header metadata includes electron_count (core + peel) when inferable.
 def read_csfs_arrow(
-    input_path: str,
-    max_line_len: int | None = None,
-    num_workers: int | None = None,
-    include_block_id: bool = False,
-    include_coupling_signature: bool = False,
-    strict: bool = True,
+    input_path: str, header_path: str | None = None,
+    include_block_id: bool = False, include_coupling_signature: bool = False,
 ) -> tuple[CsfHeaderData, ArrowRecordBatchReader]: ...
 def convert_csfs(
-    input_path: str,
-    output_path: str,
-    max_line_len: int | None = None,
-    chunk_size: int | None = None,
-    num_workers: int | None = None,
-) -> ConversionStats: ...
+    input_path: str, output_path: str, header_path: str | None = None,
+) -> CsfDatasetStats: ...
+def select_csfs(
+    input_path: str, output_path: str, indices: list[int],
+    header_path: str | None = None, output_header: str | None = None,
+) -> CsfDatasetStats: ...
+def merge_csfs(
+    input_paths: list[str], output_path: str,
+    header_paths: list[str] | None = None, output_header: str | None = None,
+) -> CsfDatasetStats: ...
+def match_csfs(
+    full_path: str, selected_path: str,
+    full_header: str | None = None, selected_header: str | None = None,
+    require_all: bool = True,
+) -> list[int | None]: ...
 def get_parquet_info(input_path: str) -> ParquetInfo: ...
 def partition_csfs(
     zero_parquet: str,
     zero_header: str,
     full_parquet: str,
     full_header: str,
-    output_csf: str,
+    output_path: str,
 ) -> PartitionStats: ...
 def split_csfs_by_active_spaces(
     input_parquet: str,
     header_path: str,
     targets: list[tuple[str, str]],
-) -> ActiveSpaceSplitStats: ...
+) -> CsfDatasetSplitStats: ...
 def split_csfs_by_j(
-    input_csf: str,
-    output_dir: str | None = None,
-    prefix: str | None = None,
-    *,
-    copy_w: bool = True,
-    overwrite: bool = True,
-) -> JBlockSplitStats: ...
-def py_generate_descriptors_from_parquet(
-    input_parquet: str,
-    output_file: str,
-    peel_subshells: list[str],
-    num_workers: int | None = None,
-    compression: str | None = None,
-    *,
-    descriptor_version: int = 2,
+    input_path: str, output_dir: str | None = None, prefix: str | None = None,
     header_path: str | None = None,
-) -> DescriptorGenerationStats: ...
-def py_restore_csfs_from_descriptors(
+) -> CsfDatasetSplitStats: ...
+def restore_csfs_from_descriptors(
     descriptor_parquet: str,
     header_path: str,
     output: str,
     indices: list[int] | None = None,
 ) -> CsfRestoreStats: ...
-def py_read_peel_subshells(header_path: str) -> list[str]: ...
+def read_peel_subshells(header_path: str) -> list[str]: ...
 def generate_csfs_from_transcript(
-    transcript: str,
-    output_path: str,
-    threads: int | None = None,
-) -> CsfGenerationStats: ...
-def generate_disk_outputs_from_transcript(
-    transcript: str | list[str],
-    csf_output: str,
-    csf_parquet_output: str,
-    descriptor_output: str,
-    header_output: str,
-    scratch_dir: str,
-    threads: int | None = None,
-    memory_budget_mib: int | None = None,
+    transcript: str | list[str], output_path: str, threads: int | None = None,
+    storage: Literal["disk", "memory"] = "disk", memory_budget_mib: int | None = None,
     allow_unchecked_space: bool = False,
 ) -> CsfGenerationStats: ...
 def estimate_disk_generation(

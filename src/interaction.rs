@@ -6,8 +6,7 @@
 //! The [`InteractionStats::exact`] flag is consequently always `false`.
 
 use crate::atomic_output::{
-    create_temporary_output, ensure_distinct_inputs, ensure_output_does_not_alias_input,
-    publish_temporary_output,
+    ensure_distinct_inputs, ensure_output_does_not_alias_input, publish_temporary_output,
 };
 use crate::complete_csf::{CompleteCsfFile, CsfRecord, Parity, SymmetryBlock};
 use anyhow::{Context, Result, ensure};
@@ -16,7 +15,6 @@ use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fmt;
 use std::fs;
-use std::io::{BufWriter, Write};
 use std::path::Path;
 
 /// Hamiltonian requested by the caller.
@@ -197,8 +195,8 @@ pub fn select_interacting_csfs(
     ensure_output_does_not_alias_input(output_path, reference_path, "reference")?;
     ensure_output_does_not_alias_input(output_path, candidates_path, "candidate")?;
 
-    let reference = CompleteCsfFile::parse_path(reference_path)?;
-    let candidates = CompleteCsfFile::parse_path(candidates_path)?;
+    let reference = crate::descriptor_dataset::read_complete(reference_path)?;
+    let candidates = crate::descriptor_dataset::read_complete(candidates_path)?;
     validate_inputs(&reference, &candidates)?;
 
     let shell_count = candidates.subshells.len();
@@ -337,24 +335,30 @@ pub fn select_interacting_csfs(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let (temporary, file) = create_temporary_output(output_path)?;
-    let mut writer = BufWriter::new(file);
-    output.write_to(&mut writer).with_context(|| {
-        format!(
-            "failed to write temporary output for {}",
-            output_path.display()
-        )
-    })?;
-    writer.flush()?;
-    writer.get_ref().sync_all().with_context(|| {
-        format!(
-            "failed to sync temporary output for {}",
-            output_path.display()
-        )
-    })?;
-    drop(writer);
-    let output_bytes = fs::metadata(temporary.path())?.len();
-    publish_temporary_output(temporary.path(), output_path, overwrite)?;
+    let output_header = crate::descriptor_dataset::header_path(output_path)?;
+    ensure!(
+        overwrite || !output_header.exists(),
+        "output header already exists"
+    );
+    for source in [reference_path, candidates_path] {
+        let source_header = crate::descriptor_dataset::header_path(source)?;
+        ensure_output_does_not_alias_input(&output_header, &source_header, "header")?;
+        ensure_output_does_not_alias_input(output_path, &source_header, "header")?;
+    }
+    let parent = output_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let stage = tempfile::Builder::new()
+        .prefix(".rcsfs-interacting-")
+        .tempdir_in(parent)?;
+    let staged = stage
+        .path()
+        .join(output_path.file_name().context("missing output filename")?);
+    let stats = crate::descriptor_dataset::write_complete(&output, &staged)?;
+    let output_bytes = fs::metadata(&staged)?.len();
+    publish_temporary_output(Path::new(&stats.header_file), &output_header, overwrite)?;
+    publish_temporary_output(&staged, output_path, overwrite)?;
 
     let reference_count = checked_sum(block_stats.iter().map(|block| block.reference_count))?;
     let candidate_count = checked_sum(block_stats.iter().map(|block| block.candidate_count))?;

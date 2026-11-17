@@ -346,8 +346,8 @@ pub(crate) fn generate_disk_outputs_from_transcript_with_options(
     let request = ExcitationRequest::from_transcript(transcript)?;
     generate_disk_outputs_from_requests(
         &[request],
-        csf_output,
-        csf_parquet_output,
+        Some(csf_output),
+        Some(csf_parquet_output),
         descriptor_output,
         header_output,
         options,
@@ -376,8 +376,30 @@ pub(crate) fn generate_disk_outputs_from_transcripts_with_options(
         .collect::<Result<Vec<_>>>()?;
     generate_disk_outputs_from_requests(
         &requests,
-        csf_output,
-        csf_parquet_output,
+        Some(csf_output),
+        Some(csf_parquet_output),
+        descriptor_output,
+        header_output,
+        options,
+    )
+}
+
+/// Generate the primary descriptor/header pair without text intermediates.
+pub(crate) fn generate_descriptor_dataset(
+    transcripts: &[String],
+    descriptor_output: &Path,
+    header_output: &Path,
+    options: &GenerationOptions,
+) -> Result<DiskGenerationStats> {
+    ensure!(!transcripts.is_empty(), "no generation transcript");
+    let requests = transcripts
+        .iter()
+        .map(|text| ExcitationRequest::from_transcript(text))
+        .collect::<Result<Vec<_>>>()?;
+    generate_disk_outputs_from_requests(
+        &requests,
+        None,
+        None,
         descriptor_output,
         header_output,
         options,
@@ -386,8 +408,8 @@ pub(crate) fn generate_disk_outputs_from_transcripts_with_options(
 
 fn generate_disk_outputs_from_requests(
     requests: &[ExcitationRequest],
-    csf_output: &Path,
-    csf_parquet_output: &Path,
+    csf_output: Option<&Path>,
+    csf_parquet_output: Option<&Path>,
     descriptor_output: &Path,
     header_output: &Path,
     supplied_options: &GenerationOptions,
@@ -403,8 +425,8 @@ fn generate_disk_outputs_from_requests(
         .as_deref()
         .context("disk generation requires a scratch directory")?;
     ensure!(
-        !csf_output.exists()
-            && !csf_parquet_output.exists()
+        csf_output.is_none_or(|p| !p.exists())
+            && csf_parquet_output.is_none_or(|p| !p.exists())
             && !descriptor_output.exists()
             && !header_output.exists(),
         "disk generation staging outputs must not already exist"
@@ -429,12 +451,11 @@ fn generate_disk_outputs_from_requests(
     crate::reporting::detail!("Generating CSFs and V2 descriptors to disk segments...");
     // Refuse a run whose estimate does not fit the scratch or staging volumes,
     // while the scratch directory still holds nothing but the empty root.
-    let outputs = [
-        csf_output,
-        csf_parquet_output,
-        descriptor_output,
-        header_output,
-    ];
+    let outputs = csf_output
+        .into_iter()
+        .chain(csf_parquet_output)
+        .chain([descriptor_output, header_output])
+        .collect::<Vec<_>>();
     let preflight = |estimate: &CapacityEstimate| {
         for check in preflight_run(
             estimate,
@@ -529,50 +550,66 @@ fn generate_disk_outputs_from_requests(
     );
 
     crate::reporting::detail!("Building final descriptor and CSF outputs from segments...");
-    let final_stats = super::csf_artifact_encoding::build_final_outputs_from_segments(
-        &deduplicated,
-        &header_lines,
-        descriptor_output,
-        csf_output,
-        csf_parquet_output,
-        header_output,
-        options.threads,
-    )?;
-    let descriptor_bytes = final_stats.descriptor_bytes;
-    let csf_bytes = final_stats.csf_bytes;
-    // Seven entries cover segment read/decompression, selection, preparation,
-    // and each artifact family split into encode and write. Their walls sum to
-    // the whole pass, which makes the pass checkable against end-to-end time.
-    for (name, elapsed_millis, cpu_millis) in final_stats.phase_entries() {
-        let is_input_phase = matches!(
-            name,
-            "final_encoding_read" | "final_encoding_select" | "final_encoding_prepare"
-        );
-        let is_descriptor = name.starts_with("final_encoding_descriptor");
-        let output_bytes = if is_input_phase {
-            0
-        } else if is_descriptor {
-            descriptor_bytes
-        } else {
-            final_stats
-                .csf_bytes
-                .checked_add(final_stats.csf_parquet_bytes)
-                .context("final output byte count overflow")?
-        };
-        stage_stats.push(StageStats {
-            name,
-            elapsed_millis,
-            cpu_millis,
-            input_records: deduplicated.unique_count,
-            output_records: final_stats.record_count,
-            input_bytes: if name == "final_encoding_read" {
-                dedup_bytes
-            } else {
+    let (descriptor_bytes, csf_bytes) = if csf_output.is_none() && csf_parquet_output.is_none() {
+        let timer = StageTimer::start();
+        let merged =
+            merge_v2_deduplicated_segments(&deduplicated, descriptor_output, Some(header_output))?;
+        let bytes = fs::metadata(descriptor_output)?.len();
+        stage_stats.push(timer.finish(
+            "final_descriptor_merge",
+            deduplicated.unique_count,
+            merged.record_count,
+            dedup_bytes,
+            bytes,
+        ));
+        (bytes, 0)
+    } else {
+        let final_stats = super::csf_artifact_encoding::build_final_outputs_from_segments(
+            &deduplicated,
+            &header_lines,
+            descriptor_output,
+            csf_output.context("missing text output")?,
+            csf_parquet_output.context("missing string Parquet output")?,
+            header_output,
+            options.threads,
+        )?;
+        let descriptor_bytes = final_stats.descriptor_bytes;
+        let csf_bytes = final_stats.csf_bytes;
+        // Seven entries cover segment read/decompression, selection, preparation,
+        // and each artifact family split into encode and write. Their walls sum to
+        // the whole pass, which makes the pass checkable against end-to-end time.
+        for (name, elapsed_millis, cpu_millis) in final_stats.phase_entries() {
+            let is_input_phase = matches!(
+                name,
+                "final_encoding_read" | "final_encoding_select" | "final_encoding_prepare"
+            );
+            let is_descriptor = name.starts_with("final_encoding_descriptor");
+            let output_bytes = if is_input_phase {
                 0
-            },
-            output_bytes,
-        });
-    }
+            } else if is_descriptor {
+                descriptor_bytes
+            } else {
+                final_stats
+                    .csf_bytes
+                    .checked_add(final_stats.csf_parquet_bytes)
+                    .context("final output byte count overflow")?
+            };
+            stage_stats.push(StageStats {
+                name,
+                elapsed_millis,
+                cpu_millis,
+                input_records: deduplicated.unique_count,
+                output_records: final_stats.record_count,
+                input_bytes: if name == "final_encoding_read" {
+                    dedup_bytes
+                } else {
+                    0
+                },
+                output_bytes,
+            });
+        }
+        (descriptor_bytes, csf_bytes)
+    };
     crate::reporting::detail!("Generation complete!");
     Ok(DiskGenerationStats {
         unique_occupations: generated.unique_occupations,
@@ -2168,27 +2205,11 @@ fn write_generation_header(
     electron_count: usize,
     deduplicated: &DeduplicatedSegments,
 ) -> Result<()> {
-    use crate::csfs_conversion::{BlockInfo, ConversionStats, HeaderData, HeaderInfo};
-
-    let header = HeaderData {
-        header_info: HeaderInfo {
-            header_lines: header_lines.into(),
-            electron_count: Some(electron_count),
-        },
-        block_info: BlockInfo {
-            block_lengths: deduplicated.block_lengths.clone(),
-            block_count: deduplicated.block_lengths.len(),
-        },
-        conversion_stats: ConversionStats {
-            csf_count: deduplicated.unique_count,
-            total_lines: deduplicated
-                .unique_count
-                .checked_mul(3)
-                .context("CSF line count overflow")?,
-            truncated_count: 0,
-        },
-    };
-    let text = toml::to_string_pretty(&header).context("failed to serialize generation header")?;
+    let mut header = crate::descriptor_dataset::DatasetHeader::from_lines(header_lines)?;
+    header.electron_count = Some(electron_count);
+    let header = header.finalized(&deduplicated.block_lengths)?;
+    let text = toml::to_string_pretty(&header.document)
+        .context("failed to serialize generation header")?;
     let mut file = File::options()
         .write(true)
         .create_new(true)

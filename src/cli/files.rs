@@ -105,9 +105,6 @@ pub(super) fn stem(path: &Path) -> Result<&str> {
         .and_then(|s| s.to_str())
         .context("expected a UTF-8 filename stem")
 }
-pub(super) fn header(input: &Path, parquet: &Path) -> Result<PathBuf> {
-    Ok(parquet.with_file_name(format!("{}_header.toml", stem(input)?)))
-}
 pub(super) fn safe_stem(value: &str) -> Result<()> {
     ensure!(
         !value.is_empty()
@@ -120,7 +117,7 @@ pub(super) fn safe_stem(value: &str) -> Result<()> {
 }
 pub(super) fn raw_name(conf: &str, level: usize) -> String {
     format!(
-        "{conf}{}as{level}raw.c",
+        "{conf}{}as{level}raw_descriptors.parquet",
         if conf.ends_with('_') { "" } else { "_" }
     )
 }

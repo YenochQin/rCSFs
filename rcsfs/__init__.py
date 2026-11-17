@@ -1,334 +1,115 @@
+"""Descriptor-native CSF generation and processing.
+
+The primary artifact is an Int8 V2 Parquet plus its byte-bound header TOML.
+Use convert_csfs for explicit text import and restore_csfs_from_descriptors
+for explicit text export. String-Parquet inputs and implicit conversion are
+not supported.
 """
-rCSFs - Rust-powered CSF (Configuration State Function) Processing Library
-
-This package provides high-performance Rust implementations for processing
-atomic physics CSF data.
-
-Main Components:
-- CSF file format conversion to Parquet
-- CSF descriptor generation for ML applications
-
-## Quick Start
-
-### CSF File Conversion
-
-```python
-from rcsfs import convert_csfs
-
-# Basic conversion
-convert_csfs("input.csf", "output.parquet")
-
-# With custom chunk size (default: 3000000 lines = 1M CSFs)
-convert_csfs("input.csf", "output.parquet", chunk_size=6000000)
-
-# Limit to 8 workers for shared servers
-convert_csfs("input.csf", "output.parquet", num_workers=8)
-```
-
-### CSF Descriptor Generation
-
-```python
-from rcsfs import read_peel_subshells, generate_descriptors_from_parquet
-
-# Read peel subshells from header file
-peel_subshells = read_peel_subshells("data_header.toml")
-
-# Generate descriptors from parquet file
-stats = generate_descriptors_from_parquet(
-    "csfs_data.parquet",
-    "descriptors.parquet",
-    peel_subshells=peel_subshells
-)
-```
-
-### J-Block Split
-
-```python
-from rcsfs import split_csfs_by_j
-
-# Split a multi-block CSF list into one file per 2J (name_8.c, name_5.c, ...);
-# a sibling name.w orbital file is copied beside each output when present.
-stats = split_csfs_by_j("name.c")
-```
-
-For detailed documentation, see function documentation:
-- `convert_csfs()`: CSF file to Parquet conversion
-- `generate_descriptors_from_parquet()`: Batch descriptor generation
-- `read_peel_subshells()`: Extract peel subshells from header file
-- `split_csfs_by_j()`: Split a multi-block CSF list into per-2J files
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Literal
 
 from polars import DataFrame
 
+from . import _rcsfs as _native
+from ._csfg import generate_csfgs
 from ._types import (
-    ActiveSpaceOutputStats,
-    ActiveSpaceSplitStats,
-    ConversionStats,
-    CsfBlockInfo,
-    CsfDataStats,
-    CsfgBlockStats,
-    CsfGenerationEstimate,
-    CsfGenerationEstimateBytes,
-    CsfGenerationPlanStats,
-    CsfGenerationRecordDistribution,
-    CsfGenerationResourceStats,
-    CsfGenerationStageStats,
-    CsfGenerationStats,
-    CsfgGenerationStats,
-    CsfHeaderData,
-    CsfHeaderInfo,
-    CsfRestoreStats,
-    DescriptorGenerationStats,
-    InteractionBlockStats,
-    InteractionHamiltonian,
-    InteractionMethod,
-    InteractionStats,
-    JBlockOutputStats,
-    JBlockSplitStats,
-    ParquetInfo,
+    CsfDatasetStats, CsfDatasetSplitStats, CsfGenerationEstimate,
+    CsfGenerationStats, CsfHeaderData, CsfRestoreStats,
+    InteractionHamiltonian, InteractionMethod, InteractionStats, ParquetInfo,
     PartitionStats,
 )
 
-try:
-    __version__ = version("rcsfs")
-except PackageNotFoundError:
-    __version__ = "3.0.1"
-
-from ._csfg import generate_csfgs
-from ._rcsfs import (
-    convert_csfs as _convert_csfs,
-)
-from ._rcsfs import (
-    generate_csfs_from_transcript as _generate_csfs_from_transcript,
-)
-from ._rcsfs import (
-    get_parquet_info as _get_parquet_info,
-)
-from ._rcsfs import (
-    partition_csfs as _partition_csfs,
-)
-from ._rcsfs import (
-    py_generate_descriptors_from_parquet as _generate_descriptors_from_parquet,
-)
-from ._rcsfs import (
-    py_read_peel_subshells as _read_peel_subshells,
-)
-from ._rcsfs import (
-    py_restore_csfs_from_descriptors as _restore_csfs_from_descriptors,
-)
-from ._rcsfs import read_csfs_arrow as _read_csfs_arrow
-from ._rcsfs import select_interacting_csfs as _select_interacting_csfs
-from ._rcsfs import seniority_to_printed_v as _seniority_to_printed_v
-from ._rcsfs import split_csfs_by_active_spaces as _split_csfs_by_active_spaces
-from ._rcsfs import split_csfs_by_j as _split_csfs_by_j
-
-# ///////////////////////////////////////////////////////////////////////////////
-# Python Wrapper Functions (with Path support)
-# ///////////////////////////////////////////////////////////////////////////////
+__version__ = _native.__version__
 
 
-def read_csfs(
-    input_path: str | Path,
-    max_line_len: int | None = 256,
-    num_workers: int | None = None,
-    *,
-    include_block_id: bool = False,
-    include_coupling_signature: bool = False,
-    strict: bool = True,
-) -> tuple[CsfHeaderData, DataFrame]:
-    """Read CSF header metadata and data rows directly into memory.
-
-    The first five header lines and ``*`` block separators are omitted. Set
-    ``include_block_id=True`` to add the zero-based block identifier as a
-    ``UInt32`` column. Set ``include_coupling_signature=True`` to append a
-    non-null ``List(Int32)`` column containing coupling ``2J`` values for
-    occupied peel subshells, in peel order; its final item is total ``2J``.
-    Parity is not encoded, so compare signatures within ``block_id``. This
-    option adds parsing and memory cost. With ``strict=True`` (the default), an
-    incomplete final three-line CSF is rejected instead of silently dropped.
-    Arrow buffers produced by Rust are
-    transferred to Polars through the Arrow C Stream interface without a
-    Parquet round trip. The returned header dictionary has the same schema as
-    the TOML sidecar written by :func:`convert_csfs`. Its optional
-    ``header_info.electron_count`` includes the closed core and is inferred
-    from the first complete CSF before truncation; it is omitted when the
-    source does not supply parseable physical metadata. For calculation-quality
-    input, require ``header["conversion_stats"]["truncated_count"] == 0``.
-    """
-    header, arrow_stream = _read_csfs_arrow(
-        input_path=str(input_path),
-        max_line_len=max_line_len,
-        num_workers=num_workers,
-        include_block_id=include_block_id,
-        include_coupling_signature=include_coupling_signature,
-        strict=strict,
-    )
-    return header, DataFrame(arrow_stream)
+def descriptor_header_path(path: str | Path) -> Path:
+    """Return the standard companion path; only descriptor Parquet is accepted."""
+    value = Path(path)
+    if value.suffix != ".parquet":
+        raise ValueError(f"expected descriptor Parquet: {value}")
+    return value.with_name(value.stem.removesuffix("_descriptors") + "_header.toml")
 
 
 def convert_csfs(
     input_path: str | Path,
     output_path: str | Path,
-    max_line_len: int | None = 256,
-    chunk_size: int | None = 3000000,
-    num_workers: int | None = None,
-) -> ConversionStats:
-    """
-    Convert CSF text file to Parquet format using parallel processing.
-
-    This function is optimized for large-scale data processing. It uses a streaming
-    approach with rayon-based parallel processing:
-    - Stream: Read file in batches to avoid loading large files into memory
-    - Parallel: Process each batch with rayon's work-stealing (all cores used by default)
-    - Order: Maintain CSF order in output
-
-    Args:
-        input_path: Path to input CSF file
-        output_path: Path to output Parquet file
-        max_line_len: Maximum line length (default: 256)
-        chunk_size: Number of lines per read batch (default: 3000000)
-        num_workers: Optional number of worker threads (default: CPU core count)
-
-    Returns:
-        Dictionary containing conversion statistics and status
-
-    Examples:
-        >>> # Use all CPU cores (default)
-        >>> stats = convert_csfs("input.csf", "output.parquet")
-        >>>
-        >>> # Limit to 8 workers for shared servers
-        >>> stats = convert_csfs("input.csf", "output.parquet", num_workers=8)
-
-    Performance Considerations:
-        - For single-task environments: omit num_workers (uses all cores)
-        - For multi-task servers: set num_workers to avoid CPU contention
-        - Typical values: num_workers=4-8 for shared servers, None for dedicated
-    """
-    return _convert_csfs(
-        input_path=str(input_path),
-        output_path=str(output_path),
-        max_line_len=max_line_len,
-        chunk_size=chunk_size,
-        num_workers=num_workers,
+    *,
+    header_path: str | Path | None = None,
+) -> CsfDatasetStats:
+    """Import text CSFs directly to a descriptor/header pair without truncation."""
+    return _native.convert_csfs(
+        str(input_path), str(output_path),
+        None if header_path is None else str(header_path),
     )
 
 
-def get_parquet_info(input_path: str | Path) -> ParquetInfo:
-    """
-    Get basic information and metadata from a Parquet file.
-
-    Args:
-        input_path: Path to Parquet file
-
-    Returns:
-        Dictionary containing file information:
-        - file_path: File path
-        - file_size: File size in bytes
-        - num_rows: Number of rows in the file
-        - num_columns: Number of columns
-        - compression: Compression method used for the first column chunk
-        - created_by: Writer identifier stored in the parquet metadata
-    """
-    return _get_parquet_info(input_path=str(input_path))
-
-
-# ///////////////////////////////////////////////////////////////////////////////
-# Batch Descriptor Generation Functions
-# ///////////////////////////////////////////////////////////////////////////////
-
-
-def read_peel_subshells(header_path: str | Path) -> list[str]:
-    """
-    Extract peel subshells from a header TOML file.
-
-    Args:
-        header_path: Path to the header TOML file
-
-    Returns:
-        List of subshell names (e.g., ['5s', '4d-', '4d', '5p-', '5p', '6s'])
-
-    Examples:
-        >>> peel_subshells = read_peel_subshells("data_header.toml")
-        >>> print(peel_subshells)
-        ['5s', '4d-', '4d', '5p-', '5p', '6s']
-    """
-    return _read_peel_subshells(str(header_path))
-
-
-def seniority_to_printed_v(
-    two_j: int,
-    occupation: int,
-    subshell_two_j: int,
-    seniority: int,
-) -> int:
-    """Convert physical seniority to the canonical CSF printed-v label.
-
-    ``two_j`` is twice the single-electron j; ``subshell_two_j`` is twice
-    the occupied subshell's total J. Return -1 if J already identifies the
-    state, otherwise return ``seniority``. Illegal states raise ValueError.
-    """
-    return _seniority_to_printed_v(two_j, occupation, subshell_two_j, seniority)
-
-
-def generate_descriptors_from_parquet(
-    input_parquet: str | Path,
-    output_parquet: str | Path,
-    peel_subshells: list[str],
-    num_workers: int | None = None,
-    compression: str | None = None,
+def read_csfs(
+    input_path: str | Path,
     *,
-    descriptor_version: int = 2,
     header_path: str | Path | None = None,
-) -> DescriptorGenerationStats:
-    """Generate reversible V2 Int8 descriptors from CSF Parquet.
+    include_block_id: bool = False,
+    include_coupling_signature: bool = False,
+) -> tuple[CsfHeaderData, DataFrame]:
+    """Read numeric CSFs with a zero-based UInt64 idx column.
 
-    Each peel subshell contributes named ``sub{i}_n``, ``sub{i}_2j``,
-    ``sub{i}_v``, ``sub{i}_2k`` columns. The v channel stores physical
-    seniority (zero for empty/closed subshells). Angular values are checked
-    against 0..126 before conversion to Int8. Unprinted J and coupling
-    fields are -1, distinct from a printed zero. Global ``total_two_j`` and
-    ``parity`` columns make the full row width ``4 * len(peel_subshells) + 2``.
-
-    Args:
-        input_parquet: CSF Parquet with idx, line1, line2 and line3 columns.
-        output_parquet: Descriptor Parquet destination.
-        peel_subshells: Ordered peel subshell labels from the source header.
-        num_workers: Positive worker count; defaults to the CPU count.
-        compression: ``none``, ``uncompressed``, ``snappy``, ``zstd`` or
-            ``zstd-N`` (N in 1..22); defaults to ZSTD level 3.
-        descriptor_version: Only 2 is supported. Regenerate old descriptors
-            from their original CSF text or three-line CSF Parquet.
-        header_path: Source header TOML whose SHA-256 binds the descriptor
-            file to its header; auto-detected when omitted.
-
-    Returns:
-        Generation statistics, including descriptor_size, descriptor_version=2
-        and channels_per_subshell=4. Rows preserve the source order.
-
-    ML feature scaling belongs to the consuming training pipeline. Descriptor
-    exports always preserve raw integers for exact CSF restoration.
-
-    Examples:
-        >>> shells = read_peel_subshells("data_header.toml")
-        >>> stats = generate_descriptors_from_parquet(
-        ...     "data.parquet", "descriptors.parquet", shells,
-        ...     descriptor_version=2, compression="none",
-        ... )
+    Header binding, raw Int8 channels, electron counts and explicit blocks are
+    validated. Optional coupling_signature is List(Int32), ending in total 2J.
+    Text input must first be imported with convert_csfs.
     """
-    return _generate_descriptors_from_parquet(
-        input_parquet=str(input_parquet),
-        output_file=str(output_parquet),
-        peel_subshells=peel_subshells,
-        num_workers=num_workers,
-        descriptor_version=descriptor_version,
-        header_path=str(header_path) if header_path is not None else None,
-        compression=compression,
+    header, stream = _native.read_csfs_arrow(
+        str(input_path), None if header_path is None else str(header_path),
+        include_block_id, include_coupling_signature,
+    )
+    return header, DataFrame(stream)
+
+
+def select_csfs(
+    input_path: str | Path,
+    output_path: str | Path,
+    indices: Sequence[int],
+    *,
+    header_path: str | Path | None = None,
+    output_header: str | Path | None = None,
+) -> CsfDatasetStats:
+    """Write a descriptor subset from unique increasing source row indices."""
+    return _native.select_csfs(
+        str(input_path), str(output_path), list(indices),
+        None if header_path is None else str(header_path),
+        None if output_header is None else str(output_header),
+    )
+
+
+def merge_csfs(
+    input_paths: Sequence[str | Path],
+    output_path: str | Path,
+    *,
+    header_paths: Sequence[str | Path] | None = None,
+    output_header: str | Path | None = None,
+) -> CsfDatasetStats:
+    """Append bases with stable orbital mapping, preserving explicit blocks."""
+    return _native.merge_csfs(
+        [str(p) for p in input_paths], str(output_path),
+        None if header_paths is None else [str(p) for p in header_paths],
+        None if output_header is None else str(output_header),
+    )
+
+
+def match_csfs(
+    full_path: str | Path,
+    selected_path: str | Path,
+    *,
+    full_header: str | Path | None = None,
+    selected_header: str | Path | None = None,
+    require_all: bool = True,
+) -> list[int | None]:
+    """Return a full-pool index per selected row; reject ambiguous duplicates."""
+    return _native.match_csfs(
+        str(full_path), str(selected_path),
+        None if full_header is None else str(full_header),
+        None if selected_header is None else str(selected_header), require_all,
     )
 
 
@@ -336,464 +117,122 @@ def restore_csfs_from_descriptors(
     descriptor_parquet: str | Path,
     header_path: str | Path,
     output: str | Path,
-    indices: list[int] | None = None,
+    indices: Sequence[int] | None = None,
 ) -> CsfRestoreStats:
+    """Export canonical GRASP text, including explicit closed-core records.
+
+    Selection indices, when supplied, must be unique and increasing. Source
+    block boundaries remain distinct even for adjacent equal J/parity blocks.
     """
-    Restore a CSF text file from a V2 descriptor Parquet file.
-
-    The descriptor Parquet must carry ``descriptor_version=2`` key-value
-    metadata, ``seniority_encoding=physical``, ``descriptor_dtype=int8``
-    and ``max_two_j=126`` (written by
-    :func:`generate_descriptors_from_parquet` with
-    ``descriptor_version=2``). ``header_path`` must be the exact
-    ``{stem}_header.toml`` the descriptors were generated from; if the
-    descriptor file recorded a ``source_header_sha256``, it is verified
-    against this file's bytes before anything is written.
-
-    Args:
-        descriptor_parquet: Path to a V2 descriptor Parquet file.
-        header_path: Path to the source ``{stem}_header.toml``.
-        output: Destination CSF text file. Must not alias either input.
-        indices: Optional 0-based row indices (in the descriptor file's own
-            row order) to restore, in the given order. Restores every row
-            when omitted.
-
-    Returns:
-        Dictionary with ``success``, ``output_file``, ``record_count`` and
-        ``output_bytes``.
-    """
-    return _restore_csfs_from_descriptors(
-        descriptor_parquet=str(descriptor_parquet),
-        header_path=str(header_path),
-        output=str(output),
-        indices=indices,
+    return _native.restore_csfs_from_descriptors(
+        str(descriptor_parquet), str(header_path), str(output),
+        None if indices is None else list(indices),
     )
 
 
-# ///////////////////////////////////////////////////////////////////////////////
-# Zero-First Partition Functions
-# ///////////////////////////////////////////////////////////////////////////////
+def get_parquet_info(input_path: str | Path) -> ParquetInfo:
+    return _native.get_parquet_info(str(input_path))
+
+
+def read_peel_subshells(header_path: str | Path) -> list[str]:
+    return _native.read_peel_subshells(str(header_path))
+
+
+def seniority_to_printed_v(
+    two_j: int, occupation: int, subshell_two_j: int, seniority: int,
+) -> int:
+    return _native.seniority_to_printed_v(two_j, occupation, subshell_two_j, seniority)
 
 
 def partition_csfs(
-    zero_parquet: str | Path,
-    zero_header: str | Path,
-    full_parquet: str | Path,
-    full_header: str | Path,
-    output_csf: str | Path,
+    zero_parquet: str | Path, zero_header: str | Path,
+    full_parquet: str | Path, full_header: str | Path,
+    output_path: str | Path,
 ) -> PartitionStats:
-    """
-    Partition CSFs into a zero-order + first-order space per symmetry block.
-
-    For each symmetry block, the zero-order reference CSFs are locked to the
-    head of the block and the first-order complement (full-block CSFs not
-    present in the zero-order block) is appended after them. This mirrors
-    GRASP2018's ``rcsfzerofirst`` Fortran utility, but operates on the Parquet
-    representation produced by :func:`convert_csfs`.
-
-    Match semantics: a CSF is identified by exact string equality of its
-    three-line record ``(line1, line2, line3)``. The 5-line header is taken
-    from the full file (the complete space). Blocks are paired by index; both
-    files must report the same block count.
-
-    Args:
-        zero_parquet: Path to the zero-order reference Parquet file.
-        zero_header: Path to the zero-order ``{stem}_header.toml`` sidecar.
-        full_parquet: Path to the complete-list Parquet file.
-        full_header: Path to the complete-list ``{stem}_header.toml`` sidecar.
-        output_csf: Path to the destination CSF text file.
-
-    Returns:
-        Dictionary containing partition statistics (success, paths, block and
-        CSF counts, first-order complement count).
-
-    Example:
-        >>> from rcsfs import convert_csfs, partition_csfs
-        >>> convert_csfs("zero.csf", "zero.parquet")
-        >>> convert_csfs("full.csf", "full.parquet")
-        >>> stats = partition_csfs(
-        ...     "zero.parquet", "zero_header.toml",
-        ...     "full.parquet", "full_header.toml",
-        ...     "reordered.csf",
-        ... )
-    """
-    return _partition_csfs(
-        zero_parquet=str(zero_parquet),
-        zero_header=str(zero_header),
-        full_parquet=str(full_parquet),
-        full_header=str(full_header),
-        output_csf=str(output_csf),
+    """Write reference-first descriptor blocks using exact numeric matching."""
+    return _native.partition_csfs(
+        str(zero_parquet), str(zero_header), str(full_parquet),
+        str(full_header), str(output_path),
     )
 
 
 def split_csfs_by_active_spaces(
-    input_parquet: str | Path,
-    header_path: str | Path,
+    input_parquet: str | Path, header_path: str | Path,
     targets: Mapping[str | Path, str],
-) -> ActiveSpaceSplitStats:
-    """Split a CSF Parquet file into independent GRASP-style active spaces.
-
-    ``targets`` maps each output CSF text path to maximum orbitals such as
-    ``"5s,4p,3d"``. A CSF is selected for every target whose orbital limits
-    contain every orbital listed in its occupation line (including any
-    explicitly zero-occupied orbital); outputs may therefore overlap. The
-    input is streamed in bounded batches, and existing outputs are never
-    overwritten. Each output parent directory must already exist.
-    """
-    return _split_csfs_by_active_spaces(
-        input_parquet=str(input_parquet),
-        header_path=str(header_path),
-        targets=[(str(path), orbitals) for path, orbitals in targets.items()],
+) -> CsfDatasetSplitStats:
+    """Filter numerical occupations into descriptor datasets for active spaces."""
+    return _native.split_csfs_by_active_spaces(
+        str(input_parquet), str(header_path),
+        [(str(path), space) for path, space in targets.items()],
     )
 
 
 def split_csfs_by_j(
-    input_csf: str | Path,
-    output_dir: str | Path | None = None,
-    prefix: str | None = None,
-    *,
-    copy_w: bool = True,
-    overwrite: bool = True,
-) -> JBlockSplitStats:
-    """Split a multi-block CSF text file into one file per ``J^P`` block.
-
-    This mirrors GRASP's ``rasfsplit`` for the ``.c`` file: every output
-    holds the input's five header lines plus exactly one symmetry block,
-    named ``<prefix>_<2J>.c`` inside ``output_dir`` — e.g. ``J = 4`` becomes
-    ``name_8.c`` and ``J = 5/2`` becomes ``name_5.c``. ``output_dir``
-    defaults to the input's directory and ``prefix`` to the input's file
-    stem. Outputs are staged beside their destinations and published only
-    after the whole input has been read; existing outputs are replaced
-    by default. Set ``overwrite=False`` to refuse existing outputs.
-
-    A sibling ``<input stem>.w`` orbital file is byte-copied beside every
-    output (``<prefix>_<2J>.w``) when it exists and ``copy_w`` is true; a
-    missing ``.w`` is reported as ``w_file: null``, not an error. Mixing
-    files (``.m``/``.cm``) are out of scope.
-
-    Two blocks sharing one ``2J`` cannot both own ``<prefix>_<2J>.c``, so
-    such an input is rejected — split parity groups into separate files
-    first.
-
-    Args:
-        input_csf: Multi-block CSF text file.
-        output_dir: Directory receiving the outputs (default: the input's
-            parent directory).
-        prefix: Output filename prefix (default: the input's file stem).
-        copy_w: Copy a sibling ``<stem>.w`` beside every output when present.
-        overwrite: Replace existing output files (default: ``True``).
-
-    Returns:
-        Dictionary with ``success``, ``input_file``, ``input_csf_count``,
-        ``block_count`` and per-output ``outputs`` entries carrying
-        ``output_file``, ``w_file``, ``block_index``, ``total_two_j``,
-        ``parity`` and ``csf_count``.
-
-    Raises:
-        ValueError: ``prefix`` is not a usable filename stem.
-        FileExistsError: An output exists and ``overwrite`` is ``False``.
-        OSError: The input is missing or malformed, or an output cannot be
-            written.
-    """
-    return _split_csfs_by_j(
-        input_csf=str(input_csf),
-        output_dir=None if output_dir is None else str(output_dir),
-        prefix=None if prefix is None else str(prefix),
-        copy_w=copy_w,
-        overwrite=overwrite,
+    input_path: str | Path, output_dir: str | Path | None = None,
+    prefix: str | None = None, *, header_path: str | Path | None = None,
+) -> CsfDatasetSplitStats:
+    """Split each explicit block; filenames include block index, 2J and parity."""
+    return _native.split_csfs_by_j(
+        str(input_path), None if output_dir is None else str(output_dir),
+        prefix, None if header_path is None else str(header_path),
     )
-
-
-# ///////////////////////////////////////////////////////////////////////////////
-# Structural Interaction Selection
-# ///////////////////////////////////////////////////////////////////////////////
-
-
-def select_interacting_csfs(
-    reference_csf: str | Path,
-    candidate_csf: str | Path,
-    output_csf: str | Path,
-    *,
-    hamiltonian: InteractionHamiltonian = "dirac_coulomb",
-    method: InteractionMethod = "structural_upper_bound",
-    num_workers: int | None = None,
-    overwrite: bool = False,
-) -> InteractionStats:
-    """Select a conservative upper bound of CSFs interacting with a reference.
-
-    ``structural_upper_bound`` is the only supported method. It applies cheap
-    structural selection rules but does not implement GRASP's complete angular
-    and recoupling algebra. Consequently, this function does **not** reproduce
-    the exact ``rcsfinteract90`` result: every returned statistics dictionary
-    has ``exact=False``, and selected candidates can include false positives.
-
-    Reference CSFs are written first in each symmetry block. Candidate CSFs
-    that exactly duplicate a reference record are skipped; structurally
-    admissible remaining candidates are appended in candidate-file order.
-
-    **Orbital basis.** The core header lines must be byte-identical, and the
-    reference peel subshell list must be a *prefix* of the candidate peel
-    subshell list, in the same order. GRASP's own ``rcsfinteract`` requires the
-    two peel lists to be identical; this function deliberately relaxes that to
-    a prefix so a reference space can be reused against a candidate space that
-    appends further correlation orbitals. The candidate header — including the
-    appended subshells — becomes the output header, and the appended subshells
-    take part in occupation comparisons. Block counts and each block's
-    :math:`J/P` must still match.
-
-    **Distinct inputs.** ``reference_csf`` and ``candidate_csf`` must name
-    different files; equal paths, symlinks to a common target, and Unix hard
-    links are all rejected. ``output_csf`` must likewise not alias either
-    input, so a run cannot overwrite the data it is reading.
-
-    Args:
-        reference_csf: Reference-space CSF text file.
-        candidate_csf: Candidate-space CSF text file whose peel subshell list
-            starts with the reference peel subshell list. Must be a different
-            file from ``reference_csf``.
-        output_csf: Destination CSF text file. Must not alias either input.
-        hamiltonian: ``"dirac_coulomb"`` or ``"dirac_coulomb_breit"``.
-            The current structural method records this choice but cannot
-            distinguish every exact Coulomb/Breit angular zero.
-        method: Must be ``"structural_upper_bound"``.
-        num_workers: Optional positive worker count; ``None`` uses the runtime
-            default.
-        overwrite: Replace an existing output file when ``True``.
-
-    Returns:
-        Global and per-block selection statistics. ``exact`` is always
-        ``False`` for the currently supported method.
-
-    Raises:
-        ValueError: An option is unsupported, the inputs are incompatible or
-            not distinct, or ``num_workers`` is zero, negative, or too large
-            for this platform.
-        TypeError: ``num_workers`` is neither an integer nor ``None``.
-        FileExistsError: ``output_csf`` exists and ``overwrite`` is ``False``.
-        OSError: Input parsing or file I/O fails.
-    """
-    return _select_interacting_csfs(
-        reference_csf=str(reference_csf),
-        candidate_csf=str(candidate_csf),
-        output_csf=str(output_csf),
-        hamiltonian=hamiltonian,
-        method=method,
-        num_workers=num_workers,
-        overwrite=overwrite,
-    )
-
-
-# ///////////////////////////////////////////////////////////////////////////////
-# CSF Generation Functions
-# ///////////////////////////////////////////////////////////////////////////////
 
 
 def generate_csfs_from_transcript(
-    transcript: str,
-    output_path: str | Path,
-    threads: int | None = None,
+    transcript: str | Sequence[str], output_path: str | Path,
+    threads: int | None = None, *, storage: Literal["disk", "memory"] = "disk",
+    memory_budget_mib: int | None = None, allow_unchecked_space: bool = False,
 ) -> CsfGenerationStats:
+    """Generate descriptor/header output; no text or string-Parquet intermediate.
+
+    Multiple transcripts form a deduplicated common basis in disk mode.
+    A managed disk memory budget is not a process RSS cap.
     """
-    Generate CSFs from an in-memory ``rcsfgenerate.log``-format transcript.
-
-    This is the Rust-side engine behind the interactive ``rcsfs csfsgenerate``
-    CLI, which assembles the transcript from the user's answers before
-    calling this function; the transcript is never written to disk. Parsing,
-    occupation enumeration and CSF generation all happen in Rust and are
-    written directly to ``output_path``, which must not already exist.
-
-    Args:
-        transcript: ``rcsfgenerate.log``-format text: an orbital-order line,
-            a core selector (0-6), one reference configuration per line
-            terminated by a blank line or ``*``, an active-orbital line, a
-            ``jmin,jmax`` line, an excitation-count line, and a final ``n``
-            (list continuation is not supported).
-        output_path: Destination CSF text file.
-
-        threads: Optional Rayon thread count (default: all cores).
-
-    Returns:
-        Dictionary containing generation statistics and status. On success:
-        ``output_file``, ``record_count``, ``block_count``,
-        ``unique_occupations``. On failure: ``error``.
-
-    Examples:
-        >>> transcript = "\\n".join([
-        ...     "* ! Orbital order",
-        ...     "3",
-        ...     "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
-        ...     "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",
-        ...     "",
-        ...     "5s,5p,5d,4f",
-        ...     "0,12",
-        ...     "2",
-        ...     "n",
-        ... ])
-        >>> stats = generate_csfs_from_transcript(transcript, "out.c")
-    """
-    return _generate_csfs_from_transcript(
-        transcript=transcript,
-        output_path=str(output_path),
-        threads=threads,
-    )
-
-
-def generate_disk_outputs_from_transcript(
-    transcript: str | Sequence[str],
-    csf_output: str | Path,
-    csf_parquet_output: str | Path,
-    descriptor_output: str | Path,
-    header_output: str | Path,
-    scratch_dir: str | Path,
-    threads: int | None = None,
-    *,
-    memory_budget_mib: int | None = None,
-    allow_unchecked_space: bool = False,
-) -> CsfGenerationStats:
-    """Generate staged CSF and reversible V2 descriptors with bounded memory.
-
-    A sequence of at least two single-list transcripts generates their complete
-    CSF union with exact de-duplication and a shared Peel layout.
-
-    Descriptor Parquet metadata records ``source_header_sha256`` for the exact
-    completed ``header_output`` bytes and ``source_header_filename`` for its
-    basename. Preserve those header bytes when publishing the staged outputs.
-
-    This lower-level API intentionally writes only to caller-owned staging
-    paths. The CLI uses it inside its output transaction before it publishes
-    the CSF text, CSF Parquet, header and descriptor artifacts together.
-    ``memory_budget_mib`` is a managed-memory accounting limit for occupation,
-    generation-batch, de-duplication, bitset, and writer reservations. It does
-    not cap process RSS, allocator overhead, or thread stacks.
-
-    The run is refused before the first segment when the scratch or staging
-    volume cannot hold the estimated data; that refusal is not optional. If a
-    volume's free space cannot be *measured* on this platform the run is refused
-    too, unless ``allow_unchecked_space`` accepts the unknown — skipping the
-    pre-flight silently is the outcome the pre-flight exists to prevent.
-    """
-    from ._rcsfs import generate_disk_outputs_from_transcript as native_generate
-
-    return native_generate(
-        transcript=transcript if isinstance(transcript, str) else list(transcript),
-        csf_output=str(csf_output),
-        csf_parquet_output=str(csf_parquet_output),
-        descriptor_output=str(descriptor_output),
-        header_output=str(header_output),
-        scratch_dir=str(scratch_dir),
-        threads=threads,
-        memory_budget_mib=memory_budget_mib,
-        allow_unchecked_space=allow_unchecked_space,
+    return _native.generate_csfs_from_transcript(
+        transcript if isinstance(transcript, str) else list(transcript),
+        str(output_path), threads, storage, memory_budget_mib, allow_unchecked_space,
     )
 
 
 def estimate_disk_generation(
-    transcript: str | Sequence[str],
-    threads: int | None = None,
-    *,
-    memory_budget_mib: int | None = None,
-    scratch_dir: str | Path | None = None,
+    transcript: str | Sequence[str], threads: int | None = None, *,
+    memory_budget_mib: int | None = None, scratch_dir: str | Path | None = None,
     staging_dir: str | Path | None = None,
     destinations: Mapping[str, str | Path] | None = None,
 ) -> CsfGenerationEstimate:
-    """Count a transcript's workload and estimate a disk run's capacity.
-
-    A sequence of at least two single-list transcripts estimates their union
-    using the shared Peel layout and exact de-duplication strategy.
-
-    This enumerates, counts and schedules exactly as
-    :func:`generate_disk_outputs_from_transcript` would, but creates no scratch
-    directory and writes no output. Use it to decide whether a run fits before
-    committing to it: ``bytes`` holds the estimated size of each path and its
-    safety-margined requirement, and ``assumptions`` lists every ratio and
-    unmeasured quantity the estimate relies on.
-
-    The estimates are upper bounds, not promises. ``failure_recovery`` is
-    ``"restart"`` because scratch data is not bound to an input hash and a
-    format version, so a failed run cannot be resumed from it.
-
-    Passing ``scratch_dir``, ``staging_dir`` and ``destinations`` adds space
-    checks that share this model: requirements on one volume are added together
-    and each phase is compared by its maximum. ``destinations`` maps an artifact
-    kind to the path that will receive it — ``"csf_text"``, ``"csf_parquet"``,
-    ``"descriptor"``, ``"header"`` or ``"descriptor_metadata"`` — so the model
-    charges each volume the size that artifact actually takes. Each kind names
-    one artifact and may appear once.
-
-    The checks are *reported*, never enforced: an estimate exists to answer
-    whether a run would fit, so an insufficient or unmeasurable volume appears
-    as ``sufficient`` ``False`` or ``None``. Deciding what that means belongs to
-    the caller. :func:`generate_disk_outputs_from_transcript` refuses a volume it
-    measured and found too small, and refuses an unmeasurable one too unless
-    ``allow_unchecked_space`` is set.
-    """
-    from ._rcsfs import estimate_disk_generation as native_estimate
-
-    return native_estimate(
-        transcript=transcript if isinstance(transcript, str) else list(transcript),
-        threads=threads,
-        memory_budget_mib=memory_budget_mib,
-        scratch_dir=None if scratch_dir is None else str(scratch_dir),
-        staging_dir=None if staging_dir is None else str(staging_dir),
-        destinations=None
-        if destinations is None
-        else [(kind, str(path)) for kind, path in destinations.items()],
+    """Estimate the numerical generation pipeline without writing CSFs."""
+    return _native.estimate_disk_generation(
+        transcript if isinstance(transcript, str) else list(transcript),
+        threads, memory_budget_mib,
+        None if scratch_dir is None else str(scratch_dir),
+        None if staging_dir is None else str(staging_dir),
+        None if destinations is None else [(kind, str(path)) for kind, path in destinations.items()],
     )
 
 
-# ///////////////////////////////////////////////////////////////////////////////
-# Public API
-# ///////////////////////////////////////////////////////////////////////////////
+def select_interacting_csfs(
+    reference_csf: str | Path, candidate_csf: str | Path, output_csf: str | Path,
+    *, hamiltonian: InteractionHamiltonian = "dirac_coulomb",
+    method: InteractionMethod = "structural_upper_bound",
+    num_workers: int | None = None, overwrite: bool = False,
+) -> InteractionStats:
+    """Select a conservative interaction upper bound directly from descriptors."""
+    return _native.select_interacting_csfs(
+        str(reference_csf), str(candidate_csf), str(output_csf),
+        hamiltonian=hamiltonian, method=method,
+        num_workers=num_workers, overwrite=overwrite,
+    )
 
-__all__ = [  # noqa: RUF022 - grouped by public API area
-    # Version
-    "__version__",
-    # CSF file conversion
-    "read_csfs",
-    "convert_csfs",
-    "get_parquet_info",
-    # Batch descriptor generation
-    "generate_descriptors_from_parquet",
-    "restore_csfs_from_descriptors",
-    "seniority_to_printed_v",
-    "read_peel_subshells",
-    # Zero-first partition
-    "partition_csfs",
-    "split_csfs_by_active_spaces",
-    # J-block split
-    "split_csfs_by_j",
-    # Structural interaction selection
-    "select_interacting_csfs",
-    # CSF generation
-    "generate_csfgs",
-    "generate_csfs_from_transcript",
-    "generate_disk_outputs_from_transcript",
-    "estimate_disk_generation",
-    # Type definitions
-    "CsfHeaderInfo",
-    "CsfBlockInfo",
-    "CsfDataStats",
-    "CsfHeaderData",
-    "ConversionStats",
-    "ParquetInfo",
-    "DescriptorGenerationStats",
-    "CsfRestoreStats",
-    "PartitionStats",
-    "ActiveSpaceOutputStats",
-    "ActiveSpaceSplitStats",
-    "JBlockOutputStats",
-    "JBlockSplitStats",
-    "CsfGenerationStats",
-    "CsfgBlockStats",
-    "CsfgGenerationStats",
-    "CsfGenerationEstimate",
-    "CsfGenerationEstimateBytes",
-    "CsfGenerationPlanStats",
-    "CsfGenerationRecordDistribution",
-    "CsfGenerationResourceStats",
-    "CsfGenerationStageStats",
-    "InteractionHamiltonian",
-    "InteractionMethod",
-    "InteractionBlockStats",
-    "InteractionStats",
+
+__all__ = [
+    "__version__", "convert_csfs", "descriptor_header_path",
+    "estimate_disk_generation", "generate_csfgs", "generate_csfs_from_transcript",
+    "get_parquet_info", "match_csfs", "merge_csfs", "partition_csfs",
+    "read_csfs", "read_peel_subshells", "restore_csfs_from_descriptors",
+    "select_csfs", "select_interacting_csfs", "seniority_to_printed_v",
+    "split_csfs_by_active_spaces", "split_csfs_by_j",
+    "CsfDatasetStats", "CsfDatasetSplitStats", "CsfGenerationEstimate",
+    "CsfGenerationStats", "CsfHeaderData", "CsfRestoreStats",
+    "InteractionHamiltonian", "InteractionMethod", "InteractionStats",
+    "ParquetInfo", "PartitionStats",
 ]

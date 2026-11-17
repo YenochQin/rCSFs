@@ -9,6 +9,21 @@ type InteractionHamiltonian = Literal[
 type InteractionMethod = Literal["structural_upper_bound"]
 
 
+class CsfDatasetStats(TypedDict):
+    success: bool
+    output_file: str
+    header_file: str
+    record_count: int
+    block_count: int
+    block_lengths: list[int]
+    electron_count: int
+
+
+class CsfDatasetSplitStats(TypedDict):
+    success: bool
+    outputs: list[CsfDatasetStats]
+
+
 class CsfHeaderInfo(TypedDict):
     """Source header lines and total electrons, including the closed core."""
 
@@ -90,19 +105,21 @@ class CsfRestoreStats(TypedDict):
     output_bytes: int
 
 
-class PartitionStats(TypedDict):
-    """Statistics returned from a zero-first partition operation."""
+class PartitionBlockStats(TypedDict):
+    block_index: int
+    total_two_j: int
+    parity: int
+    zero_count: int
+    first_order_count: int
 
-    success: bool
-    zero_parquet: NotRequired[str]
-    full_parquet: NotRequired[str]
-    output_file: NotRequired[str]
-    block_count: NotRequired[int]
-    zero_csf_count: NotRequired[int]
-    full_csf_count: NotRequired[int]
-    output_csf_count: NotRequired[int]
-    first_order_count: NotRequired[int]
-    error: NotRequired[str]
+
+class PartitionStats(CsfDatasetStats):
+    """Reference-first descriptor dataset and its explicit per-block counts."""
+
+    zero_csf_count: int
+    full_csf_count: int
+    first_order_count: int
+    blocks: list[PartitionBlockStats]
 
 
 class ActiveSpaceOutputStats(TypedDict):

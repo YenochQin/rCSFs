@@ -1,92 +1,13 @@
 //! File commands call the same conversion, descriptor and selection algorithms as Python.
 use super::{arguments::Settings, files};
-use crate::{
-    csfs_conversion,
-    csfs_descriptor::{self, parquet_batch},
-    descriptor_schema::DescriptorVersion,
-};
+use crate::parquet_info;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-pub(super) fn convert(input: &Path, output: &Path, settings: &Settings) -> Result<Value> {
-    let stats = csfs_conversion::convert_csfs_to_parquet_parallel(
-        input,
-        output,
-        settings.positive("max_line_len")?.unwrap_or(256),
-        settings.positive("chunk_size")?.unwrap_or(3_000_000),
-        settings.positive("num_workers")?,
-    )
-    .map_err(anyhow::Error::from_boxed)?;
-    let mut result = serde_json::to_value(stats)?;
-    result["success"] = true.into();
-    result["input_file"] = json!(input);
-    result["output_file"] = json!(output);
-    result["header_file"] = json!(files::header(input, output)?);
-    Ok(result)
-}
-pub(super) fn sidecar(path: &Path, count: usize, shells: &[String]) -> Result<()> {
-    #[derive(serde::Serialize)]
-    struct Metadata<'a> {
-        format_version: u8,
-        encoding: &'a str,
-        descriptor_dtype: &'a str,
-        max_two_j: u16,
-        seniority_encoding: &'a str,
-        normalized: bool,
-        record_count: usize,
-        subshells: &'a [String],
-    }
-    fs::write(
-        path,
-        toml::to_string(&Metadata {
-            format_version: 2,
-            encoding: "parquet",
-            descriptor_dtype: crate::descriptor_schema::DESCRIPTOR_DTYPE,
-            max_two_j: crate::descriptor_schema::MAX_TWO_J,
-            seniority_encoding: crate::descriptor_schema::SENIORITY_ENCODING,
-            normalized: false,
-            record_count: count,
-            subshells: shells,
-        })?,
-    )?;
-    Ok(())
-}
-pub(super) fn descriptors(
-    input: &Path,
-    header: &Path,
-    output: &Path,
-    workers: Option<usize>,
-    compression: Option<&str>,
-) -> Result<Value> {
-    let shells = parquet_batch::read_peel_subshells_from_header(header)?;
-    let stats = parquet_batch::generate_descriptors_from_parquet_parallel(
-        input,
-        output,
-        shells.clone(),
-        workers,
-        DescriptorVersion::V2,
-        Some(header),
-        compression,
-    )?;
-    sidecar(
-        &output.with_extension("toml"),
-        stats.descriptor_count,
-        &shells,
-    )?;
-    Ok(
-        json!({"success": true, "input_file": input, "output_file": output,
-        "csf_count": stats.csf_count, "descriptor_count": stats.descriptor_count,
-        "orbital_count": stats.orbital_count, "descriptor_size": stats.descriptor_size,
-        "descriptor_version": stats.descriptor_version, "channels_per_subshell": stats.channels_per_subshell}),
-    )
-}
 pub(super) fn split_targets(
     settings: &Settings,
-) -> Result<Vec<crate::csf_active_space_split::ActiveSpaceTarget>> {
+) -> Result<Vec<crate::descriptor_operations::ActiveSpaceTarget>> {
     let input = settings.path("split_csfs_parquet")?;
     let prefix = settings.text("prefix", files::stem(&input)?)?;
     if settings.conf.is_none() {
@@ -137,9 +58,9 @@ pub(super) fn split_targets(
             );
             files::raw_name(conf, number.parse()?)
         } else {
-            format!("{prefix}{label}.c")
+            format!("{prefix}{label}_descriptors.parquet")
         };
-        targets.push(crate::csf_active_space_split::ActiveSpaceTarget {
+        targets.push(crate::descriptor_operations::ActiveSpaceTarget {
             maximum_orbitals,
             output: PathBuf::from(name),
         });
@@ -158,17 +79,26 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
         "convert" => {
             let input = s.path("input_csf")?;
             let output = s.output("output_parquet", None)?;
-            let header = files::header(&input, &output)?;
+            let header = crate::descriptor_dataset::header_path(&output)?;
             files::validate_set(
                 &[output.clone(), header.clone()],
                 std::slice::from_ref(&input),
                 s.config.as_deref(),
             )?;
             let stage = files::stage()?;
-            let staged = stage.path().join("csfs.parquet");
-            let mut stats = convert(&input, &staged, s)?;
+            let staged = stage
+                .path()
+                .join(output.file_name().context("missing output name")?);
+            let staged_header = stage
+                .path()
+                .join(header.file_name().context("missing header name")?);
+            let mut stats = serde_json::to_value(crate::descriptor_dataset::import_text(
+                &input,
+                &staged,
+                &staged_header,
+            )?)?;
             files::publish(
-                &[staged.clone(), files::header(&input, &staged)?],
+                &[staged, staged_header],
                 &[output.clone(), header.clone()],
                 true,
             )?;
@@ -177,36 +107,9 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
             Ok(stats)
         }
         "info" => Ok(serde_json::to_value(
-            csfs_conversion::read_parquet_info(&s.path("input_parquet")?)
+            parquet_info::read_parquet_info(&s.path("input_parquet")?)
                 .map_err(anyhow::Error::from_boxed)?,
         )?),
-        "gen-descriptors" => {
-            let input = s.path("input_parquet")?;
-            let header = s.path("header")?;
-            let output = s.output("output_parquet", None)?;
-            let metadata = output.with_extension("toml");
-            files::validate_set(
-                &[output.clone(), metadata.clone()],
-                &[input.clone(), header.clone()],
-                s.config.as_deref(),
-            )?;
-            let stage = files::stage()?;
-            let staged = stage.path().join("descriptors.parquet");
-            let mut stats = descriptors(
-                &input,
-                &header,
-                &staged,
-                s.positive("num_workers")?,
-                s.string("compression")?,
-            )?;
-            files::publish(
-                &[staged.clone(), staged.with_extension("toml")],
-                &[output.clone(), metadata],
-                true,
-            )?;
-            stats["output_file"] = json!(output);
-            Ok(stats)
-        }
         "restore-csfs" => {
             let input = s.path("descriptors")?;
             let header = s.path("header")?;
@@ -225,7 +128,7 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
             });
             let stage = files::stage()?;
             let staged = stage.path().join("restored.c");
-            let (count, bytes) = csfs_descriptor::restore_csfs_from_descriptors(
+            let (count, bytes) = crate::descriptor_dataset::restore_text(
                 &input,
                 &header,
                 &staged,
@@ -241,94 +144,117 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
             let full = s.path("full_csf")?;
             let output = s.output(
                 "output_csf",
-                Some(Path::new(&format!("{}_zf.csf", files::stem(&full)?))),
+                Some(Path::new("zero_first_descriptors.parquet")),
             )?;
+            let zh = crate::descriptor_dataset::header_path(&zero)?;
+            let fh = crate::descriptor_dataset::header_path(&full)?;
+            let header = crate::descriptor_dataset::header_path(&output)?;
             files::validate_set(
-                std::slice::from_ref(&output),
-                &[zero.clone(), full.clone()],
+                &[output.clone(), header.clone()],
+                &[zero.clone(), zh.clone(), full.clone(), fh.clone()],
                 s.config.as_deref(),
             )?;
             let stage = files::stage()?;
-            let zp = stage.path().join("zero/data.parquet");
-            let fp = stage.path().join("full/data.parquet");
-            fs::create_dir(zp.parent().unwrap())?;
-            fs::create_dir(fp.parent().unwrap())?;
-            convert(&zero, &zp, s)?;
-            convert(&full, &fp, s)?;
-            let staged = stage.path().join("result.c");
-            let stats = crate::csf_partition::partition_csfs(
-                &zp,
-                &files::header(&zero, &zp)?,
-                &fp,
-                &files::header(&full, &fp)?,
+            let staged = stage
+                .path()
+                .join(output.file_name().context("missing output name")?);
+            let staged_header = stage
+                .path()
+                .join(header.file_name().context("missing header name")?);
+            let stats = crate::descriptor_operations::zero_first(
+                &zero,
+                &zh,
+                &full,
+                &fh,
                 &staged,
-            )
-            .map_err(anyhow::Error::from_boxed)?;
-            files::publish(&[staged], std::slice::from_ref(&output), true)?;
-            let mut result = serde_json::to_value(stats)?;
-            result["success"] = true.into();
+                &staged_header,
+            )?;
+            let mut result = serde_json::to_value(&stats)?;
+            result["output_csf_count"] = json!(stats.dataset.record_count);
+            files::publish(
+                &[staged, staged_header],
+                &[output.clone(), header.clone()],
+                true,
+            )?;
             result["output_file"] = json!(output);
+            result["header_file"] = json!(header);
             Ok(result)
         }
         "csfs-split" => {
             let targets = split_targets(s)?;
+            let input = s.path("split_csfs_parquet")?;
+            let header = s.path("csfs_header")?;
             let stage = files::stage()?;
-            let staged: Vec<_> = targets
-                .iter()
-                .map(|t| crate::csf_active_space_split::ActiveSpaceTarget {
-                    output: stage.path().join(t.output.file_name().unwrap()),
-                    maximum_orbitals: t.maximum_orbitals.clone(),
-                })
-                .collect();
-            let mut stats = crate::csf_active_space_split::split_csfs_by_active_spaces(
-                &s.path("split_csfs_parquet")?,
-                &s.path("csfs_header")?,
-                &staged,
-            )?;
-            files::publish(
-                &staged.iter().map(|t| t.output.clone()).collect::<Vec<_>>(),
-                &targets.iter().map(|t| t.output.clone()).collect::<Vec<_>>(),
-                true,
-            )?;
-            for (stat, target) in stats.outputs.iter_mut().zip(&targets) {
-                stat.output_file = target.output.display().to_string();
+            let (mut sources, mut destinations, mut specs) = (Vec::new(), Vec::new(), Vec::new());
+            for target in targets {
+                let staged = stage
+                    .path()
+                    .join(target.output.file_name().context("missing output name")?);
+                let staged_header = crate::descriptor_dataset::header_path(&staged)?;
+                let output_header = crate::descriptor_dataset::header_path(&target.output)?;
+                specs.push((
+                    staged.clone(),
+                    staged_header.clone(),
+                    target.maximum_orbitals,
+                ));
+                sources.extend([staged, staged_header]);
+                destinations.extend([target.output, output_header]);
             }
-            let mut result = serde_json::to_value(stats)?;
-            result["success"] = true.into();
-            Ok(result)
+            files::validate_set(
+                &destinations,
+                &[input.clone(), header.clone()],
+                s.config.as_deref(),
+            )?;
+            let results =
+                crate::descriptor_operations::split_active_spaces(&input, &header, &specs)?;
+            let results = results
+                .into_iter()
+                .enumerate()
+                .map(|(index, stat)| {
+                    let mut result = serde_json::to_value(stat)?;
+                    result["output_file"] = json!(destinations[2 * index]);
+                    result["header_file"] = json!(destinations[2 * index + 1]);
+                    result["maximum_orbitals"] = json!(specs[index].2);
+                    Ok(result)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            files::publish(&sources, &destinations, true)?;
+            Ok(json!({"success": true, "outputs": results}))
         }
         "jsplit" => {
             let input = s.path("input_csf")?;
-            let prefix = s.text("prefix", files::stem(&input)?)?;
-            // Stage all outputs to validate them against config and inputs before publication.
+            let header = crate::descriptor_dataset::header_path(&input)?;
+            let stem = files::stem(&input)?.trim_end_matches("_descriptors");
+            let prefix = s.text("prefix", stem)?;
             let stage = files::stage()?;
-            let mut stats = crate::csf_block_split::split_csfs_by_j(
-                &input,
-                stage.path(),
-                prefix,
-                s.flag("copy_w", true)?,
-                false,
-            )?;
-            let mut sources = Vec::new();
-            let mut destinations = Vec::new();
-            for stat in &mut stats.outputs {
-                for name in std::iter::once(&mut stat.output_file).chain(stat.w_file.iter_mut()) {
-                    let src = PathBuf::from(&*name);
-                    let dst = PathBuf::from(src.file_name().context("missing split filename")?);
-                    sources.push(src);
-                    destinations.push(dst.clone());
-                    *name = dst.display().to_string();
+            let stats =
+                crate::descriptor_operations::split_blocks(&input, &header, stage.path(), prefix)?;
+            let (mut sources, mut destinations, mut results) = (Vec::new(), Vec::new(), Vec::new());
+            let wave = header.with_file_name(format!("{stem}.w"));
+            for stat in stats {
+                let source = PathBuf::from(&stat.output_file);
+                let source_header = PathBuf::from(&stat.header_file);
+                let output = PathBuf::from(source.file_name().context("missing split name")?);
+                let output_header = crate::descriptor_dataset::header_path(&output)?;
+                let mut result = serde_json::to_value(stat)?;
+                result["output_file"] = json!(output);
+                result["header_file"] = json!(output_header);
+                sources.extend([source, source_header]);
+                destinations.extend([output.clone(), output_header]);
+                if s.flag("copy_w", true)? && wave.exists() {
+                    let wave_output = output.with_file_name(format!(
+                        "{}.w",
+                        files::stem(&output)?.trim_end_matches("_descriptors")
+                    ));
+                    sources.push(wave.clone());
+                    destinations.push(wave_output.clone());
+                    result["w_file"] = json!(wave_output);
                 }
+                results.push(result);
             }
-            let mut inputs = vec![input.clone()];
-            if input.with_extension("w").exists() {
-                inputs.push(input.with_extension("w"));
-            }
-            files::validate_set(&destinations, &inputs, s.config.as_deref())?;
-            files::publish(&sources, &destinations, s.flag("overwrite", true)?)?;
-            let mut result = serde_json::to_value(stats)?;
-            result["success"] = true.into();
-            Ok(result)
+            files::validate_set(&destinations, &[input, header, wave], s.config.as_deref())?;
+            files::publish(&sources, &destinations, s.flag("overwrite", false)?)?;
+            Ok(json!({"success": true, "outputs": results}))
         }
         "interacting" => {
             use crate::{
@@ -337,7 +263,7 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
             };
             let reference = s.path("reference")?;
             let candidates = s.path("candidates")?;
-            let output = s.output("output", Some(Path::new("rcsf.out")))?;
+            let output = s.output("output", Some(Path::new("interacting_descriptors.parquet")))?;
             crate::reporting::warning!(
                 "STRUCTURAL UPPER BOUND ONLY: this is not an exact rcsfinteract90 angular-algebra calculation; false positives may be retained."
             );

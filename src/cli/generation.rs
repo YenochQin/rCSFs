@@ -1,5 +1,5 @@
 //! Generation orchestration; all CSF algorithms and capacity models remain shared.
-use super::{arguments::Settings, commands, files};
+use super::{arguments::Settings, files};
 use crate::configuration_generation::{
     self,
     csf_generation::{ArtifactKind, disk_csf_generation_pipeline as disk},
@@ -178,12 +178,10 @@ pub(super) fn configured_transcripts(s: &Settings) -> Result<Option<Vec<String>>
         }
         let mut result = Vec::new();
         for item in lists {
-            let mut model = super::config::canonicalize(
-                "csfsgenerate",
-                item.as_table()
-                    .context("each list must be a table")?
-                    .clone(),
-            )?;
+            let mut model = item
+                .as_table()
+                .context("each list must be a table")?
+                .clone();
             for key in model.keys() {
                 ensure!(
                     [
@@ -216,43 +214,17 @@ pub(super) fn configured_transcripts(s: &Settings) -> Result<Option<Vec<String>>
 }
 
 pub(super) struct Outputs {
-    pub csf: PathBuf,
-    pub parquet: PathBuf,
-    pub header: PathBuf,
     pub descriptor: PathBuf,
-    pub metadata: PathBuf,
-    pub write_parquet: bool,
-    pub write_descriptors: bool,
+    pub header: PathBuf,
 }
 impl Outputs {
     pub fn from_settings(s: &Settings) -> Result<Self> {
-        let csf = s.output("rcsfs_out", Some(Path::new("rcsf.out")))?;
-        let parquet = s.output("rcsfs_parquet", Some(&csf.with_extension("parquet")))?;
-        let header = files::header(&csf, &parquet)?;
-        let descriptor = s.output(
-            "descriptor",
-            Some(&csf.with_file_name(format!("{}_descriptors.parquet", files::stem(&csf)?))),
-        )?;
-        let write_descriptors = s.flag("generate_descriptors", false)?;
-        Ok(Self {
-            csf,
-            parquet,
-            header,
-            metadata: descriptor.with_extension("toml"),
-            descriptor,
-            write_parquet: s.flag("generate_parquet", false)? || write_descriptors,
-            write_descriptors,
-        })
+        let descriptor = s.output("output", Some(Path::new("rcsf_descriptors.parquet")))?;
+        let header = crate::descriptor_dataset::header_path(&descriptor)?;
+        Ok(Self { descriptor, header })
     }
     pub fn paths(&self) -> Vec<PathBuf> {
-        let mut result = vec![self.csf.clone()];
-        if self.write_parquet {
-            result.extend([self.parquet.clone(), self.header.clone()]);
-        }
-        if self.write_descriptors {
-            result.extend([self.descriptor.clone(), self.metadata.clone()]);
-        }
-        result
+        vec![self.descriptor.clone(), self.header.clone()]
     }
 }
 fn estimate_json(
@@ -290,20 +262,16 @@ pub(super) fn run(s: &Settings) -> Result<Json> {
             vec![text]
         }
     };
-    let multiple = transcripts.len() > 1;
-    let storage = s.text(
-        "generation_storage",
-        if multiple || outputs.write_parquet && s.config.is_some() {
-            "disk"
-        } else {
-            "memory"
-        },
-    )?;
+    let storage = s.text("generation_storage", "disk")?;
     ensure!(
-        !multiple || storage == "disk",
-        "multiple lists require disk generation"
+        matches!(storage, "disk" | "memory"),
+        "generation_storage must be disk or memory"
     );
     let disk_mode = storage == "disk";
+    ensure!(
+        transcripts.len() == 1 || disk_mode,
+        "multiple lists require disk generation"
+    );
     ensure!(
         s.positive("memory_budget_mib")?.is_none() || disk_mode,
         "memory_budget_mib requires disk generation"
@@ -318,25 +286,15 @@ pub(super) fn run(s: &Settings) -> Result<Json> {
     let estimate_options =
         GenerationOptions::from_api(threads, s.positive("memory_budget_mib")?, None)?;
     if disk_mode {
-        let mut destinations = vec![(outputs.csf.clone(), ArtifactKind::CsfText)];
-        if outputs.write_parquet {
-            destinations.extend([
-                (outputs.parquet.clone(), ArtifactKind::CsfParquet),
-                (outputs.header.clone(), ArtifactKind::Header),
-            ]);
-        }
-        if outputs.write_descriptors {
-            destinations.extend([
-                (outputs.descriptor.clone(), ArtifactKind::Descriptor),
-                (outputs.metadata.clone(), ArtifactKind::DescriptorMetadata),
-            ]);
-        }
         let layout = disk::SpaceLayout {
             scratch_dir: Some(PathBuf::from(".")),
             staging_dir: Some(PathBuf::from(".")),
-            destinations,
+            destinations: vec![
+                (outputs.descriptor.clone(), ArtifactKind::Descriptor),
+                (outputs.header.clone(), ArtifactKind::Header),
+            ],
         };
-        let (estimate, checks) = if multiple {
+        let (estimate, checks) = if transcripts.len() > 1 {
             disk::estimate_disk_generation_from_transcripts_with_layout(
                 &transcripts,
                 &estimate_options,
@@ -364,12 +322,18 @@ pub(super) fn run(s: &Settings) -> Result<Json> {
         }
     }
     let stage = files::stage()?;
-    let text_dir = stage.path().join("text");
-    fs::create_dir(&text_dir)?;
-    let csf = text_dir.join(outputs.csf.file_name().context("missing output filename")?);
-    let parquet = stage.path().join("csfs.parquet");
-    let header = files::header(&csf, &parquet)?;
-    let descriptor = stage.path().join("features.parquet");
+    let descriptor = stage.path().join(
+        outputs
+            .descriptor
+            .file_name()
+            .context("missing descriptor filename")?,
+    );
+    let header = stage.path().join(
+        outputs
+            .header
+            .file_name()
+            .context("missing header filename")?,
+    );
     let mut stats = if disk_mode {
         let options = GenerationOptions::from_api_with_space_policy(
             threads,
@@ -377,81 +341,33 @@ pub(super) fn run(s: &Settings) -> Result<Json> {
             Some(stage.path().join("scratch")),
             allow_unchecked,
         )?;
-        let stats = if multiple {
-            disk::generate_disk_outputs_from_transcripts_with_options(
-                &transcripts,
-                &csf,
-                &parquet,
-                &descriptor,
-                &header,
-                &options,
-            )?
-        } else {
-            disk::generate_disk_outputs_from_transcript_with_options(
-                &transcripts[0],
-                &csf,
-                &parquet,
-                &descriptor,
-                &header,
-                &options,
-            )?
-        };
+        let stats =
+            disk::generate_descriptor_dataset(&transcripts, &descriptor, &header, &options)?;
         let mut result = serde_json::to_value(&stats)?;
         result["record_count"] = json!(stats.unique_count);
-        result["descriptor_count"] = json!(stats.unique_count);
         result
     } else {
         let stats = configuration_generation::generate_csfs_from_transcript(
             &transcripts[0],
-            &csf,
+            &descriptor,
             threads,
         )?;
-        if outputs.write_parquet {
-            commands::convert(&csf, &parquet, s)?;
-        }
         json!({"record_count": stats.record_count, "block_count": stats.block_count, "blocks": stats.blocks, "unique_occupations": stats.unique_occupations, "output_bytes": stats.output_bytes})
     };
-    let mut sources = vec![csf.clone()];
-    if outputs.write_parquet {
-        sources.extend([parquet.clone(), header.clone()]);
-    }
-    if outputs.write_descriptors {
-        if disk_mode {
-            let shells =
-                crate::csfs_descriptor::parquet_batch::read_peel_subshells_from_header(&header)?;
-            commands::sidecar(
-                &descriptor.with_extension("toml"),
-                stats["record_count"]
-                    .as_u64()
-                    .context("missing record_count")? as usize,
-                &shells,
-            )?;
-        } else {
-            let desc =
-                commands::descriptors(&parquet, &header, &descriptor, threads, Some("zstd"))?;
-            stats["descriptor_count"] = desc["descriptor_count"].clone();
-        }
-        sources.extend([descriptor.clone(), descriptor.with_extension("toml")]);
-    } else {
-        stats.as_object_mut().unwrap().remove("descriptor_count");
-    }
-    files::publish(&sources, &outputs.paths(), true)?;
+    files::publish(&[descriptor, header], &outputs.paths(), true)?;
     stats["success"] = true.into();
-    stats["output_file"] = json!(outputs.csf);
-    if outputs.write_parquet {
-        stats["parquet_file"] = json!(outputs.parquet);
-        stats["header_file"] = json!(outputs.header);
-    }
-    if outputs.write_descriptors {
-        stats["descriptor_parquet_file"] = json!(outputs.descriptor);
-        stats["descriptor_metadata_file"] = json!(outputs.metadata);
-    }
+    stats["output_file"] = json!(outputs.descriptor);
+    stats["header_file"] = json!(outputs.header);
+    stats["descriptor_count"] = stats["record_count"].clone();
     if let Some(model) = interactive_model {
         let mut values = s.values.clone();
         values.extend(model);
         values.remove("transcript");
         values.insert("generation_storage".into(), storage.into());
-        values.insert("rcsfs_out".into(), outputs.csf.display().to_string().into());
+        values.insert(
+            "output".into(),
+            outputs.descriptor.display().to_string().into(),
+        );
         let mut root = Table::new();
         root.insert("csfsgenerate".into(), Value::Table(values));
         let source = stage.path().join("interactive.toml");

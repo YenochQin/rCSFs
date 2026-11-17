@@ -2,19 +2,19 @@
 pub mod atomic_output;
 pub mod complete_csf;
 pub mod configuration_generation;
-pub mod csf_active_space_split;
-pub mod csf_block_split;
 mod csf_output;
-pub mod csf_partition;
-pub mod csfs_conversion;
 pub mod csfs_descriptor;
-pub mod csfs_memory;
+pub mod descriptor_dataset;
+pub mod descriptor_operations;
+#[cfg(feature = "python")]
+mod descriptor_python;
 pub mod descriptor_schema;
 pub mod descriptor_transport;
 pub mod descriptor_v2;
 pub mod interaction;
 #[cfg(feature = "python")]
 mod interaction_py;
+pub mod parquet_info;
 mod reporting;
 pub mod seniority;
 #[cfg(windows)]

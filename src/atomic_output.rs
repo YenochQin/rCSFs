@@ -156,6 +156,86 @@ pub fn create_temporary_output(output_path: &Path) -> Result<(TemporaryOutput, F
     )
 }
 
+/// Reject an occupied destination, including a dangling symbolic link.
+pub(crate) fn ensure_new_output(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => anyhow::bail!("output dataset already exists: {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("cannot inspect output {}", path.display())),
+    }
+}
+
+/// The caller owns the staged files and keeps them until publication finishes.
+/// Hard links allow rollback to identify each file that this call installed.
+pub(crate) fn publish_staged_outputs(files: &[(&Path, &Path)], overwrite: bool) -> Result<()> {
+    let mut backups = Vec::with_capacity(files.len());
+    for &(source, destination) in files {
+        if !overwrite {
+            ensure_new_output(destination)?;
+            backups.push(None);
+            continue;
+        }
+        let metadata = match fs::symlink_metadata(destination) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                backups.push(None);
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        };
+        ensure!(
+            !metadata.is_dir(),
+            "output is a directory: {}",
+            destination.display()
+        );
+        let parent = destination
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let backup = tempfile::Builder::new()
+            .prefix(".rcsfs-publish-")
+            .tempdir_in(parent)?;
+        fs::hard_link(destination, backup.path().join("original"))?;
+        fs::hard_link(source, backup.path().join("incoming"))?;
+        backups.push(Some(backup));
+    }
+    for (index, &(source, destination)) in files.iter().enumerate() {
+        let install = match &backups[index] {
+            Some(backup) => replace_output(&backup.path().join("incoming"), destination),
+            None => fs::hard_link(source, destination).map_err(anyhow::Error::from),
+        };
+        if let Err(error) = install {
+            let mut error = error.context(format!("could not publish {}", destination.display()));
+            for (i, &(installed, path)) in files[..index].iter().enumerate().rev() {
+                let backup = backups[i].take();
+                let rollback = (|| -> Result<()> {
+                    // A competing replacement owns its path. Never unlink it.
+                    if !path.is_symlink() && same_file_identity(installed, path)? {
+                        if let Some(dir) = &backup {
+                            replace_output(&dir.path().join("original"), path)?;
+                        } else {
+                            fs::remove_file(path)?;
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Err(failure) = rollback {
+                    error = error.context(format!(
+                        "rollback of {} failed: {failure:#}",
+                        path.display()
+                    ));
+                    if let Some(dir) = backup {
+                        error =
+                            error.context(format!("original retained in {}", dir.keep().display()));
+                    }
+                }
+            }
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 /// Publish a completed temporary file as `output`.
 ///
 /// With `overwrite == false` this refuses an existing output atomically, so a
@@ -239,6 +319,29 @@ fn replace_output(temporary: &Path, output: &Path) -> Result<()> {
 #[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn late_publication_failure_rolls_back_new_paths_and_restores_previous_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("ready");
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        let third = dir.path().join("third");
+        let missing = dir.path().join("missing-source");
+        fs::write(&source, b"new").unwrap();
+        let files = [
+            (source.as_path(), first.as_path()),
+            (&source, &second),
+            (&missing, &third),
+        ];
+        assert!(publish_staged_outputs(&files, false).is_err());
+        assert!(!first.exists() && !second.exists() && !third.exists());
+        fs::write(&first, b"original").unwrap();
+        assert!(publish_staged_outputs(&files, true).is_err());
+        assert_eq!(fs::read(&first).unwrap(), b"original");
+        assert!(!second.exists() && !third.exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
 
     #[test]
     fn platform_file_identity_rejects_hardlinks_and_accepts_distinct_files() {

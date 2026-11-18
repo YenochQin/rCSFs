@@ -6,11 +6,8 @@
 //! finish should fail before the first large segment is written, not hours later
 //! when a filesystem fills up.
 //!
-//! Every ratio below was measured on the registered `B1`/`B2` transcripts and is
-//! recorded in `docs/benchmarks`. The model takes the *larger* end of each
-//! measured range, and states every unmeasured quantity as an explicit
-//! assumption rather than assuming zero, so the result is an upper bound with a
-//! visible derivation instead of a point prediction.
+//! Scratch framing uses the registered B1/B2 measurements. Published bytes
+//! depend on compression and include per-column schema and row-group overhead.
 
 use anyhow::{Context, Result};
 
@@ -35,12 +32,12 @@ const BUCKET_ROW_FRAMING_BYTES: u64 = 32;
 /// zero.
 const RECURSIVE_REPARTITION_LEVELS: u64 = 1;
 
-/// Descriptor Parquet bytes per V2 integer per row, in hundredths of a byte.
-///
-/// Measured 0.98 hundredths (61 columns) and 0.62 hundredths (226 columns), so
-/// one hundredth of a byte rounds both up while staying close to the measured
-/// values.
-const DESCRIPTOR_HUNDREDTHS_PER_INT_ROW: u64 = 1;
+// With 8192-row groups and Zstd, the registered e1/o1 Int8 outputs used
+// 0.044 and 0.043 bytes/cell including metadata. Also allow for short/wide
+// files, where column headers and Parquet footers dominate the payload.
+const DESCRIPTOR_HUNDREDTHS_PER_CELL: u64 = 5;
+const BYTES_PER_COLUMN_CHUNK: u64 = 256;
+const SCHEMA_BYTES_PER_COLUMN: u64 = 512;
 
 /// Allowance for the companion header TOML.
 const METADATA_BYTES: u64 = 64 * 1024;
@@ -204,10 +201,14 @@ pub(crate) fn estimate_capacity(
         .and_then(|bytes| bytes.checked_add(survivor_bitset_bytes))
         .context("scratch peak estimate overflow")?;
 
+    let row_groups = pre_deduplication_records.div_ceil(crate::csf_output::ROW_GROUP_ROWS as u64);
     let descriptor_bytes = pre_deduplication_records
-        .checked_mul(v2_columns)
-        .and_then(|int_rows| int_rows.checked_mul(DESCRIPTOR_HUNDREDTHS_PER_INT_ROW))
-        .and_then(|hundredths| hundredths.checked_div(100))
+        .checked_mul(DESCRIPTOR_HUNDREDTHS_PER_CELL)
+        .map(|hundredths| hundredths.div_ceil(100))
+        .and_then(|bytes| bytes.checked_add(row_groups.checked_mul(BYTES_PER_COLUMN_CHUNK)?))
+        .and_then(|bytes| bytes.checked_add(SCHEMA_BYTES_PER_COLUMN))
+        .and_then(|bytes| bytes.checked_mul(v2_columns))
+        .and_then(|bytes| bytes.checked_add(4096))
         .context("descriptor size estimate overflow")?;
     let staged_output_bytes = descriptor_bytes
         .checked_add(METADATA_BYTES)
@@ -244,9 +245,10 @@ pub(crate) fn estimate_capacity(
              repartition; it was never triggered by the registered inputs"
         ),
         format!(
-            "descriptor {DESCRIPTOR_HUNDREDTHS_PER_INT_ROW}/100 bytes per V2 integer per row; \
-             earlier Int32 measurements were 0.0098 (61 columns) and 0.0062 (226 columns) \
-             bytes; this compression estimate has not been rebenchmarked for Int8"
+            "Int8 descriptor estimate: {DESCRIPTOR_HUNDREDTHS_PER_CELL}/100 bytes per cell, \
+             {BYTES_PER_COLUMN_CHUNK} bytes per column per row group, \
+             {SCHEMA_BYTES_PER_COLUMN} bytes per schema column and 4096 fixed bytes; \
+             compressed sizes vary with the CSF data"
         ),
         "publishing copies the staged set to its destinations, so the staged set and the \
          published files exist at the same time"

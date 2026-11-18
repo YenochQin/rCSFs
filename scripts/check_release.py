@@ -27,6 +27,7 @@ from packaging.utils import parse_wheel_filename
 from packaging.version import Version
 
 NAME = "rcsfs"
+SMOKE_FIXTURE = "tests/fixtures/descriptor_multiblock.c"
 LICENSE = "MIT"
 WHEEL_ROOTS = {"rcsfs", "rcsfs.libs"}
 WHEEL_REQUIRED = {
@@ -52,7 +53,7 @@ SDIST_PATTERNS = {
     "README.zh-CN.md",
     "docs/releasing.md",
     "scripts/check_release.py",
-    "tests/fixtures/sample.csf",
+    SMOKE_FIXTURE,
 }
 SDIST_REQUIRED = {
     "pyproject.toml",
@@ -66,7 +67,7 @@ SDIST_REQUIRED = {
     "LICENSE",
     "licenses/GRASP-MIT.txt",
     "licenses/RUST-DEPENDENCIES.txt",
-    "tests/fixtures/sample.csf",
+    SMOKE_FIXTURE,
     "scripts/check_release.py",
 }
 
@@ -248,9 +249,7 @@ def smoke(unpacked: Path) -> None:
     assert Path(_rcsfs.__file__).is_relative_to(unpacked)
     metadata = distribution(NAME)
     assert rcsfs.__version__ == _rcsfs.__version__ == metadata.version
-    fixture = (
-        Path(__file__).resolve().parents[1] / "tests/fixtures/descriptor_multiblock.c"
-    )
+    fixture = Path(__file__).resolve().parents[1] / SMOKE_FIXTURE
     descriptors = unpacked / "descriptor.parquet"
     stats = rcsfs.convert_csfs(fixture, descriptors)
     assert stats["success"] and stats["record_count"] == 2

@@ -70,7 +70,7 @@ include = [
     { path = "build_backend.py", format = "sdist" },
     { path = "docs/releasing.md", format = "sdist" },
     { path = "scripts/check_release.py", format = "sdist" },
-    { path = "tests/fixtures/sample.csf", format = "sdist" },
+    { path = "tests/fixtures/descriptor_multiblock.c", format = "sdist" },
 ]
 exclude = ["**/__pycache__/**", "**/*.pyc"]
 

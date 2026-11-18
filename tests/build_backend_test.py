@@ -3,6 +3,7 @@
 import base64
 import csv
 import hashlib
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -10,6 +11,17 @@ import maturin
 import pytest
 
 import build_backend as backend
+from scripts import check_release
+
+
+def test_sdist_includes_required_smoke_input() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    includes = config["tool"]["maturin"]["include"]
+    assert {"path": check_release.SMOKE_FIXTURE, "format": "sdist"} in includes
+    assert check_release.SMOKE_FIXTURE in check_release.SDIST_REQUIRED
+    assert check_release.SMOKE_FIXTURE in check_release.SDIST_PATTERNS
+    assert (root / check_release.SMOKE_FIXTURE).is_file()
 
 
 def _wheels(

@@ -1,13 +1,66 @@
+import hashlib
 import tomllib
 from pathlib import Path
 from typing import get_type_hints
 
 import polars as pl
+import pyarrow.parquet as pq
 import pytest
 
-from rcsfs import CsfHeaderData, convert_csfs, read_csfs
+from rcsfs import (
+    CsfHeaderData,
+    convert_csfs,
+    descriptor_header_path,
+    merge_csfs,
+    read_csfs,
+    select_csfs,
+    select_interacting_csfs,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "descriptor_multiblock.c"
+
+
+def test_truncation_history_survives_read_selection_and_combination(
+    tmp_path: Path,
+) -> None:
+    pairs = [tmp_path / name for name in ("one.parquet", "two.parquet")]
+    for count, path in enumerate(pairs, start=1):
+        convert_csfs(FIXTURE, path)
+        header = descriptor_header_path(path)
+        raw = header.read_bytes().replace(
+            b"truncated_count = 0", f"truncated_count = {count}".encode()
+        )
+        raw = raw.replace(b"total_lines = 6", b"total_lines = 7")
+        header.write_bytes(raw)
+        table = pq.read_table(path)
+        metadata = pq.read_metadata(path).metadata.copy()
+        metadata.pop(b"ARROW:schema", None)
+        metadata[b"source_header_sha256"] = hashlib.sha256(raw).hexdigest().encode()
+        pq.write_table(table.replace_schema_metadata(metadata), path)
+        assert read_csfs(path)[0] == tomllib.loads(raw.decode())
+
+    selected = tmp_path / "selected.parquet"
+    select_csfs(pairs[0], selected, [0])
+    merged = tmp_path / "merged.parquet"
+    merge_csfs(pairs, merged)
+    interacting = tmp_path / "interacting.parquet"
+    select_interacting_csfs(*pairs, interacting)
+    for path, count in [(selected, 1), (merged, 3), (interacting, 3)]:
+        stored = tomllib.loads(descriptor_header_path(path).read_text(encoding="utf-8"))
+        assert stored["conversion_stats"]["truncated_count"] == count
+        assert read_csfs(path)[0] == stored
+
+
+@pytest.mark.parametrize("fraction", ["3/4", "3/0", "3/x"])
+def test_convert_rejects_invalid_subshell_j_denominator(
+    tmp_path: Path, fraction: str
+) -> None:
+    source = tmp_path / "invalid.c"
+    source.write_bytes(FIXTURE.read_bytes().replace(b"3/2", fraction.encode()))
+    output = tmp_path / "invalid.parquet"
+    with pytest.raises(OSError, match="denominator"):
+        convert_csfs(source, output)
+    assert list(tmp_path.iterdir()) == [source]
 
 
 def test_read_csfs_runtime_return_annotation_resolves() -> None:

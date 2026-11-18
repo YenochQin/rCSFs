@@ -76,22 +76,8 @@ pub(crate) mod parquet_batch {
 pub fn j_to_double_j(j_str: &str) -> Result<i32> {
     let trimmed = j_str.trim();
 
-    // Handle fractional J values (e.g., "3/2" -> 3)
-    if let Some(slash_pos) = trimmed.find('/') {
-        let numerator: i32 = trimmed[..slash_pos]
-            .parse()
-            .with_context(|| format!("Invalid J value numerator: {}", trimmed))?;
-        return Ok(numerator);
-    }
-
-    // Handle integer J values (e.g., "2" -> 4, "4-" -> 8)
-    // Remove trailing parity indicator if present
-    let cleaned = trimmed.trim_end_matches('-').trim_end_matches('+');
-    cleaned
-        .parse::<i32>()
-        .with_context(|| format!("Invalid J value: {}", trimmed))?
-        .checked_mul(2)
-        .with_context(|| format!("Doubled J overflow: {trimmed}"))
+    let value = trimmed.strip_suffix(['-', '+']).unwrap_or(trimmed);
+    crate::complete_csf::parse_two_j(value).map(i32::from)
 }
 
 fn fixed_width_field(line: &str, start: usize, width: usize) -> &str {

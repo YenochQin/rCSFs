@@ -6,7 +6,7 @@
 //! The [`InteractionStats::exact`] flag is consequently always `false`.
 
 use crate::atomic_output::{
-    ensure_distinct_inputs, ensure_output_does_not_alias_input, publish_temporary_output,
+    ensure_distinct_inputs, ensure_output_does_not_alias_input, publish_staged_outputs,
 };
 use crate::complete_csf::{CompleteCsfFile, CsfRecord, Parity, SymmetryBlock};
 use anyhow::{Context, Result, ensure};
@@ -195,8 +195,13 @@ pub fn select_interacting_csfs(
     ensure_output_does_not_alias_input(output_path, reference_path, "reference")?;
     ensure_output_does_not_alias_input(output_path, candidates_path, "candidate")?;
 
-    let reference = crate::descriptor_dataset::read_complete(reference_path)?;
-    let candidates = crate::descriptor_dataset::read_complete(candidates_path)?;
+    let (reference, reference_header) = crate::descriptor_dataset::read_complete(reference_path)?;
+    let (candidates, mut candidate_header) =
+        crate::descriptor_dataset::read_complete(candidates_path)?;
+    candidate_header.add_truncations_from(&reference_header)?;
+    // Every output begins with the reference records. Candidates with a
+    // different electron count are rejected by the interaction selection.
+    candidate_header.electron_count = reference_header.electron_count;
     validate_inputs(&reference, &candidates)?;
 
     let shell_count = candidates.subshells.len();
@@ -355,10 +360,15 @@ pub fn select_interacting_csfs(
     let staged = stage
         .path()
         .join(output_path.file_name().context("missing output filename")?);
-    let stats = crate::descriptor_dataset::write_complete(&output, &staged)?;
+    let stats = crate::descriptor_dataset::write_complete(&output, candidate_header, &staged)?;
     let output_bytes = fs::metadata(&staged)?.len();
-    publish_temporary_output(Path::new(&stats.header_file), &output_header, overwrite)?;
-    publish_temporary_output(&staged, output_path, overwrite)?;
+    publish_staged_outputs(
+        &[
+            (Path::new(&stats.header_file), &output_header),
+            (&staged, output_path),
+        ],
+        overwrite,
+    )?;
 
     let reference_count = checked_sum(block_stats.iter().map(|block| block.reference_count))?;
     let candidate_count = checked_sum(block_stats.iter().map(|block| block.candidate_count))?;

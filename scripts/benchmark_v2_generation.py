@@ -1,8 +1,7 @@
 """Measure the V2 disk-generation stages for a supplied transcript.
 
-This is an explicit benchmark, not a pytest test. It only uses the public
-Python API and a private temporary output set, so it does not require a GRASP
-checkout, an executable or a private dataset.
+The benchmark calls the generation binding with a private scratch directory.
+It needs only the local extension and a transcript.
 
 Measurement contract:
 
@@ -57,7 +56,7 @@ from benchmark_support import (
     verify_registered_transcript,
 )
 
-from rcsfs import generate_csfs_from_transcript
+from rcsfs import _rcsfs
 
 REPORT_SCHEMA = "rcsfs-v2-generation-benchmark/1"
 
@@ -168,19 +167,23 @@ class ScratchMonitor(threading.Thread):
                 files += 1
         return total, files
 
+    def _record_sample(self) -> None:
+        total, files = self._sample()
+        self.samples += 1
+        self.peak_bytes = max(self.peak_bytes, total)
+        self.peak_files = max(self.peak_files, files)
+        self.final_bytes = total
+        self.final_files = files
+
     def run(self) -> None:
         while not self._stop.is_set():
-            total, files = self._sample()
-            self.samples += 1
-            self.peak_bytes = max(self.peak_bytes, total)
-            self.peak_files = max(self.peak_files, files)
-            self.final_bytes = total
-            self.final_files = files
+            self._record_sample()
             self._stop.wait(self.interval)
+        self._record_sample()
 
     def stop(self) -> None:
         self._stop.set()
-        self.join(timeout=10.0)
+        self.join()
 
 
 def _measure_outputs(root: Path, paths: dict[str, Path]) -> dict[str, Any]:
@@ -213,7 +216,8 @@ def _run_once_in_process(
         "descriptor": root / "output_descriptors.parquet",
         "header": root / "output_header.toml",
     }
-    monitor = ScratchMonitor(root)
+    scratch = root / "scratch"
+    monitor = ScratchMonitor(scratch)
     io_before = _process_io_bytes()
     result: dict[str, Any] = {
         "threads": threads,
@@ -231,11 +235,12 @@ def _run_once_in_process(
         # is a generation measurement rather than a filesystem measurement.
         started = time.perf_counter()
         try:
-            stats = generate_csfs_from_transcript(
+            stats = _rcsfs.generate_csfs_from_transcript(
                 transcript,
-                paths["descriptor"],
+                str(paths["descriptor"]),
                 threads=threads,
                 memory_budget_mib=memory_budget_mib,
+                scratch_dir=str(scratch),
             )
         except (OSError, RuntimeError) as error:
             # A budget or space rejection is a result the matrix is meant to
@@ -243,7 +248,6 @@ def _run_once_in_process(
             message = str(error)
             if not any(expected in message for expected in _EXPECTED_REJECTIONS):
                 raise
-            monitor.stop()
             result["wall_seconds"] = time.perf_counter() - started
             result["success"] = False
             result["outcome"] = "rejected"

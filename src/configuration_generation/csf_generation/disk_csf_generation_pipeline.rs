@@ -459,11 +459,18 @@ fn generate_disk_outputs_from_requests(
     let merged =
         merge_v2_deduplicated_segments(&deduplicated, descriptor_output, Some(header_output))?;
     let descriptor_bytes = fs::metadata(descriptor_output)?.len();
+    let merge_input_bytes = deduplicated
+        .survivor_bitsets
+        .values()
+        .try_fold(generated_bytes, |bytes, bitset| {
+            bytes.checked_add(u64::try_from(bitset.bit_len).ok()?.div_ceil(8))
+        })
+        .context("final merge input byte count overflow")?;
     stage_stats.push(timer.finish(
         "final_descriptor_merge",
         deduplicated.unique_count,
         merged.record_count,
-        generated_bytes + dedup_bytes,
+        merge_input_bytes,
         descriptor_bytes,
     ));
     crate::reporting::detail!("Generation complete!");

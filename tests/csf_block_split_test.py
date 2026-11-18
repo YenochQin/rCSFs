@@ -46,6 +46,26 @@ def test_existing_companion_preserved_without_partial_publication(
     assert sentinel.read_bytes() == b"sentinel"
 
 
+def test_cli_later_header_conflict_preserves_all_destinations(
+    dataset: Path, tmp_path: Path
+) -> None:
+    (tmp_path / "basis.w").write_bytes(b"orbitals")
+    sentinel = tmp_path / "slice_b001_2_odd_header.toml"
+    sentinel.write_bytes(b"previous header")
+    args = ["jsplit", str(dataset), "--prefix", "slice", "--json"]
+    failed = cli.run(args, cwd=tmp_path)
+    assert failed.returncode != 0
+    assert "already exists" in failed.stderr
+    assert list(tmp_path.glob("slice*")) == [sentinel]
+    assert sentinel.read_bytes() == b"previous header"
+    sentinel.unlink()
+    result = cli.run(args, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    for item in json.loads(result.stdout)["outputs"]:
+        assert read_csfs(tmp_path / item["output_file"])[1].height == 1
+        assert (tmp_path / item["w_file"]).read_bytes() == b"orbitals"
+
+
 @pytest.mark.parametrize("copy", [False, True])
 def test_cli_jsplit_config_copies_wavefunction_only_when_requested(
     dataset: Path, tmp_path: Path, copy: bool

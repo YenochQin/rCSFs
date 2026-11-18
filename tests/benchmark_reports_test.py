@@ -482,8 +482,44 @@ def test_each_benchmark_measurement_has_an_isolated_rss_scope(tmp_path: Path) ->
     )
     measurement = document["measurements"][0]
     assert measurement["rss_scope"] == "single_measurement_process"
+    stages = {s["name"]: s for s in measurement["stage_stats"]}
+    # This strategy leaves only the original segments and survivor bitsets.
+    assert (
+        measurement["scratch_final_bytes"]
+        == stages["final_descriptor_merge"]["input_bytes"]
+        > 0
+    )
+    assert measurement["scratch_peak_bytes"] >= measurement["scratch_final_bytes"]
     for artifact in ("descriptor", "header"):
         assert re.fullmatch(r"[0-9a-f]{64}", measurement[f"{artifact}_sha256"])
+
+
+def test_benchmark_times_scratch_deletion_after_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Simulate an expensive deletion without a timing threshold or a large file.
+    elapsed = 0.0
+    rmtree = generation_benchmark.shutil.rmtree
+
+    def remove(root: Path, *, ignore_errors: bool) -> None:
+        nonlocal elapsed
+        assert any((root / "scratch").rglob("*.arrow"))
+        elapsed += 5.0
+        rmtree(root, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(generation_benchmark.time, "perf_counter", lambda: elapsed)
+    monkeypatch.setattr(generation_benchmark.shutil, "rmtree", remove)
+    result = generation_benchmark._run_once_in_process(
+        "* ! Orbital order\n0\n1s(2,*)\n\n1s\n0,0\n0\nn\n",
+        1,
+        None,
+        "none",
+        "verified_unique",
+        tmp_path,
+    )
+    assert result["cleanup_seconds"] == 5.0
+    assert result["wall_seconds"] == 0.0
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize(

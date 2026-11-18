@@ -1,6 +1,6 @@
 //! Validate destinations and publish completed artifacts without truncating inputs.
 use crate::atomic_output::{
-    create_temporary_output, ensure_distinct_inputs, publish_temporary_output,
+    create_temporary_output, ensure_distinct_inputs, publish_staged_outputs,
 };
 use anyhow::{Context, Result, ensure};
 use std::{
@@ -74,26 +74,21 @@ pub(super) fn publish(
         sources.len() == destinations.len(),
         "publication source/destination count mismatch"
     );
-    let mut published = Vec::new();
+    let mut staged = Vec::with_capacity(sources.len());
     for (source, destination) in sources.iter().zip(destinations) {
-        let result = (|| -> Result<()> {
-            // A target-side temporary file also handles cross-filesystem staging.
-            let (guard, mut output) = create_temporary_output(destination)?;
-            io::copy(&mut fs::File::open(source)?, &mut output)?;
-            output.flush()?;
-            output.sync_all()?;
-            drop(output);
-            publish_temporary_output(guard.path(), destination, overwrite)
-        })();
-        result.with_context(|| {
-            format!(
-                "could not publish {}; already published: {published:?}",
-                destination.display()
-            )
-        })?;
-        published.push(destination.display().to_string());
+        // Copy before publishing anything, including cross-filesystem inputs.
+        let (guard, mut output) = create_temporary_output(destination)?;
+        io::copy(&mut fs::File::open(source)?, &mut output)?;
+        output.flush()?;
+        output.sync_all()?;
+        staged.push(guard);
     }
-    Ok(())
+    let files = staged
+        .iter()
+        .zip(destinations)
+        .map(|(file, path)| (file.path(), path.as_path()))
+        .collect::<Vec<_>>();
+    publish_staged_outputs(&files, overwrite)
 }
 pub(super) fn stage() -> Result<tempfile::TempDir> {
     Ok(tempfile::Builder::new()

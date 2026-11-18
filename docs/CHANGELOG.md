@@ -6,6 +6,10 @@
 
 ## [3.1.0] — Unreleased
 
+- 保留来源截断行数，拒绝非法角动量分母，支持筛选带空 peel 占据的闭核记录。
+  生成及拆分遇到发布冲突时回滚本次文件。校准 Int8 输出容量估算，修正最终合并的
+  输入字节数及基准的 scratch 和清理耗时统计。源码包包含发布自检使用的多块 CSF 夹具。
+
 - Generate a bound V2 descriptor Parquet and header TOML by default. Disk
   generation writes the descriptor pair directly and estimates its space.
 - Read, select, merge, match, partition and split CSFs through numerical

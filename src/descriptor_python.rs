@@ -123,8 +123,7 @@ fn read_csfs_arrow(
                 )));
                 arrays.push(Arc::new(array));
             }
-            let lengths = reader.header.block_lengths.clone();
-            let header = reader.header.finalized(&lengths)?.document;
+            let header = reader.header.read_metadata()?;
             Ok((
                 header,
                 RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)?,
@@ -327,7 +326,8 @@ fn split_csfs_by_j(
 }
 
 #[pyfunction]
-#[pyo3(signature = (transcript, output_path, threads=None, storage="disk", memory_budget_mib=None, allow_unchecked_space=false))]
+#[pyo3(signature = (transcript, output_path, threads=None, storage="disk", memory_budget_mib=None, allow_unchecked_space=false, *, scratch_dir=None))]
+#[allow(clippy::too_many_arguments)]
 fn generate_csfs_from_transcript(
     py: Python<'_>,
     transcript: &Bound<'_, PyAny>,
@@ -336,6 +336,7 @@ fn generate_csfs_from_transcript(
     storage: &str,
     memory_budget_mib: Option<usize>,
     allow_unchecked_space: bool,
+    scratch_dir: Option<PathBuf>,
 ) -> PyResult<Py<PyAny>> {
     use crate::configuration_generation::{
         self, csf_generation::disk_csf_generation_pipeline as disk,
@@ -350,13 +351,16 @@ fn generate_csfs_from_transcript(
     let header = companion(&output_path, None)?;
     let result = py.detach(|| -> anyhow::Result<_> {
         anyhow::ensure!(threads != Some(0), "threads must be positive");
-        anyhow::ensure!(!output.exists() && !header.exists(), "output dataset already exists");
+        crate::atomic_output::ensure_new_output(output)?;
+        crate::atomic_output::ensure_new_output(&header)?;
         let parent = output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
         let work = tempfile::Builder::new().prefix(".rcsfs-generation-").tempdir_in(parent)?;
         let staged = work.path().join(output.file_name().ok_or_else(|| anyhow::anyhow!("missing output filename"))?);
         let staged_header = dataset::header_path(&staged)?;
         let result = if storage == "disk" {
-            let options = GenerationOptions::from_api_with_space_policy(threads, memory_budget_mib, Some(work.path().join("scratch")), allow_unchecked_space)?;
+            // The benchmark owns an explicit scratch path so it can time its removal.
+            let scratch = scratch_dir.unwrap_or_else(|| work.path().join("scratch"));
+            let options = GenerationOptions::from_api_with_space_policy(threads, memory_budget_mib, Some(scratch), allow_unchecked_space)?;
             let stats = disk::generate_descriptor_dataset(&texts, &staged, &staged_header, &options)?;
             json!({
                 "success": true, "output_file": output_path, "header_file": header,
@@ -369,12 +373,11 @@ fn generate_csfs_from_transcript(
                 "plan_stats": stats.plan_stats,
             })
         } else {
-            anyhow::ensure!(storage == "memory" && texts.len() == 1 && memory_budget_mib.is_none(), "memory generation requires one transcript and no disk memory budget");
+            anyhow::ensure!(storage == "memory" && texts.len() == 1 && memory_budget_mib.is_none() && scratch_dir.is_none(), "memory generation requires one transcript and no disk memory budget or scratch directory");
             let stats = configuration_generation::generate_csfs_from_transcript(&texts[0], &staged, threads)?;
             json!({"success":true,"output_file":output_path,"header_file":header,"record_count":stats.record_count,"descriptor_count":stats.record_count,"block_count":stats.block_count,"blocks":stats.blocks,"unique_occupations":stats.unique_occupations})
         };
-        crate::atomic_output::publish_temporary_output(&staged_header, &header, false)?;
-        crate::atomic_output::publish_temporary_output(&staged, output, false)?;
+        crate::atomic_output::publish_staged_outputs(&[(&staged_header, &header), (&staged, output)], false)?;
         Ok(result)
     }).map_err(io_error)?;
     python_value(py, &result)

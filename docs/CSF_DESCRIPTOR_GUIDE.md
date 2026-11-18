@@ -70,7 +70,7 @@ header, frame = read_csfs(
 )
 ```
 
-`coupling_signature` is a non-null `List(Int8)` derived from the validated V2
+`coupling_signature` is a non-null `List(Int32)` derived from the validated V2
 row. Each occupied peel subshell contributes its printed coupling, falling back
 to printed subshell J or zero; the last entry is total doubled J. Unoccupied
 positions are omitted. Compare signatures within `block_id` to keep parity
@@ -81,6 +81,9 @@ identity comparison use the complete V2 row.
 Signature parsing defaults off. When enabled, malformed quantum fields fail
 explicitly. Calculation-quality callers should also require
 `header["conversion_stats"]["truncated_count"] == 0`.
+Derived datasets retain the source truncation count. Operations combining
+multiple input datasets sum their reported counts. These counts describe the
+input histories, including when a selection keeps only a subset of the rows.
 
 `CSFDescriptorGenerator` is an internal Rust type, not a Python class. See
 [the public API](../README.md#public-python-api) for supported Python functions.

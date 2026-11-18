@@ -343,6 +343,8 @@ pub(super) fn run(s: &Settings) -> Result<Json> {
         )?;
         let stats =
             disk::generate_descriptor_dataset(&transcripts, &descriptor, &header, &options)?;
+        // The capacity model releases scratch before staging the published copies.
+        fs::remove_dir_all(stage.path().join("scratch"))?;
         let mut result = serde_json::to_value(&stats)?;
         result["record_count"] = json!(stats.unique_count);
         result

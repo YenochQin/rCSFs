@@ -148,8 +148,7 @@ that happen to be the same across lists. No list inherits values from another.
 ```toml
 [csfsgenerate]
 inactive_core = 0
-rcsfs_out = "combined.c"
-generate_descriptors = true
+output = "combined_descriptors.parquet"
 
 [[csfsgenerate.lists]]
 reference_configuration = ["1s(2,*)"]
@@ -166,8 +165,8 @@ j_max = 0
 excitations = -2
 ```
 
-Run `rcsfs csfsgenerate --config input.toml`. Multi-list runs use the disk
-pipeline even when only the CSF text is requested. They generate lists in TOML
+Run `rcsfs csfsgenerate --config input.toml`. Multi-list runs write the
+descriptor/header pair through the disk pipeline. They generate lists in TOML
 order, use one union Peel table, and remove duplicate complete CSF records by
 exact V2-row comparison. Publication starts only after every list succeeds.
 Lists must have the same closed core
@@ -442,24 +441,20 @@ publication. Each volume is required to hold the larger of those two phases. The
 generation call checks the scratch and staging volumes; the CLI passes its final
 destinations to the estimate so one model covers all of them, since publication
 may copy the staged set into paths only the CLI knows. Each artifact is named by
-kind (`csf_text`, `csf_parquet`, `descriptor`, `header`, `descriptor_metadata`),
-so the header and the descriptor sidecar are charged to their own volumes even
+kind (`descriptor` or `header`),
+so the two files are charged to their own volumes even
 when those differ. A run that cannot fit is
 refused while the scratch directory is still empty.
 
-A volume the platform cannot measure fails the run rather than being skipped:
-`allow_unchecked_space=True` (CLI `--allow-unchecked-space`) is the explicit way
-to accept an unchecked pre-flight. This platform check is the only automatic
-probe; there is no Windows implementation, so a Windows run must pass the
-opt-out or run where free space can be measured.
+The preflight queries free space on Unix and Windows. If the query is
+unavailable, `allow_unchecked_space=True` (CLI `--allow-unchecked-space`)
+explicitly permits the run to proceed.
 
-Every ratio comes from the registered B1/B2 runs and is reported in the result's
-`assumptions`, together with the quantities that were never measured — most
-importantly one full recursive repartition, which is assumed rather than assumed
-away. The estimate is therefore an upper bound with a visible derivation: on B2
-it lands 1.01x-1.62x above the measured run, the larger end being that recursive
-allowance. Ratios and their measured ranges are registered in
-[docs/benchmarks](benchmarks/README.md).
+The Int8 descriptor estimate uses the e1_cc1as1 and o1_cc1as1 generation
+fixtures and includes allowances for the column schema and each Parquet row
+group. Compression varies with the input. The report lists the assumptions for
+each artifact. Historical scratch measurements are in the
+[benchmark reports](benchmarks/README.md).
 
 `estimate_disk_generation` performs the same enumeration, counting and
 scheduling without creating scratch or writing anything, charges the same

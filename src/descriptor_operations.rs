@@ -18,6 +18,9 @@ pub struct ActiveSpaceTarget {
 /// Merge orbital sequences without changing any input's relative coupling order.
 fn common_header(headers: &[DatasetHeader]) -> Result<DatasetHeader> {
     let mut header = headers.first().context("no input datasets")?.clone();
+    for other in &headers[1..] {
+        header.add_truncations_from(other)?;
+    }
     let mut labels = Vec::<String>::new();
     let mut edges = HashSet::<(String, String)>::new();
     for source in headers {
@@ -335,7 +338,7 @@ pub fn split_active_spaces(
         .into_iter()
         .map(|(_, w)| w.prepare())
         .collect::<Result<Vec<_>>>()?;
-    ready.into_iter().map(|r| r.publish()).collect()
+    crate::descriptor_dataset::PreparedDataset::publish_all(ready)
 }
 
 /// Split explicit source blocks; duplicate J/parity blocks get distinct names.
@@ -379,5 +382,5 @@ pub fn split_blocks(
     if let Some(writer) = current {
         results.push(writer.prepare()?);
     }
-    results.into_iter().map(|r| r.publish()).collect()
+    crate::descriptor_dataset::PreparedDataset::publish_all(results)
 }

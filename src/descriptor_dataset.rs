@@ -65,7 +65,42 @@ pub struct DatasetHeader {
     pub electron_count: Option<usize>,
 }
 
+/// Legacy bound headers may omit the conversion statistics.
+fn truncated_count(document: &toml::Value) -> Result<i64> {
+    let Some(stats) = document.get("conversion_stats") else {
+        return Ok(0);
+    };
+    let stats = stats.as_table().context("invalid conversion_stats table")?;
+    stats
+        .get("truncated_count")
+        .map(|v| {
+            v.as_integer()
+                .filter(|n| *n >= 0)
+                .context("invalid truncated_count")
+        })
+        .transpose()
+        .map(|count| count.unwrap_or(0))
+}
+
 impl DatasetHeader {
+    pub(crate) fn add_truncations_from(&mut self, source: &Self) -> Result<()> {
+        let added = truncated_count(&source.document)?;
+        if added != 0 {
+            let total = truncated_count(&self.document)?
+                .checked_add(added)
+                .context("source truncated_count overflow")?;
+            self.document
+                .as_table_mut()
+                .context("invalid header document")?
+                .entry("conversion_stats")
+                .or_insert_with(|| toml::Table::new().into())
+                .as_table_mut()
+                .context("invalid conversion_stats table")?
+                .insert("truncated_count".into(), total.into());
+        }
+        Ok(())
+    }
+
     pub fn from_lines(lines: [String; 5]) -> Result<Self> {
         let mut document = toml::Table::new();
         let mut info = toml::Table::new();
@@ -177,6 +212,7 @@ impl DatasetHeader {
                     .context("invalid electron_count")
             })
             .transpose()?;
+        truncated_count(&document)?;
         Ok(Self {
             document,
             lines,
@@ -285,6 +321,7 @@ impl DatasetHeader {
         }
         self.block_lengths = lengths.to_vec();
         let count = self.row_count();
+        let truncated = truncated_count(&self.document)?;
         let root = self
             .document
             .as_table_mut()
@@ -323,9 +360,30 @@ impl DatasetHeader {
             "total_lines".into(),
             i64::try_from(count.checked_mul(3).context("line count overflow")?)?.into(),
         );
-        stats.insert("truncated_count".into(), 0.into());
+        stats.insert("truncated_count".into(), truncated.into());
         root.insert("conversion_stats".into(), stats.into());
         Ok(self)
+    }
+
+    #[cfg(feature = "python")]
+    pub(crate) fn read_metadata(self) -> Result<toml::Value> {
+        // Older bound headers can omit inferred values. Fill those fields while
+        // preserving the source's conversion history, including its line count.
+        let mut document = self.document.clone();
+        let lengths = self.block_lengths.clone();
+        let defaults = self.finalized(&lengths)?.document;
+        let root = document.as_table_mut().context("invalid header document")?;
+        for name in ["header_info", "block_info", "conversion_stats"] {
+            let section = root
+                .entry(name)
+                .or_insert_with(|| toml::Table::new().into())
+                .as_table_mut()
+                .with_context(|| format!("invalid {name} table"))?;
+            for (key, value) in defaults[name].as_table().expect("finalized table") {
+                section.entry(key).or_insert_with(|| value.clone());
+            }
+        }
+        Ok(document)
     }
 }
 
@@ -497,26 +555,21 @@ pub(crate) struct PreparedDataset {
 
 impl PreparedDataset {
     pub(crate) fn publish(self) -> Result<DatasetStats> {
-        // Keep the staging link alive so we can identify our header if a
-        // concurrent writer takes the descriptor destination during publish.
-        fs::hard_link(self.header_temp.path(), &self.header_path)
-            .with_context(|| format!("failed to publish header {}", self.header_path.display()))?;
-        if let Err(error) =
-            publish_temporary_output(self.output_temp.path(), &self.output_path, false)
-        {
-            if crate::atomic_output::same_file_identity(self.header_temp.path(), &self.header_path)
-                .unwrap_or(false)
-            {
-                fs::remove_file(&self.header_path).with_context(|| {
-                    format!(
-                        "{error:#}; could not remove staged header {}",
-                        self.header_path.display()
-                    )
-                })?;
-            }
-            return Err(error);
-        }
+        crate::atomic_output::publish_staged_outputs(&self.files(), false)?;
         Ok(self.stats)
+    }
+
+    fn files(&self) -> [(&Path, &Path); 2] {
+        [
+            (self.header_temp.path(), &self.header_path),
+            (self.output_temp.path(), &self.output_path),
+        ]
+    }
+
+    pub(crate) fn publish_all(datasets: Vec<Self>) -> Result<Vec<DatasetStats>> {
+        let files = datasets.iter().flat_map(Self::files).collect::<Vec<_>>();
+        crate::atomic_output::publish_staged_outputs(&files, false)?;
+        Ok(datasets.into_iter().map(|d| d.stats).collect())
     }
 }
 
@@ -545,10 +598,8 @@ impl DatasetWriter {
             output_identity(output)? != output_identity(header_output)?,
             "output descriptor and header paths alias"
         );
-        ensure!(
-            !output.exists() && !header_output.exists(),
-            "output dataset already exists"
-        );
+        crate::atomic_output::ensure_new_output(output)?;
+        crate::atomic_output::ensure_new_output(header_output)?;
         ensure_distinct_inputs(
             output,
             header_output,
@@ -847,7 +898,7 @@ pub fn restore_text(
 }
 
 /// In-memory integer records for algorithms that require the complete basis.
-pub(crate) fn read_complete(input: &Path) -> Result<CompleteCsfFile> {
+pub(crate) fn read_complete(input: &Path) -> Result<(CompleteCsfFile, DatasetHeader)> {
     let mut rows = DescriptorRows::open(input, &header_path(input)?)?;
     let mut result =
         CompleteCsfFile::new_for_restore(rows.header.lines.clone(), rows.header.peel.clone());
@@ -864,11 +915,14 @@ pub(crate) fn read_complete(input: &Path) -> Result<CompleteCsfFile> {
         result.append_restored_record(&occupied, &couplings, j, parity, previous != Some(block))?;
         previous = Some(block);
     }
-    Ok(result)
+    Ok((result, rows.header))
 }
 
-pub(crate) fn write_complete(file: &CompleteCsfFile, output: &Path) -> Result<DatasetStats> {
-    let header = DatasetHeader::from_lines(file.header_lines.clone())?;
+pub(crate) fn write_complete(
+    file: &CompleteCsfFile,
+    header: DatasetHeader,
+    output: &Path,
+) -> Result<DatasetStats> {
     let layout = header.layout();
     let mut writer = DatasetWriter::new(header, output, &header_path(output)?, &[])?;
     for (index, block) in file.blocks.iter().enumerate() {
@@ -876,11 +930,7 @@ pub(crate) fn write_complete(file: &CompleteCsfFile, output: &Path) -> Result<Da
         let end = first + usize::try_from(block.record_len)?;
         for record in &file.records[first..end] {
             let mut row = vec![0; layout.row_len()];
-            if file.subshells.is_empty() {
-                row = vec![0, 1];
-            } else {
-                crate::descriptor_v2::encode_v2(file, record, &mut row)?;
-            }
+            crate::descriptor_v2::encode_v2(file, record, &mut row)?;
             writer.push(&row, index)?;
         }
     }

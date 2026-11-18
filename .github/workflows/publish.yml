@@ -120,7 +120,8 @@ jobs:
       - name: Check archives and exercise extracted wheel
         run: |
           python -m twine check --strict dist/*
-          python scripts/check_release.py dist --smoke
+          python -m tarfile -e dist/rcsfs-*.tar.gz extracted-sdist
+          python extracted-sdist/rcsfs-*/scripts/check_release.py dist --smoke
           rcsfs --version
           uv run --no-project --no-sync rcsfs --version
       - uses: actions/upload-artifact@v6

@@ -67,8 +67,8 @@ def main() -> int:
         default=[],
         metavar="KIND=PATH",
         help=(
-            "Where a published artifact will go, as kind=path. Kinds: csf_text, "
-            "csf_parquet, descriptor, header, descriptor_metadata. Repeat once per "
+            "Where a published artifact will go, as kind=path. Kinds: descriptor, "
+            "header. Repeat once per "
             "artifact; each volume is checked against the sizes that coexist on it."
         ),
     )

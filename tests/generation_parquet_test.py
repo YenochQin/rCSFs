@@ -100,6 +100,57 @@ def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
     assert not (tmp_path / "out.c").exists()
 
 
+@pytest.mark.parametrize("storage", ["disk", "memory"])
+def test_dangling_descriptor_does_not_leave_a_header_or_prevent_retry(
+    tmp_path: Path, storage: str
+) -> None:
+    transcript = "* ! Orbital order\n0\n1s(2,*)\n\n1s\n0,0\n0\nn\n"
+    output = tmp_path / "out_descriptors.parquet"
+    try:
+        output.symlink_to(tmp_path / "missing")
+    except OSError as error:
+        pytest.skip(f"symlinks unavailable: {error}")
+    with pytest.raises(OSError):
+        generate_csfs_from_transcript(transcript, output, storage=storage)
+    assert output.is_symlink()
+    assert list(tmp_path.iterdir()) == [output]
+    output.unlink()
+    assert (
+        generate_csfs_from_transcript(transcript, output, storage=storage)[
+            "record_count"
+        ]
+        == 1
+    )
+
+
+@pytest.mark.parametrize("model", ["e1_cc1as1", "o1_cc1as1"])
+def test_output_capacity_covers_published_int8_pair(tmp_path: Path, model: str) -> None:
+    transcript = (FIXTURES / f"{model}.rcsfgenerate").read_text(encoding="utf-8")
+    output = tmp_path / "basis.parquet"
+    estimate = estimate_disk_generation(transcript, threads=4)["bytes"]
+    stats = generate_csfs_from_transcript(transcript, output, threads=4)
+    assert estimate["descriptor"] >= output.stat().st_size
+    assert (
+        estimate["required_output"]
+        >= output.stat().st_size + Path(stats["header_file"]).stat().st_size
+    )
+
+
+def test_shipped_two_list_example_runs_estimate_without_writing_csfs(
+    tmp_path: Path,
+) -> None:
+    config = FIXTURES.parents[1] / "examples" / "two_generation_lists.toml"
+    result = cli.run(
+        ["csfsgenerate", "--config", str(config), "--estimate-only", "--json"],
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    estimate = json.loads(result.stdout)
+    assert estimate["deduplication"] == "exact"
+    assert estimate["pre_deduplication_records"] == 7_087_262
+    assert not list(tmp_path.glob("*.parquet"))
+
+
 def test_config_multiple_lists_union_and_exact_dedup(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
@@ -302,6 +353,11 @@ def test_deduplication_strategy_is_reported_and_selectable(
     # The strategy changes how the number was obtained, not the published rows.
     assert exact["record_count"] == verified["record_count"]
     assert exact["block_count"] == verified["block_count"]
+    for report in (exact, verified):
+        stages = {s["name"]: s for s in report["stage_stats"]}
+        segments = stages["deduplication"]["input_bytes"]
+        bitsets = sum((block["record_count"] + 7) // 8 for block in report["blocks"])
+        assert stages["final_descriptor_merge"]["input_bytes"] == segments + bitsets
 
     monkeypatch.setenv("RCSFS_DEDUPLICATION", "trusted")
     with pytest.raises(OSError, match="invalid de-duplication strategy"):

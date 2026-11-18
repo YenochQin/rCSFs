@@ -23,7 +23,17 @@ use crate::seniority::{physical_seniority, printed_seniority};
 pub fn encode_v2(file: &CompleteCsfFile, record: &CsfRecord, row: &mut [i8]) -> Result<()> {
     let occupied = file.occupied(record)?;
     let couplings = file.couplings(record)?;
-    validate_record(&file.subshells, occupied, couplings)?;
+    if occupied.is_empty() {
+        ensure!(
+            !file.header_lines[1].trim().is_empty()
+                && record.total_two_j == 0
+                && record.parity == Parity::Even
+                && couplings.is_empty(),
+            "an empty peel occupation requires a closed core with J=0 and even parity"
+        );
+    } else {
+        validate_record(&file.subshells, occupied, couplings)?;
+    }
 
     let layout = DescriptorLayout::new(DescriptorVersion::V2, file.subshells.len());
     write_feature_row(

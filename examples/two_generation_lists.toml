@@ -4,7 +4,7 @@
 
 [csfsgenerate]
 inactive_core = 4
-rcsfs_out = "rcsf.out"
+output = "rcsf_descriptors.parquet"
 
 [[csfsgenerate.lists]]
 reference_configuration = [

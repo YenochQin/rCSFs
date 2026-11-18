@@ -96,6 +96,8 @@ def generate_csfs_from_transcript(
     storage: Literal["disk", "memory"] = "disk",
     memory_budget_mib: int | None = None,
     allow_unchecked_space: bool = False,
+    *,
+    scratch_dir: str | None = None,
 ) -> CsfGenerationStats: ...
 def estimate_disk_generation(
     transcript: str | list[str],

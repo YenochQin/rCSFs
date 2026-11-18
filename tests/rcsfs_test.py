@@ -49,6 +49,33 @@ def _interaction_inputs(tmp_path: Path) -> tuple[Path, Path]:
     return reference, candidates
 
 
+@pytest.mark.parametrize("occupied_candidate", [False, True])
+def test_interaction_keeps_closed_core_with_unoccupied_peel(
+    tmp_path: Path, occupied_candidate: bool
+) -> None:
+    source = tmp_path / "core.c"
+    source.write_bytes(
+        b"Core subshells:\n  1s\nPeel subshells:\n  2s\nCSF(s):\n\n\n0+\n"
+    )
+    reference, candidates, output = (
+        tmp_path / f"{name}.parquet" for name in ("ref", "pool", "out")
+    )
+    convert_csfs(source, reference)
+    candidate_text = tmp_path / "pool.c"
+    body = source.read_bytes()
+    if occupied_candidate:
+        body = body.replace(b"CSF(s):\n\n\n0+", b"CSF(s):\n  2s ( 2)\n\n        0+")
+    candidate_text.write_bytes(body)
+    convert_csfs(candidate_text, candidates)
+    stats = select_interacting_csfs(reference, candidates, output)
+    assert stats["output_count"] == 1
+    _, rows = read_csfs(output)
+    assert rows.drop("idx").row(0) == (0, -1, 0, -1, 0, 1)
+    restored = tmp_path / "restored.c"
+    restore_csfs_from_descriptors(output, descriptor_header_path(output), restored)
+    assert restored.read_bytes() == source.read_bytes()
+
+
 def test_select_interacting_csfs_public_api_is_explicitly_non_exact(
     tmp_path: Path,
 ) -> None:

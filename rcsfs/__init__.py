@@ -153,6 +153,18 @@ def get_parquet_info(input_path: str | Path) -> ParquetInfo:
     return _native.get_parquet_info(str(input_path))
 
 
+def read_zero_order_counts(
+    input_path: str | Path, *, header_path: str | Path | None = None
+) -> list[int] | None:
+    """Validate the descriptor schema and bound header without loading CSF rows.
+
+    Return one count per explicit block, or None when the header has no partition.
+    """
+    return _native.read_zero_order_counts(
+        str(input_path), None if header_path is None else str(header_path)
+    )
+
+
 def read_peel_subshells(header_path: str | Path) -> list[str]:
     return _native.read_peel_subshells(str(header_path))
 
@@ -305,6 +317,7 @@ __all__ = [
     "partition_csfs",
     "read_csfs",
     "read_peel_subshells",
+    "read_zero_order_counts",
     "restore_csfs_from_descriptors",
     "select_csfs",
     "select_interacting_csfs",

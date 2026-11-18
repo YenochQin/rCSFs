@@ -14,6 +14,7 @@ from rcsfs import (
     merge_csfs,
     partition_csfs,
     read_csfs,
+    read_zero_order_counts,
     select_csfs,
     select_interacting_csfs,
     split_csfs_by_j,
@@ -38,23 +39,33 @@ def test_read_rejects_invalid_zero_order_counts(tmp_path: Path, entry: str) -> N
     pq.write_table(table.replace_schema_metadata(metadata), path)
     with pytest.raises(OSError, match="zero_order_counts"):
         read_csfs(path)
+    with pytest.raises(OSError, match="zero_order_counts"):
+        read_zero_order_counts(path)
 
 
 def test_whole_block_split_keeps_zero_order_count(tmp_path: Path) -> None:
     path = tmp_path / "basis_descriptors.parquet"
     reference = tmp_path / "ref_descriptors.parquet"
     ordered = tmp_path / "ordered_descriptors.parquet"
-    convert_csfs(FIXTURE, path)
-    convert_csfs(FIXTURE, reference)
+    text = tmp_path / "basis.c"
+    text.write_bytes(
+        b"Core subshells:\n  1s\nPeel subshells:\n  2s   3s   4s\nCSF(s):\n"
+        b"  2s ( 2)\n\n        0+\n  3s ( 2)\n\n        0+\n *\n"
+        b"  3s ( 2)\n\n        0+\n  4s ( 2)\n\n        0+\n  2s ( 2)\n\n        0+\n"
+    )
+    convert_csfs(text, path)
+    assert read_zero_order_counts(path) is None
+    select_csfs(path, reference, [1, 2, 4])
     partition_csfs(
         reference, descriptor_header_path(reference), path, descriptor_header_path(path), ordered
     )
     stats = split_csfs_by_j(ordered, output_dir=tmp_path)
+    assert read_zero_order_counts(ordered) == [1, 2]
     assert len(stats["outputs"]) == 2
-    for block in stats["outputs"]:
+    for block, count, length in zip(stats["outputs"], [1, 2], [2, 3], strict=True):
         header, rows = read_csfs(block["output_file"])
-        assert header["block_info"]["zero_order_counts"] == [1]
-        assert rows.height == 1
+        assert header["block_info"]["zero_order_counts"] == [count]
+        assert rows.height == length
 
 
 def test_truncation_history_survives_read_selection_and_combination(

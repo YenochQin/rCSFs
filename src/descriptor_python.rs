@@ -47,6 +47,22 @@ fn convert_csfs(
 }
 
 #[pyfunction]
+#[pyo3(signature = (input_path, header_path=None))]
+fn read_zero_order_counts(
+    py: Python<'_>,
+    input_path: String,
+    header_path: Option<String>,
+) -> PyResult<Option<Vec<usize>>> {
+    let header = companion(&input_path, header_path)?;
+    py.detach(|| {
+        DescriptorRows::open(Path::new(&input_path), &header)?
+            .header
+            .zero_order_counts()
+    })
+    .map_err(io_error)
+}
+
+#[pyfunction]
 #[pyo3(signature = (input_path, header_path=None, include_block_id=false, include_coupling_signature=false))]
 fn read_csfs_arrow(
     py: Python<'_>,
@@ -386,6 +402,7 @@ fn generate_csfs_from_transcript(
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(convert_csfs, module)?)?;
     module.add_function(wrap_pyfunction!(read_csfs_arrow, module)?)?;
+    module.add_function(wrap_pyfunction!(read_zero_order_counts, module)?)?;
     module.add_function(wrap_pyfunction!(select_csfs, module)?)?;
     module.add_function(wrap_pyfunction!(merge_csfs, module)?)?;
     module.add_function(wrap_pyfunction!(match_csfs, module)?)?;

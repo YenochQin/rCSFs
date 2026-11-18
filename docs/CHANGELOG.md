@@ -20,6 +20,8 @@
   preserving physical seniority and the distinction between missing and zero.
 - `zero-first` writes the ordered zero-order counts to the bound header's
   `block_info.zero_order_counts` field for use by suite MPI programs.
+  `read_zero_order_counts` checks the descriptor schema and header binding and
+  returns the partition without materializing CSF rows.
 - Use `convert` or `convert_csfs` to import text and `restore-csfs` or
   `restore_csfs_from_descriptors` to export it. The old three-string Parquet
   format, `gen-descriptors` and generation output toggles have been removed.

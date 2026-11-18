@@ -234,7 +234,7 @@ byte-for-byte serial/parallel comparisons.
 
 ## Transcript CLI
 
-Run `rcsfs csfsgenerate [output]` for interactive input, or use a
+Run `rcsfs csfsgenerate [-o OUTPUT]` for interactive input, or use a
 `[csfsgenerate]` table for repeatable runs. The CLI writes a V2 descriptor
 Parquet and its bound header. The default filenames are
 `rcsf_descriptors.parquet` and `rcsf_header.toml`. A top-level `conf` selects

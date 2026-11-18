@@ -212,14 +212,51 @@ impl DatasetHeader {
             })
             .transpose()?;
         truncated_count(&document)?;
-        Ok(Self {
+        let header = Self {
             document,
             lines,
             peel,
             core,
             block_lengths,
             electron_count,
-        })
+        };
+        header.zero_order_counts()?;
+        Ok(header)
+    }
+
+    pub(crate) fn zero_order_counts(&self) -> Result<Option<Vec<usize>>> {
+        let Some(raw) = self
+            .document
+            .get("block_info")
+            .and_then(|info| info.get("zero_order_counts"))
+        else {
+            return Ok(None);
+        };
+        let counts = raw
+            .as_array()
+            .context("block_info.zero_order_counts must be an array")?;
+        ensure!(
+            counts.len() == self.block_lengths.len(),
+            "block_info.zero_order_counts length does not match block count"
+        );
+        let counts = counts
+            .iter()
+            .zip(&self.block_lengths)
+            .enumerate()
+            .map(|(index, (count, &length))| {
+                count
+                    .as_integer()
+                    .and_then(|count| usize::try_from(count).ok())
+                    .filter(|count| (1..=length).contains(count))
+                    .with_context(|| {
+                        format!(
+                            "invalid zero_order_counts entry for block {} (expected 1..={length})",
+                            index + 1
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some(counts))
     }
 
     pub fn layout(&self) -> DescriptorLayout {
@@ -621,14 +658,6 @@ impl DatasetWriter {
     }
 
     pub(crate) fn finish_zero_first(self, counts: &[usize]) -> Result<DatasetStats> {
-        ensure!(
-            counts.len() == self.lengths.len()
-                && counts
-                    .iter()
-                    .zip(&self.lengths)
-                    .all(|(&count, &length)| count > 0 && count <= length),
-            "invalid zero-order block counts"
-        );
         self.prepare_with_zero_order_counts(Some(counts))?.publish()
     }
 
@@ -636,7 +665,7 @@ impl DatasetWriter {
         self.prepare_with_zero_order_counts(None)
     }
 
-    fn prepare_with_zero_order_counts(
+    pub(crate) fn prepare_with_zero_order_counts(
         mut self,
         counts: Option<&[usize]>,
     ) -> Result<PreparedDataset> {
@@ -645,6 +674,14 @@ impl DatasetWriter {
         drop(self.writer);
         let mut header = self.header.finalized(&self.lengths)?;
         if let Some(counts) = counts {
+            ensure!(
+                counts.len() == self.lengths.len()
+                    && counts
+                        .iter()
+                        .zip(&self.lengths)
+                        .all(|(&count, &length)| (1..=length).contains(&count)),
+                "invalid zero-order block counts"
+            );
             let counts = counts
                 .iter()
                 .map(|&count| i64::try_from(count).map(toml::Value::Integer))

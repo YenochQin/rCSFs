@@ -12,12 +12,49 @@ from rcsfs import (
     convert_csfs,
     descriptor_header_path,
     merge_csfs,
+    partition_csfs,
     read_csfs,
     select_csfs,
     select_interacting_csfs,
+    split_csfs_by_j,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "descriptor_multiblock.c"
+
+
+@pytest.mark.parametrize("entry", ['"bad"', "[1]", "[true, 1]", "[0, 1]", "[1, 2]"])
+def test_read_rejects_invalid_zero_order_counts(tmp_path: Path, entry: str) -> None:
+    path = tmp_path / "basis_descriptors.parquet"
+    convert_csfs(FIXTURE, path)
+    header = descriptor_header_path(path)
+    raw = header.read_bytes().replace(
+        b"[block_info]\n", f"[block_info]\nzero_order_counts = {entry}\n".encode()
+    )
+    table = pq.read_table(path)
+    metadata = dict(pq.read_metadata(path).metadata or {})
+    metadata.pop(b"ARROW:schema", None)
+    metadata[b"source_header_sha256"] = hashlib.sha256(raw).hexdigest().encode()
+    header.write_bytes(raw)
+    pq.write_table(table.replace_schema_metadata(metadata), path)
+    with pytest.raises(OSError, match="zero_order_counts"):
+        read_csfs(path)
+
+
+def test_whole_block_split_keeps_zero_order_count(tmp_path: Path) -> None:
+    path = tmp_path / "basis_descriptors.parquet"
+    reference = tmp_path / "ref_descriptors.parquet"
+    ordered = tmp_path / "ordered_descriptors.parquet"
+    convert_csfs(FIXTURE, path)
+    convert_csfs(FIXTURE, reference)
+    partition_csfs(
+        reference, descriptor_header_path(reference), path, descriptor_header_path(path), ordered
+    )
+    stats = split_csfs_by_j(ordered, output_dir=tmp_path)
+    assert len(stats["outputs"]) == 2
+    for block in stats["outputs"]:
+        header, rows = read_csfs(block["output_file"])
+        assert header["block_info"]["zero_order_counts"] == [1]
+        assert rows.height == 1
 
 
 def test_truncation_history_survives_read_selection_and_combination(

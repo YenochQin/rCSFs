@@ -355,33 +355,30 @@ pub fn split_blocks(
     );
     let mut source = DescriptorRows::open(input, input_header)?;
     let header = source.header.clone();
-    let mut current = None;
-    let mut current_block = None;
-    let mut results = Vec::new();
-    while let Some((_, block, row)) = source.next_row()? {
-        if current_block != Some(block) {
-            if let Some(writer) = current.take() {
-                results.push(DatasetWriter::prepare(writer)?);
-            }
-            let j = row[row.len() - 2];
-            let p = if row[row.len() - 1] == 1 {
-                "even"
-            } else {
-                "odd"
-            };
-            let path = directory.join(format!("{prefix}_b{block:03}_{j}_{p}_descriptors.parquet"));
-            current = Some(DatasetWriter::new(
-                header.clone(),
-                &path,
-                &header_path(&path)?,
-                &[input, input_header],
-            )?);
-            current_block = Some(block);
+    let zero_order_counts = header.zero_order_counts()?;
+    let mut results = Vec::with_capacity(header.block_lengths.len());
+    for (block, &length) in header.block_lengths.iter().enumerate() {
+        let mut rows = source.read_rows(length);
+        let first = rows.next().context("empty source block")??;
+        let (j, parity) = row_symmetry(&first);
+        let p = if parity == 1 { "even" } else { "odd" };
+        let path = directory.join(format!("{prefix}_b{block:03}_{j}_{p}_descriptors.parquet"));
+        let mut writer = DatasetWriter::new(
+            header.clone(),
+            &path,
+            &header_path(&path)?,
+            &[input, input_header],
+        )?;
+        writer.push(&first, 0)?;
+        for row in rows {
+            writer.push(&row?, 0)?;
         }
-        current.as_mut().expect("block writer").push(&row, 0)?;
+        // A whole block keeps its source row order and therefore its partition.
+        let counts = zero_order_counts
+            .as_ref()
+            .map(|counts| std::slice::from_ref(&counts[block]));
+        results.push(writer.prepare_with_zero_order_counts(counts)?);
     }
-    if let Some(writer) = current {
-        results.push(writer.prepare()?);
-    }
+    ensure!(source.next_row()?.is_none(), "unconsumed CSF blocks");
     crate::descriptor_dataset::PreparedDataset::publish_all(results)
 }

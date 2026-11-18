@@ -234,114 +234,45 @@ byte-for-byte serial/parallel comparisons.
 
 ## Transcript CLI
 
-The product entry is `uv run rcsfs csfsgenerate [output.c]`, defaulting to
-`rcsf.out`. The `generate_transcript_csfs` example remains a Rust development
-regression tool for transcript inputs:
-
-```bash
-RCSFS_THREADS=4 uv run cargo run --release --example generate_transcript_csfs -- \
-  input.rcsfgenerate output.c
-```
-
-The transcript is parsed in memory and CSFs are written in deterministic J/parity
-block order. The Rust example accepts only input and output paths. Use the Python
-CLI's `--generate-descriptors` option for CSF and raw V2 descriptor Parquet output.
-TOML `[output]` settings offer the same options (see the configuration example above).
-
-All destinations must be new and distinct: CSF text, CSF Parquet, its
-`{csf_stem}_header.toml` sidecar, descriptor Parquet, and its same-stem `.toml`
-sidecar. Outputs cannot alias the configuration file. The descriptor pipeline
-stages files in a temporary directory before each complete file is published
-through an atomic no-overwrite hard link. For a destination on another volume,
-it first copies into a private file beside the destination, then links that
-complete file. Existing files are never truncated. The five-file set is not an
-atomic transaction: a late publication failure leaves earlier complete outputs
-in place and reports their paths in `published_outputs`; inspect these before
-removing or retrying. Staging requires temporary disk space for the complete
-output set.
-
-The descriptor sidecar schema is:
+Run `rcsfs csfsgenerate [output]` for interactive input, or use a
+`[csfsgenerate]` table for repeatable runs. The CLI writes a V2 descriptor
+Parquet and its bound header. The default filenames are
+`rcsf_descriptors.parquet` and `rcsf_header.toml`. A top-level `conf` selects
+`{conf}_descriptors.parquet` by default. With `conf` and an active-space index
+`as`, the default is `{conf}_as{as}raw_descriptors.parquet`. Set `output` to
+choose a different descriptor path.
 
 ```toml
-format_version = 2
-encoding = "parquet"
-normalized = false
-record_count = 1
-subshells = ["1s"]
-```
-
-For descriptor-producing TOML/config `csfsgenerate` runs (which default to the
-disk backend), `subshells` lists the final header's ordered peel
-subshells. Each contributes four consecutive V2 columns:
-`n` (occupation), `2j` (printed subshell state), `v` (seniority), and `2k`
-(printed intermediate coupling). The row then carries the global
-`total_two_j` and `parity` columns. An unoccupied slot is `[0, -1, -1, -1]`;
-`-1` is `MISSING` and distinguishes a value that GRASP did not print from an
-explicit zero. `record_count` is the descriptor Parquet row count. All V2
-columns are `Int32`, compressed with ZSTD level 3. V2 descriptors are
-reversible and normalization is rejected.
-
-Both disk and memory generation bind descriptor Parquet metadata to the completed
-header: `source_header_sha256` is SHA-256 of the entire header file's exact bytes,
-and `source_header_filename` records its basename. Publishing the staged header
-preserves this binding. Comments or whitespace edits change the hash; the hash
-does not checksum CSF rows or their order. The generated descriptors can therefore
-be loaded directly by consumers that require a header hash, without a second
-`gen-descriptors` pass. For an existing CSF Parquet/header pair, standalone
-`gen-descriptors` with `--header` remains available.
-
-With top-level `conf`, `generate_descriptors = true` defaults the descriptor
-filename to `{conf}_desc.parquet` and also publishes CSF Parquet/header;
-`descriptor` and `generate_parquet` can be omitted. Explicit descriptor filenames
-in TOML or on the command line take precedence. Without `conf`, the existing
-`{csf_stem}_descriptors.parquet` default applies.
-
-For descriptor-producing TOML/config `csfsgenerate` runs, add the optional
-setting below to the `[generate]` table to reject runs whose managed
-occupation, batch, bucket, bitset, or writer reservations would exceed the
-requested budget. The interactive in-memory compatibility path is separate
-and does not use this disk budget:
-
-```toml
+[csfsgenerate]
+transcript = "input.rcsfgenerate"
+output = "basis_descriptors.parquet"
 memory_budget_mib = 8192
 ```
 
-The CLI flag `--memory-budget-mib` overrides the TOML value. The returned JSON
-contains `stage_stats` for enumeration, workload planning, generation,
-de-duplication, and the seven final-encoding phases, plus
-`resource_stats.memory_budget_mib`, `budget_bytes`, `peak_managed_bytes`,
-`current_managed_bytes`, and `occupation_bytes`. The budget accounts for
-selected internal data structures; it is not an operating-system RSS limit.
+```fish
+rcsfs csfsgenerate --config input.toml
+rcsfs restore-csfs --descriptors basis_descriptors.parquet --header basis_header.toml --output basis.c
+```
+
+Keep the descriptor and its header together. The CLI can replace an existing
+pair at its output paths. It stages both files before replacing either and
+attempts to restore the previous files if publication fails. Use a new output
+name to retain the previous result. See the [descriptor format guide](CSF_DESCRIPTOR_GUIDE.md)
+for the Int8 channels, header binding, and explicit CSF text export.
+
+Disk generation is the default. Use `generation_storage = "memory"` for a
+single list that fits in memory. The disk path accepts `memory_budget_mib`
+under `[csfsgenerate]`, with `--memory-budget-mib` as a CLI override. This budget
+covers managed allocations for occupation data, batches, deduplication, and
+the writer. The JSON result reports stage timings and resource accounting.
 
 ### Final encoding
 
-The final artifacts are built from the segments in one ordered pass. The
-pre-P4 pipeline wrote the descriptor Parquet and then read it back to format
-the CSF text, so every row was Parquet-encoded once, Parquet-decoded once and
-formatted once across two passes over disk. The combined pass reads each
-surviving row from its segment exactly once: its integers go straight into the
-descriptor Parquet, and its decoded record is validated and formatted for the
-CSF text and CSF Parquet.
-
-Seven phases are timed and reported separately because they are separately
-real: `final_encoding_read` covers IPC read/decompression and batch checks,
-`final_encoding_select` covers survivor filtering and column gathering,
-`final_encoding_prepare` covers V2 decode/validation/formatting, and each output
-family has separate `_encode` and `_write` phases. Preparation runs in the
-thread pool over each batch's rows — the pool sized by `threads`, with CSF-wide
-CPU time visible as `cpu_millis` above wall clock — while descriptor Parquet
-still has a single writer and CSF text a single pen. The two Parquet writers
-cap row groups at 8,192 rows, matching their managed-memory allowances; source
-batches are reserved before IPC decoding. Block separators and the global
-`idx` sequence are emitted by the ordered publication side, so batch or thread
-boundaries cannot land a row in the wrong block.
-
-The old two-pass tail (`merge_v2_deduplicated_segments` plus the descriptor
-read-back) is kept as the reference implementation and differentially checked
-against the combined pass in the test suite: the descriptor Parquet and CSF
-text come out byte-identical, the CSF Parquet row-identical (its row-group
-boundaries follow whichever path batched it, which is not part of its
-contract). The standalone restoration API keeps its own full input validation.
+The disk pipeline reads the surviving rows from its Arrow IPC segments in
+order and writes them directly to the descriptor Parquet. It writes the
+explicit symmetry-block lengths in the header and records the hash of the
+header bytes in the Parquet metadata. The `final_descriptor_merge` stage
+reports the time and I/O for this pass.
 
 ### Counted workload planning
 

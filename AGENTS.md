@@ -28,7 +28,7 @@ Choose the build output the task actually uses:
 - Local installed wheel: `uv sync --no-editable --group lint` rebuilds the package when its source cache keys change.
 - Python tests here: pytest's `pythonpath = ["."]` selects the in-tree `rcsfs/` package. Refresh its extension after Rust changes; syncing the environment alone does not update it.
 - Distributable wheel: use the PEP 517 backend through `uv build --python .venv/bin/python`; it combines separately audited native-CLI and PyO3 wheels. A single direct Maturin build is only a component. Keep wheel and editable hooks, `.data/scripts` permissions, RECORD, sdist inclusion and release checks in sync.
-- Tools consumers: this checkout requires Python 3.15. Keep Tools on its declared released dependency until its environment and dependency constraints have been migrated separately.
+- Tools consumers use the PyPI dependency declared in `graspkit-tools/pyproject.toml`. To test this checkout with Tools, follow the workspace guide to install it into the Tools `.venv` from `graspkit-tools/`, then run the integration tests with that interpreter.
 
 For in-tree tests and distributable wheels, read [development.md](docs/development.md). Use wheel installation for this environment; avoid `maturin develop`, which replaces it with an editable installation.
 

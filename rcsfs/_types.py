@@ -32,10 +32,11 @@ class CsfHeaderInfo(TypedDict):
 
 
 class CsfBlockInfo(TypedDict):
-    """Symmetry-block metadata extracted from ``*`` separators."""
+    """Explicit symmetry-block lengths and optional zero-order counts."""
 
     block_lengths: list[int]
     block_count: int
+    zero_order_counts: NotRequired[list[int]]
 
 
 class CsfDataStats(TypedDict):

@@ -29,9 +29,8 @@ use crate::complete_csf::CompleteCsfFile;
 use crate::configuration_generation::Subshell;
 use crate::csfs_descriptor::CSFDescriptorGenerator;
 use crate::descriptor_schema::{
-    DescriptorLayout, DescriptorVersion, output_kv_metadata, output_schema,
-    validate_descriptor_storage, validate_output_schema, validate_record,
-    validate_seniority_encoding,
+    DescriptorLayout, DescriptorRowValidator, DescriptorVersion, output_kv_metadata, output_schema,
+    row_symmetry, validate_descriptor_storage, validate_output_schema, validate_seniority_encoding,
 };
 use crate::descriptor_v2::decode_v2_into;
 
@@ -231,89 +230,6 @@ impl DatasetHeader {
         self.block_lengths.iter().sum()
     }
 
-    fn validate_row(&mut self, row: &[i8]) -> Result<()> {
-        ensure!(
-            row.len() == self.layout().row_len(),
-            "descriptor width mismatch"
-        );
-        if self.peel.is_empty() {
-            ensure!(
-                !self.core.is_empty() && row == [0, 1],
-                "invalid closed-core descriptor"
-            );
-        } else {
-            let (mut occupied, mut couplings) = (Vec::new(), Vec::new());
-            let (total_j, _) = decode_v2_into(
-                row,
-                self.layout(),
-                &self.peel,
-                &mut occupied,
-                &mut couplings,
-            )?;
-            if occupied.is_empty() {
-                ensure!(
-                    !self.core.is_empty() && total_j == 0,
-                    "invalid empty peel record"
-                );
-            } else {
-                validate_record(&self.peel, &occupied, &couplings)?;
-            }
-            let shell_j = occupied
-                .iter()
-                .map(|shell| shell.state.map_or(0, |s| s.two_j))
-                .collect::<Vec<_>>();
-            let last_nonzero = shell_j.iter().rposition(|j| *j != 0);
-            let mut previous = 0u16;
-            for (index, j) in shell_j.iter().copied().enumerate() {
-                let printed = couplings
-                    .iter()
-                    .find(|c| usize::from(c.boundary) == index + 1)
-                    .map(|c| c.two_j);
-                let coupled = if let Some(value) = printed {
-                    value
-                } else if last_nonzero.is_none_or(|last| index >= last) {
-                    total_j
-                } else if j == 0 {
-                    previous
-                } else if previous == 0 {
-                    j
-                } else {
-                    anyhow::bail!("missing nontrivial intermediate coupling")
-                };
-                ensure!(
-                    coupled >= previous.abs_diff(j)
-                        && coupled <= previous + j
-                        && (previous + j - coupled).is_multiple_of(2),
-                    "invalid angular momentum coupling"
-                );
-                previous = coupled;
-            }
-            ensure!(previous == total_j, "incorrect final angular momentum");
-        }
-        let mut electrons: usize = self.core.iter().map(|s| usize::from(s.capacity())).sum();
-        let mut parity = 0usize;
-        for (index, label) in self.peel.iter().enumerate() {
-            let orbital: Subshell = label.parse()?;
-            let population = usize::try_from(row[index * 4]).context("negative occupation")?;
-            ensure!(
-                population <= usize::from(orbital.capacity()),
-                "occupation exceeds capacity"
-            );
-            electrons += population;
-            parity += population * usize::from(orbital.l());
-        }
-        ensure!(electrons > 0, "empty electron basis");
-        ensure!(
-            row[row.len() - 1] == if parity.is_multiple_of(2) { 1 } else { -1 },
-            "incorrect parity"
-        );
-        if let Some(expected) = self.electron_count {
-            ensure!(expected == electrons, "electron count mismatch");
-        }
-        self.electron_count = Some(electrons);
-        Ok(())
-    }
-
     pub(crate) fn finalized(mut self, lengths: &[usize]) -> Result<Self> {
         ensure!(!lengths.is_empty(), "cannot publish an empty CSF dataset");
         if self.peel.is_empty() {
@@ -389,6 +305,7 @@ impl DatasetHeader {
 
 pub struct DescriptorRows {
     pub header: DatasetHeader,
+    validator: DescriptorRowValidator,
     reader: ParquetRecordBatchReader,
     batch: Option<RecordBatch>,
     batch_row: usize,
@@ -457,6 +374,7 @@ impl DescriptorRows {
             );
         }
         Ok(Self {
+            validator: DescriptorRowValidator::new(&header.core, &header.peel)?,
             header,
             reader: builder.with_batch_size(BATCH_ROWS).build()?,
             batch: None,
@@ -506,8 +424,9 @@ impl DescriptorRows {
             self.block_rows = 0;
             self.symmetry = None;
         }
-        self.header.validate_row(&row)?;
-        let symmetry = (row[row.len() - 2], row[row.len() - 1]);
+        self.validator
+            .validate(&row, &mut self.header.electron_count)?;
+        let symmetry = row_symmetry(&row);
         ensure!(
             self.symmetry.is_none_or(|s| s == symmetry),
             "mixed symmetry within explicit block"
@@ -518,6 +437,19 @@ impl DescriptorRows {
         self.block_rows += 1;
         self.batch_row += 1;
         Ok(Some(result))
+    }
+
+    /// Read a known number of rows from the current explicit block.
+    pub(crate) fn read_rows(&mut self, count: usize) -> impl Iterator<Item = Result<Vec<i8>>> + '_ {
+        (0..count).map(move |_| {
+            self.next_row()?
+                .map(|(_, _, row)| row)
+                .context("truncated descriptor block")
+        })
+    }
+
+    pub(crate) fn block_symmetry(&self) -> Option<(i8, i8)> {
+        self.symmetry
     }
 }
 
@@ -534,6 +466,7 @@ pub struct DatasetStats {
 
 pub struct DatasetWriter {
     header: DatasetHeader,
+    validator: DescriptorRowValidator,
     output: PathBuf,
     header_output: PathBuf,
     spool: TemporaryOutput,
@@ -616,6 +549,7 @@ impl DatasetWriter {
             .map(|_| Vec::with_capacity(BATCH_ROWS))
             .collect();
         Ok(Self {
+            validator: DescriptorRowValidator::new(&header.core, &header.peel)?,
             header,
             output: output.into(),
             header_output: header_output.into(),
@@ -638,13 +572,14 @@ impl DatasetWriter {
     }
 
     pub fn push(&mut self, row: &[i8], block: usize) -> Result<()> {
-        self.header.validate_row(row)?;
+        self.validator
+            .validate(row, &mut self.header.electron_count)?;
         if self.current_block != Some(block) {
             self.lengths.push(0);
             self.current_block = Some(block);
             self.symmetry = None;
         }
-        let symmetry = (row[row.len() - 2], row[row.len() - 1]);
+        let symmetry = row_symmetry(row);
         ensure!(
             self.symmetry.is_none_or(|s| s == symmetry),
             "mixed output block symmetry"
@@ -685,11 +620,40 @@ impl DatasetWriter {
         self.prepare()?.publish()
     }
 
-    pub(crate) fn prepare(mut self) -> Result<PreparedDataset> {
+    pub(crate) fn finish_zero_first(self, counts: &[usize]) -> Result<DatasetStats> {
+        ensure!(
+            counts.len() == self.lengths.len()
+                && counts
+                    .iter()
+                    .zip(&self.lengths)
+                    .all(|(&count, &length)| count > 0 && count <= length),
+            "invalid zero-order block counts"
+        );
+        self.prepare_with_zero_order_counts(Some(counts))?.publish()
+    }
+
+    pub(crate) fn prepare(self) -> Result<PreparedDataset> {
+        self.prepare_with_zero_order_counts(None)
+    }
+
+    fn prepare_with_zero_order_counts(
+        mut self,
+        counts: Option<&[usize]>,
+    ) -> Result<PreparedDataset> {
         self.flush()?;
         self.writer.finish()?;
         drop(self.writer);
-        let header = self.header.finalized(&self.lengths)?;
+        let mut header = self.header.finalized(&self.lengths)?;
+        if let Some(counts) = counts {
+            let counts = counts
+                .iter()
+                .map(|&count| i64::try_from(count).map(toml::Value::Integer))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            header.document["block_info"]
+                .as_table_mut()
+                .expect("finalized block table")
+                .insert("zero_order_counts".into(), counts.into());
+        }
         let bytes = toml::to_string(&header.document)?.into_bytes();
         let hash = format!("{:x}", Sha256::digest(&bytes));
         let (header_temp, mut header_file) = create_temporary_output(&self.header_output)?;
@@ -895,44 +859,4 @@ pub fn restore_text(
     let bytes = fs::metadata(temporary.path())?.len();
     publish_temporary_output(temporary.path(), output, false)?;
     Ok((count, bytes))
-}
-
-/// In-memory integer records for algorithms that require the complete basis.
-pub(crate) fn read_complete(input: &Path) -> Result<(CompleteCsfFile, DatasetHeader)> {
-    let mut rows = DescriptorRows::open(input, &header_path(input)?)?;
-    let mut result =
-        CompleteCsfFile::new_for_restore(rows.header.lines.clone(), rows.header.peel.clone());
-    let mut previous = None;
-    while let Some((_, block, row)) = rows.next_row()? {
-        let (mut occupied, mut couplings) = (Vec::new(), Vec::new());
-        let (j, parity) = decode_v2_into(
-            &row,
-            rows.header.layout(),
-            &rows.header.peel,
-            &mut occupied,
-            &mut couplings,
-        )?;
-        result.append_restored_record(&occupied, &couplings, j, parity, previous != Some(block))?;
-        previous = Some(block);
-    }
-    Ok((result, rows.header))
-}
-
-pub(crate) fn write_complete(
-    file: &CompleteCsfFile,
-    header: DatasetHeader,
-    output: &Path,
-) -> Result<DatasetStats> {
-    let layout = header.layout();
-    let mut writer = DatasetWriter::new(header, output, &header_path(output)?, &[])?;
-    for (index, block) in file.blocks.iter().enumerate() {
-        let first = usize::try_from(block.record_start)?;
-        let end = first + usize::try_from(block.record_len)?;
-        for record in &file.records[first..end] {
-            let mut row = vec![0; layout.row_len()];
-            crate::descriptor_v2::encode_v2(file, record, &mut row)?;
-            writer.push(&row, index)?;
-        }
-    }
-    writer.finish()
 }

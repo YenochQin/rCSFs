@@ -2,7 +2,130 @@
 use crate::complete_csf::{IntermediateCoupling, OccupiedSubshell};
 use crate::configuration_generation::shared_generation::{Subshell, subshell_states};
 pub use crate::descriptor_transport::*;
+use crate::seniority::validate_physical_seniority;
 use anyhow::{Context, Result, ensure};
+
+pub(crate) const UNOCCUPIED_V2: [i8; 4] = [0, MISSING, 0, MISSING];
+
+pub(crate) fn row_symmetry(row: &[i8]) -> (i8, i8) {
+    (row[row.len() - 2], row[row.len() - 1])
+}
+
+/// Validate V2 channels directly, with orbital labels resolved once per dataset.
+pub(crate) struct DescriptorRowValidator {
+    peel: Vec<Subshell>,
+    core_electrons: usize,
+}
+
+impl DescriptorRowValidator {
+    pub(crate) fn new(core: &[Subshell], peel: &[String]) -> Result<Self> {
+        Ok(Self {
+            peel: peel
+                .iter()
+                .map(|label| label.parse())
+                .collect::<Result<_>>()?,
+            core_electrons: core
+                .iter()
+                .map(|orbital| usize::from(orbital.capacity()))
+                .sum(),
+        })
+    }
+
+    pub(crate) fn validate(&self, row: &[i8], electron_count: &mut Option<usize>) -> Result<()> {
+        let layout = DescriptorLayout::new(DescriptorVersion::V2, self.peel.len());
+        ensure!(row.len() == layout.row_len(), "descriptor width mismatch");
+        let (total_j, parity) = row_symmetry(row);
+        let total_j = u16::try_from(total_j).context("invalid total 2J")?;
+        checked_angular_value(total_j, "total 2J")?;
+        let (slots, _) = row[..row.len() - 2].as_chunks::<4>();
+        let mut electrons = self.core_electrons;
+        let mut parity_exponent = 0usize;
+        let mut first_occupied = None;
+        let mut last_occupied = None;
+        let mut last_nonzero_j = None;
+        for (index, (&slot, orbital)) in slots.iter().zip(&self.peel).enumerate() {
+            let [occupation, two_j, seniority, _] = slot;
+            if occupation == 0 {
+                ensure!(slot == UNOCCUPIED_V2, "invalid unoccupied subshell {index}");
+                continue;
+            }
+            let occupation = u8::try_from(occupation).context("negative occupation")?;
+            ensure!(
+                occupation <= orbital.capacity(),
+                "occupation exceeds capacity"
+            );
+            let seniority = u8::try_from(seniority).context("negative physical seniority")?;
+            let printed_j = if two_j == MISSING {
+                None
+            } else {
+                let two_j = u16::try_from(two_j).context("negative subshell 2J")?;
+                checked_angular_value(two_j, "subshell 2J")?;
+                Some(two_j)
+            };
+            validate_physical_seniority(
+                u16::from(orbital.capacity() - 1),
+                occupation,
+                printed_j,
+                seniority,
+            )?;
+            electrons += usize::from(occupation);
+            parity_exponent += usize::from(occupation) * usize::from(orbital.l());
+            first_occupied.get_or_insert(index);
+            last_occupied = Some(index);
+            if two_j > 0 {
+                last_nonzero_j = Some(index);
+            }
+        }
+
+        let mut previous = 0u16;
+        for (index, &[occupation, two_j, _, two_k]) in slots.iter().enumerate() {
+            if occupation == 0 {
+                continue;
+            }
+            let j = u16::try_from(two_j.max(0))?;
+            let coupled = if two_k != MISSING {
+                ensure!(
+                    Some(index) != first_occupied && Some(index) != last_occupied,
+                    "coupling boundary is outside the intermediate occupied subshells"
+                );
+                let k = u16::try_from(two_k).context("negative intermediate 2K")?;
+                checked_angular_value(k, "intermediate 2K")?;
+                k
+            } else if last_nonzero_j.is_none_or(|last| index >= last) {
+                total_j
+            } else if j == 0 {
+                previous
+            } else if previous == 0 {
+                j
+            } else {
+                anyhow::bail!("missing nontrivial intermediate coupling")
+            };
+            ensure!(
+                coupled >= previous.abs_diff(j)
+                    && coupled <= previous + j
+                    && (previous + j - coupled).is_multiple_of(2),
+                "invalid angular momentum coupling"
+            );
+            previous = coupled;
+        }
+        ensure!(previous == total_j, "incorrect final angular momentum");
+        ensure!(electrons > 0, "empty electron basis");
+        ensure!(
+            parity
+                == if parity_exponent.is_multiple_of(2) {
+                    1
+                } else {
+                    -1
+                },
+            "incorrect parity"
+        );
+        if let Some(expected) = *electron_count {
+            ensure!(expected == electrons, "electron count mismatch");
+        }
+        *electron_count = Some(electrons);
+        Ok(())
+    }
+}
 
 /// Validate that `occupied`/`couplings` are a legal CSF record over `subshells`.
 ///
@@ -87,6 +210,30 @@ pub fn validate_record(
 mod tests {
     use super::*;
     use crate::complete_csf::SubshellState;
+
+    #[test]
+    fn validates_coupling_and_seniority_in_raw_v2_rows() {
+        let peel = ["2s", "3s", "4s", "5s"].map(str::to_owned);
+        let validator = DescriptorRowValidator::new(&[], &peel).unwrap();
+        let row = [2, -1, 0, -1, 2, 0, 0, 0, 1, 1, 1, -1, 1, 1, 1, -1, 0, 1];
+        let mut electron_count = None;
+        validator.validate(&row, &mut electron_count).unwrap();
+        assert_eq!(electron_count, Some(6));
+        for (index, value, message) in [
+            (2, 1, "physical seniority"),
+            (3, 0, "coupling boundary"),
+            (7, 2, "invalid angular momentum coupling"),
+            (9, 127, "descriptor angular bound"),
+            (17, -1, "incorrect parity"),
+        ] {
+            let mut modified = row;
+            modified[index] = value;
+            let error = validator
+                .validate(&modified, &mut electron_count)
+                .unwrap_err();
+            assert!(error.to_string().contains(message), "{error:#}");
+        }
+    }
 
     #[test]
     fn v2_layout_adds_two_global_columns() {

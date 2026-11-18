@@ -8,6 +8,7 @@ use crate::configuration_generation::Subshell;
 use crate::descriptor_dataset::{
     DatasetHeader, DatasetStats, DatasetWriter, DescriptorRows, header_path, output_identity,
 };
+use crate::descriptor_schema::{UNOCCUPIED_V2, row_symmetry};
 
 #[derive(Debug, Clone)]
 pub struct ActiveSpaceTarget {
@@ -71,7 +72,7 @@ fn mapping(source: &DatasetHeader, target: &DatasetHeader) -> Result<Vec<usize>>
 }
 
 fn remap(row: &[i8], indices: &[usize], width: usize) -> Vec<i8> {
-    let mut mapped = [0, -1, 0, -1].repeat((width - 2) / 4);
+    let mut mapped = UNOCCUPIED_V2.repeat((width - 2) / 4);
     mapped.extend_from_slice(&row[row.len() - 2..]);
     for (source, target) in indices.iter().enumerate() {
         mapped[4 * target..4 * target + 4].copy_from_slice(&row[4 * source..4 * source + 4]);
@@ -153,51 +154,51 @@ pub fn zero_first(
         output_header,
         &[reference, reference_header, full, full_header],
     )?;
-    let mut z = zero.next_row()?;
-    let mut f = all.next_row()?;
-    let mut blocks = Vec::new();
+    let mut blocks = Vec::with_capacity(zero.header.block_lengths.len());
     for block in 0..zero.header.block_lengths.len() {
+        let zero_count = zero.header.block_lengths[block];
+        let full_count = all.header.block_lengths[block];
         let mut reference_rows = HashSet::new();
-        let mut zero_count = 0;
-        let mut first_count = 0;
-        let mut symmetry = None;
-        while z.as_ref().is_some_and(|r| r.1 == block) {
-            let (_, _, row) = z.take().expect("reference row");
-            let row = remap(&row, &zero_map, width);
-            symmetry = Some((row[width - 2], row[width - 1]));
+        for row in zero.read_rows(zero_count) {
+            let row = remap(&row?, &zero_map, width);
             writer.push(&row, block)?;
             reference_rows.insert(row);
-            zero_count += 1;
-            z = zero.next_row()?;
         }
-        let (two_j, parity) = symmetry.context("empty reference block")?;
-        while f.as_ref().is_some_and(|r| r.1 == block) {
-            let (_, _, row) = f.take().expect("full row");
-            let row = remap(&row, &full_map, width);
+        let (two_j, parity) = zero.block_symmetry().context("empty reference block")?;
+        let mut first_order_count = 0;
+        for row in all.read_rows(full_count) {
+            let row = row?;
             ensure!(
-                (row[width - 2], row[width - 1]) == (two_j, parity),
+                row_symmetry(&row) == (two_j, parity),
                 "reference/full block symmetries differ"
             );
+            let row = remap(&row, &full_map, width);
             if !reference_rows.contains(&row) {
                 writer.push(&row, block)?;
-                first_count += 1;
+                first_order_count += 1;
             }
-            f = all.next_row()?;
         }
         blocks.push(PartitionBlock {
             block_index: block,
             total_two_j: two_j,
             parity,
             zero_count,
-            first_order_count: first_count,
+            first_order_count,
         });
     }
-    ensure!(z.is_none() && f.is_none(), "unconsumed CSF blocks");
+    ensure!(
+        zero.next_row()?.is_none() && all.next_row()?.is_none(),
+        "unconsumed CSF blocks"
+    );
     let zero_csf_count = zero.header.row_count();
     let full_csf_count = all.header.row_count();
     let first_order_count = blocks.iter().map(|b| b.first_order_count).sum();
+    let counts = blocks
+        .iter()
+        .map(|block| block.zero_count)
+        .collect::<Vec<_>>();
     Ok(PartitionStats {
-        dataset: writer.finish()?,
+        dataset: writer.finish_zero_first(&counts)?,
         zero_csf_count,
         full_csf_count,
         first_order_count,

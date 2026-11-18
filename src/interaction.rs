@@ -6,9 +6,13 @@
 //! The [`InteractionStats::exact`] flag is consequently always `false`.
 
 use crate::atomic_output::{
-    ensure_distinct_inputs, ensure_output_does_not_alias_input, publish_staged_outputs,
+    ensure_distinct_inputs, ensure_new_output, ensure_output_does_not_alias_input,
+    publish_staged_outputs,
 };
-use crate::complete_csf::{CompleteCsfFile, CsfRecord, Parity, SymmetryBlock};
+use crate::complete_csf::Parity;
+use crate::descriptor_dataset::{DatasetWriter, DescriptorRows, header_path};
+use crate::descriptor_schema::UNOCCUPIED_V2;
+use crate::descriptor_v2::parity_from_sign;
 use anyhow::{Context, Result, ensure};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
@@ -121,28 +125,13 @@ pub struct InteractionStats {
     pub blocks: Vec<InteractionBlockStats>,
 }
 
-type ExactSubshellState = (u16, Option<u8>);
-type ExactOccupation = (u16, u8, Option<ExactSubshellState>);
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct ExactCsf {
-    occupied: Vec<ExactOccupation>,
-    couplings: Vec<(u16, u16)>,
-    total_two_j: u16,
-    odd_parity: bool,
-}
+const CANDIDATE_BATCH_ROWS: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Decision {
     ExactReference,
     Selected,
     Rejected,
-}
-
-struct ReferenceRecord {
-    exact: ExactCsf,
-    occupations: Vec<u16>,
-    electron_count: u32,
 }
 
 /// Select candidate CSFs that may interact with at least one reference CSF.
@@ -164,11 +153,11 @@ struct ReferenceRecord {
 /// retained candidates in candidate order.  Every candidate exactly equal to
 /// any reference CSF is skipped; other duplicate candidates are deliberately
 /// preserved.  The candidate header is used so appended peel subshells remain
-/// declared.
+/// declared. Live memory scales with one reference block and bounded
+/// candidate and I/O batches.
 ///
-/// Output is fully written to a same-directory temporary file before it is
-/// published.  With `overwrite == false`, publication atomically refuses an
-/// existing path.
+/// The descriptor/header pair is staged before publication. With
+/// `overwrite == false`, publication refuses an existing destination.
 pub fn select_interacting_csfs(
     reference_path: &Path,
     candidates_path: &Path,
@@ -182,174 +171,53 @@ pub fn select_interacting_csfs(
         num_workers != Some(0),
         "num_workers must be greater than zero"
     );
-    ensure!(
-        overwrite || !output_path.exists(),
-        "output file {} already exists (set overwrite=true to replace it)",
-        output_path.display()
-    );
+    let reference_header = header_path(reference_path)?;
+    let candidate_header = header_path(candidates_path)?;
+    let output_header = header_path(output_path)?;
+    if !overwrite {
+        ensure_new_output(output_path)?;
+        ensure_new_output(&output_header)?;
+    }
     ensure_distinct_inputs(
         reference_path,
         candidates_path,
         "reference and candidate inputs must be different files",
     )?;
-    ensure_output_does_not_alias_input(output_path, reference_path, "reference")?;
-    ensure_output_does_not_alias_input(output_path, candidates_path, "candidate")?;
-
-    let (reference, reference_header) = crate::descriptor_dataset::read_complete(reference_path)?;
-    let (candidates, mut candidate_header) =
-        crate::descriptor_dataset::read_complete(candidates_path)?;
-    candidate_header.add_truncations_from(&reference_header)?;
-    // Every output begins with the reference records. Candidates with a
-    // different electron count are rejected by the interaction selection.
-    candidate_header.electron_count = reference_header.electron_count;
-    validate_inputs(&reference, &candidates)?;
-
-    let shell_count = candidates.subshells.len();
-    let mut selected_by_block = Vec::<Vec<usize>>::with_capacity(reference.blocks.len());
-    let mut block_stats = Vec::with_capacity(reference.blocks.len());
-
-    let mut evaluate = || -> Result<()> {
-        for (block_index, (reference_block, candidate_block)) in
-            reference.blocks.iter().zip(&candidates.blocks).enumerate()
-        {
-            let reference_range =
-                block_range(reference_block.record_start, reference_block.record_len)?;
-            let candidate_range =
-                block_range(candidate_block.record_start, candidate_block.record_len)?;
-            let references = reference.records[reference_range.clone()]
-                .iter()
-                .map(|record| reference_record(&reference, record, shell_count))
-                .collect::<Result<Vec<_>>>()?;
-            let exact_references = references
-                .iter()
-                .map(|record| record.exact.clone())
-                .collect::<HashSet<_>>();
-            ensure!(
-                exact_references.len() == references.len(),
-                "reference block {block_index} contains duplicate CSFs"
-            );
-
-            // `par_iter` is indexed, and collection into Vec retains candidate
-            // order independently of worker completion order.
-            let decisions = candidates.records[candidate_range.clone()]
-                .par_iter()
-                .map(|candidate| {
-                    decide_candidate(
-                        &candidates,
-                        candidate,
-                        shell_count,
-                        &references,
-                        &exact_references,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            let mut selected_indices = Vec::new();
-            let mut exact_reference_skipped = 0usize;
-            let mut selected_count = 0usize;
-            let mut rejected_count = 0usize;
-            for (offset, decision) in decisions.into_iter().enumerate() {
-                match decision {
-                    Decision::ExactReference => exact_reference_skipped += 1,
-                    Decision::Selected => {
-                        selected_count += 1;
-                        selected_indices.push(candidate_range.start + offset);
-                    }
-                    Decision::Rejected => rejected_count += 1,
-                }
-            }
-            let reference_count = reference_range.len();
-            let candidate_count = candidate_range.len();
-            block_stats.push(InteractionBlockStats {
-                block_index,
-                total_two_j: reference_block.total_two_j,
-                parity: reference_block.parity,
-                reference_count,
-                candidate_count,
-                exact_reference_skipped,
-                selected_count,
-                rejected_count,
-                output_count: reference_count
-                    .checked_add(selected_count)
-                    .context("block output count overflow")?,
-            });
-            selected_by_block.push(selected_indices);
-        }
-        Ok(())
-    };
-
-    match num_workers {
-        Some(workers) => ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .context("failed to build interaction worker pool")?
-            .install(evaluate)?,
-        None => evaluate()?,
+    for (input, role) in [
+        (reference_path, "reference"),
+        (candidates_path, "candidate"),
+        (&reference_header, "reference header"),
+        (&candidate_header, "candidate header"),
+    ] {
+        ensure_output_does_not_alias_input(output_path, input, role)?;
+        ensure_output_does_not_alias_input(&output_header, input, role)?;
     }
 
-    let mut output = CompleteCsfFile {
-        header_lines: candidates.header_lines.clone(),
-        subshells: candidates.subshells.clone(),
-        records: Vec::new(),
-        occupied_subshells: Vec::new(),
-        intermediate_couplings: Vec::new(),
-        blocks: Vec::new(),
-    };
-    for (block_index, reference_block) in reference.blocks.iter().enumerate() {
-        let reference_range =
-            block_range(reference_block.record_start, reference_block.record_len)?;
-        for record in &reference.records[reference_range] {
-            output.append_generated_record(
-                reference.occupied(record)?,
-                reference.couplings(record)?,
-                record.total_two_j,
-                record.parity,
-            )?;
-        }
-        for &record_index in &selected_by_block[block_index] {
-            let record = &candidates.records[record_index];
-            output.append_generated_record(
-                candidates.occupied(record)?,
-                candidates.couplings(record)?,
-                record.total_two_j,
-                record.parity,
-            )?;
-        }
-    }
-
-    // `append_generated_record` starts a new block only when J/P changes.
-    // Complete-CSF text may nevertheless contain adjacent, explicitly
-    // separated blocks with the same J/P. Rebuild the block table from the
-    // paired input blocks so those file-level boundaries remain intact.
-    let mut record_start = 0u64;
-    output.blocks = block_stats
-        .iter()
-        .map(|block| {
-            let record_len =
-                u64::try_from(block.output_count).context("block output count exceeds u64")?;
-            let output_block = SymmetryBlock {
-                record_start,
-                record_len,
-                total_two_j: block.total_two_j,
-                parity: block.parity,
-            };
-            record_start = record_start
-                .checked_add(record_len)
-                .context("output block range overflow")?;
-            Ok(output_block)
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let output_header = crate::descriptor_dataset::header_path(output_path)?;
+    let mut reference = DescriptorRows::open(reference_path, &reference_header)?;
+    let mut candidates = DescriptorRows::open(candidates_path, &candidate_header)?;
     ensure!(
-        overwrite || !output_header.exists(),
-        "output header already exists"
+        reference.header.lines[1] == candidates.header.lines[1],
+        "core header mismatch: reference={:?}, candidates={:?}",
+        reference.header.lines[1],
+        candidates.header.lines[1]
     );
-    for source in [reference_path, candidates_path] {
-        let source_header = crate::descriptor_dataset::header_path(source)?;
-        ensure_output_does_not_alias_input(&output_header, &source_header, "header")?;
-        ensure_output_does_not_alias_input(output_path, &source_header, "header")?;
-    }
+    ensure!(
+        candidates.header.peel.starts_with(&reference.header.peel),
+        "reference peel subshells must be a prefix of candidate peel subshells"
+    );
+    let block_count = reference.header.block_lengths.len();
+    ensure!(
+        block_count == candidates.header.block_lengths.len(),
+        "block count mismatch: reference={} candidates={}",
+        block_count,
+        candidates.header.block_lengths.len()
+    );
+
+    let padding = UNOCCUPIED_V2.repeat(candidates.header.peel.len() - reference.header.peel.len());
+    let mut header = candidates.header.clone();
+    header.add_truncations_from(&reference.header)?;
+    header.electron_count = reference.header.electron_count;
+
     let parent = output_path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -360,15 +228,90 @@ pub fn select_interacting_csfs(
     let staged = stage
         .path()
         .join(output_path.file_name().context("missing output filename")?);
-    let stats = crate::descriptor_dataset::write_complete(&output, candidate_header, &staged)?;
-    let output_bytes = fs::metadata(&staged)?.len();
-    publish_staged_outputs(
-        &[
-            (Path::new(&stats.header_file), &output_header),
-            (&staged, output_path),
-        ],
-        overwrite,
-    )?;
+    let staged_header = header_path(&staged)?;
+    let mut writer = DatasetWriter::new(header, &staged, &staged_header, &[])?;
+    let worker_pool = num_workers
+        .map(|workers| ThreadPoolBuilder::new().num_threads(workers).build())
+        .transpose()
+        .context("failed to build interaction worker pool")?;
+    let mut block_stats = Vec::with_capacity(block_count);
+
+    for block_index in 0..block_count {
+        let reference_count = reference.header.block_lengths[block_index];
+        let candidate_count = candidates.header.block_lengths[block_index];
+        let mut exact_references = HashSet::new();
+        for row in reference.read_rows(reference_count) {
+            let mut row = row?;
+            let orbital_end = row.len() - 2;
+            row.splice(orbital_end..orbital_end, padding.iter().copied());
+            writer.push(&row, block_index)?;
+            ensure!(
+                exact_references.insert(row),
+                "reference block {block_index} contains duplicate CSFs"
+            );
+        }
+
+        let (two_j, parity) = reference
+            .block_symmetry()
+            .context("empty reference block")?;
+        let mut block = InteractionBlockStats {
+            block_index,
+            total_two_j: u16::try_from(two_j)?,
+            parity: parity_from_sign(parity)?,
+            reference_count,
+            candidate_count,
+            exact_reference_skipped: 0,
+            selected_count: 0,
+            rejected_count: 0,
+            output_count: reference_count,
+        };
+        for batch_start in (0..candidate_count).step_by(CANDIDATE_BATCH_ROWS) {
+            let count = (candidate_count - batch_start).min(CANDIDATE_BATCH_ROWS);
+            let batch = candidates.read_rows(count).collect::<Result<Vec<_>>>()?;
+            ensure!(
+                candidates.block_symmetry() == Some((two_j, parity)),
+                "J/P mismatch in block {block_index}: reference={:?} candidates={:?}",
+                (two_j, parity),
+                candidates.block_symmetry()
+            );
+
+            // The readers validate a constant electron count per dataset.
+            if reference.header.electron_count != candidates.header.electron_count {
+                block.rejected_count += count;
+                continue;
+            }
+
+            let evaluate = || {
+                batch
+                    .par_iter()
+                    .map(|row| decide_candidate(row, &exact_references))
+                    .collect::<Vec<_>>()
+            };
+            let decisions = match &worker_pool {
+                Some(pool) => pool.install(evaluate),
+                None => evaluate(),
+            };
+            // Indexed parallel iteration preserves the input order.
+            for (row, decision) in batch.iter().zip(decisions) {
+                match decision {
+                    Decision::ExactReference => block.exact_reference_skipped += 1,
+                    Decision::Selected => {
+                        writer.push(row, block_index)?;
+                        block.selected_count += 1;
+                    }
+                    Decision::Rejected => block.rejected_count += 1,
+                }
+            }
+        }
+        block.output_count = reference_count
+            .checked_add(block.selected_count)
+            .context("block output count overflow")?;
+        block_stats.push(block);
+    }
+    ensure!(
+        reference.next_row()?.is_none() && candidates.next_row()?.is_none(),
+        "unconsumed CSF blocks"
+    );
 
     let reference_count = checked_sum(block_stats.iter().map(|block| block.reference_count))?;
     let candidate_count = checked_sum(block_stats.iter().map(|block| block.candidate_count))?;
@@ -380,6 +323,13 @@ pub fn select_interacting_csfs(
     let selected_count = checked_sum(block_stats.iter().map(|block| block.selected_count))?;
     let rejected_count = checked_sum(block_stats.iter().map(|block| block.rejected_count))?;
     let output_count = checked_sum(block_stats.iter().map(|block| block.output_count))?;
+
+    writer.finish()?;
+    let output_bytes = fs::metadata(&staged)?.len();
+    publish_staged_outputs(
+        &[(&staged_header, &output_header), (&staged, output_path)],
+        overwrite,
+    )?;
 
     Ok(InteractionStats {
         exact: false,
@@ -397,162 +347,37 @@ pub fn select_interacting_csfs(
     })
 }
 
-fn validate_inputs(reference: &CompleteCsfFile, candidates: &CompleteCsfFile) -> Result<()> {
-    ensure!(
-        reference.header_lines[1] == candidates.header_lines[1],
-        "core header mismatch: reference={:?}, candidates={:?}",
-        reference.header_lines[1],
-        candidates.header_lines[1]
-    );
-    ensure!(
-        reference.subshells.len() <= candidates.subshells.len()
-            && reference.subshells == candidates.subshells[..reference.subshells.len()],
-        "reference peel subshells must be a prefix of candidate peel subshells"
-    );
-    ensure!(
-        reference.blocks.len() == candidates.blocks.len(),
-        "block count mismatch: reference={} candidates={}",
-        reference.blocks.len(),
-        candidates.blocks.len()
-    );
-    for (index, (reference_block, candidate_block)) in
-        reference.blocks.iter().zip(&candidates.blocks).enumerate()
+fn decide_candidate(candidate: &[i8], references: &HashSet<Vec<i8>>) -> Decision {
+    if references.contains(candidate) {
+        return Decision::ExactReference;
+    }
+    if references
+        .iter()
+        .any(|reference| occupation_upper_bound(occupations(reference), occupations(candidate)))
     {
-        ensure!(
-            reference_block.total_two_j == candidate_block.total_two_j
-                && reference_block.parity == candidate_block.parity,
-            "J/P mismatch in block {}: reference=(2J={}, {:?}) candidates=(2J={}, {:?})",
-            index,
-            reference_block.total_two_j,
-            reference_block.parity,
-            candidate_block.total_two_j,
-            candidate_block.parity
-        );
-    }
-    Ok(())
-}
-
-fn block_range(start: u64, len: u64) -> Result<std::ops::Range<usize>> {
-    let start = usize::try_from(start).context("block start exceeds platform address space")?;
-    let len = usize::try_from(len).context("block length exceeds platform address space")?;
-    let end = start
-        .checked_add(len)
-        .context("block record range overflow")?;
-    Ok(start..end)
-}
-
-fn exact_csf(file: &CompleteCsfFile, record: &CsfRecord) -> Result<ExactCsf> {
-    let occupied = file
-        .occupied(record)?
-        .iter()
-        .map(|shell| {
-            (
-                shell.subshell_index,
-                shell.occupation,
-                shell.state.map(|state| (state.two_j, state.seniority)),
-            )
-        })
-        .collect();
-    let couplings = file
-        .couplings(record)?
-        .iter()
-        .map(|coupling| (coupling.boundary, coupling.two_j))
-        .collect();
-    Ok(ExactCsf {
-        occupied,
-        couplings,
-        total_two_j: record.total_two_j,
-        odd_parity: record.parity == Parity::Odd,
-    })
-}
-
-fn occupations(
-    file: &CompleteCsfFile,
-    record: &CsfRecord,
-    shell_count: usize,
-) -> Result<(Vec<u16>, u32)> {
-    let mut values = vec![0u16; shell_count];
-    let mut electron_count = 0u32;
-    for shell in file.occupied(record)? {
-        let index = usize::from(shell.subshell_index);
-        let value = values
-            .get_mut(index)
-            .with_context(|| format!("subshell index {index} exceeds candidate peel list"))?;
-        *value = value
-            .checked_add(u16::from(shell.occupation))
-            .context("occupation sum overflow")?;
-        electron_count = electron_count
-            .checked_add(u32::from(shell.occupation))
-            .context("electron count overflow")?;
-    }
-    Ok((values, electron_count))
-}
-
-fn reference_record(
-    file: &CompleteCsfFile,
-    record: &CsfRecord,
-    shell_count: usize,
-) -> Result<ReferenceRecord> {
-    let (occupations, electron_count) = occupations(file, record, shell_count)?;
-    Ok(ReferenceRecord {
-        exact: exact_csf(file, record)?,
-        occupations,
-        electron_count,
-    })
-}
-
-fn decide_candidate(
-    candidates: &CompleteCsfFile,
-    candidate: &CsfRecord,
-    shell_count: usize,
-    references: &[ReferenceRecord],
-    exact_references: &HashSet<ExactCsf>,
-) -> Result<Decision> {
-    let exact = exact_csf(candidates, candidate)?;
-    if exact_references.contains(&exact) {
-        return Ok(Decision::ExactReference);
-    }
-    let (candidate_occupations, candidate_electron_count) =
-        occupations(candidates, candidate, shell_count)?;
-    if references.iter().any(|reference| {
-        occupation_upper_bound(
-            &reference.occupations,
-            reference.electron_count,
-            &candidate_occupations,
-            candidate_electron_count,
-        )
-    }) {
-        Ok(Decision::Selected)
+        Decision::Selected
     } else {
-        Ok(Decision::Rejected)
+        Decision::Rejected
     }
 }
 
+fn occupations(row: &[i8]) -> impl Iterator<Item = i8> + '_ {
+    row[..row.len() - 2].iter().step_by(4).copied()
+}
+
+/// The rows use the same orbital table and contain the same number of electrons.
 fn occupation_upper_bound(
-    reference: &[u16],
-    reference_electrons: u32,
-    candidate: &[u16],
-    candidate_electrons: u32,
+    reference: impl IntoIterator<Item = i8>,
+    candidate: impl IntoIterator<Item = i8>,
 ) -> bool {
-    if reference_electrons != candidate_electrons || reference.len() != candidate.len() {
-        return false;
-    }
-    let mut differing_shells = 0usize;
-    let mut absolute_occupation_difference = 0u16;
-    for (&reference_occupation, &candidate_occupation) in reference.iter().zip(candidate) {
+    let mut absolute_difference = 0u8;
+    for (reference_occupation, candidate_occupation) in reference.into_iter().zip(candidate) {
         let difference = reference_occupation.abs_diff(candidate_occupation);
-        if difference == 0 {
-            continue;
-        }
         if difference > 2 {
             return false;
         }
-        absolute_occupation_difference += difference;
-        if absolute_occupation_difference > 4 {
-            return false;
-        }
-        differing_shells += 1;
-        if differing_shells > 4 {
+        absolute_difference += difference;
+        if absolute_difference > 4 {
             return false;
         }
     }
@@ -575,20 +400,12 @@ mod tests {
     fn ichkq2_structural_limits_are_inclusive() {
         // Exactly two electrons moved: each active shell changes by two and
         // the total absolute occupation difference is the inclusive limit 4.
-        assert!(occupation_upper_bound(&[2, 0], 2, &[0, 2], 2));
+        assert!(occupation_upper_bound([2, 0], [0, 2]));
+        assert!(!occupation_upper_bound([3, 0], [0, 3]));
+        assert!(!occupation_upper_bound([2, 2, 0, 0], [0, 0, 2, 2]));
         assert!(!occupation_upper_bound(
-            &[1, 1, 1, 1, 1],
-            5,
-            &[0, 0, 0, 0, 0],
-            0
-        ));
-        assert!(!occupation_upper_bound(&[3, 0], 3, &[0, 3], 3));
-        assert!(!occupation_upper_bound(&[2, 2, 0, 0], 4, &[0, 0, 1, 3], 4));
-        assert!(!occupation_upper_bound(
-            &[1, 1, 1, 1, 1, 0],
-            5,
-            &[0, 0, 0, 0, 0, 5],
-            5
+            [1, 1, 1, 1, 1, 0],
+            [0, 0, 0, 0, 0, 5]
         ));
     }
 }

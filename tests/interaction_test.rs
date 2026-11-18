@@ -1,6 +1,9 @@
 use _rcsfs::complete_csf::CompleteCsfFile;
 use _rcsfs::csf_generation::{GenerationRequest, SubshellOccupation, generate_csfs};
-use _rcsfs::descriptor_dataset::{header_path, import_text, restore_text};
+use _rcsfs::descriptor_dataset::{
+    DatasetHeader, DatasetWriter, DescriptorRows, header_path, import_text, restore_text,
+};
+use _rcsfs::descriptor_operations::zero_first;
 use _rcsfs::interaction::{HamiltonianMode, InteractionMethod, select_interacting_csfs};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -188,6 +191,89 @@ fn worker_count_does_not_change_output_order_or_stats() {
     assert_eq!(record_texts(&serial_output), record_texts(&parallel_output));
     assert_eq!(serial.blocks, parallel.blocks);
     assert_eq!(serial.output_count, parallel.output_count);
+}
+
+#[test]
+fn numerical_selection_and_partition_keep_explicit_zero_channels_across_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = |name: &str| dir.path().join(format!("{name}_descriptors.parquet"));
+    let reference = path("reference");
+    let candidates = path("candidates");
+    let reference_header = header_path(&reference).unwrap();
+    let candidate_header = header_path(&candidates).unwrap();
+    let header = |peel: &str| {
+        DatasetHeader::from_lines(
+            ["Core subshells:", "", "Peel subshells:", peel, "CSF(s):"].map(str::to_owned),
+        )
+        .unwrap()
+    };
+
+    // Two closed s subshells followed by two spin-1/2 subshells coupled to J=0.
+    let row = [2, -1, 0, -1, 2, -1, 0, -1, 1, 1, 1, -1, 1, 1, 1, -1, 0, 1];
+    let mut writer =
+        DatasetWriter::new(header("2s 3s 4s 5s"), &reference, &reference_header, &[]).unwrap();
+    writer.push(&row, 0).unwrap();
+    writer.finish().unwrap();
+
+    let mut padded = row[..16].to_vec();
+    padded.extend([0, -1, 0, -1, 0, 1]);
+    let mut explicit_j = padded.clone();
+    explicit_j[1] = 0;
+    let mut explicit_k = padded.clone();
+    explicit_k[7] = 0;
+
+    let mut writer = DatasetWriter::new(
+        header("2s 3s 4s 5s 6s"),
+        &candidates,
+        &candidate_header,
+        &[],
+    )
+    .unwrap();
+    for index in 0..=8192 {
+        let row = match index {
+            0 | 8192 => &explicit_j,
+            4096 => &explicit_k,
+            _ => &padded,
+        };
+        writer.push(row, 0).unwrap();
+    }
+    writer.finish().unwrap();
+
+    let filtered = path("interacting");
+    let interaction = select_interacting_csfs(
+        &reference,
+        &candidates,
+        &filtered,
+        HamiltonianMode::DiracCoulomb,
+        InteractionMethod::StructuralUpperBound,
+        Some(3),
+        false,
+    )
+    .unwrap();
+    assert_eq!(interaction.exact_reference_skipped, 8190);
+    assert_eq!(interaction.selected_count, 3);
+    assert_eq!(interaction.rejected_count, 0);
+
+    let partitioned = path("zero_first");
+    let partition = zero_first(
+        &reference,
+        &reference_header,
+        &candidates,
+        &candidate_header,
+        &partitioned,
+        &header_path(&partitioned).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(partition.dataset.block_lengths, [4]);
+    assert_eq!(partition.first_order_count, 3);
+
+    for path in [filtered, partitioned] {
+        let mut rows = DescriptorRows::open(&path, &header_path(&path).unwrap()).unwrap();
+        for expected in [&padded, &explicit_j, &explicit_k, &explicit_j] {
+            assert_eq!(&rows.next_row().unwrap().unwrap().2, expected);
+        }
+        assert!(rows.next_row().unwrap().is_none());
+    }
 }
 
 #[test]

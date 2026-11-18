@@ -128,8 +128,13 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
             ),
         ],
         "zero-first" => vec![
-            field!("zero_csf", None, Text, "Zero-order reference CSF file."),
-            field!("full_csf", None, Text, "Full CSF file."),
+            field!(
+                "zero_csf",
+                None,
+                Text,
+                "Zero-order reference descriptor Parquet."
+            ),
+            field!("full_csf", None, Text, "Full-basis descriptor Parquet."),
             field!(
                 "output_csf",
                 None,
@@ -175,8 +180,8 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
             ),
         ],
         "interacting" => vec![
-            field!("reference", None, Text, "Reference CSF file."),
-            field!("candidates", None, Text, "Candidate CSF file."),
+            field!("reference", None, Text, "Reference descriptor Parquet."),
+            field!("candidates", None, Text, "Candidate descriptor Parquet."),
             field!(
                 "output",
                 Some("output"),

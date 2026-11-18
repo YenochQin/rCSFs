@@ -62,6 +62,7 @@ planned record count and space requirement.
 ```fish
 rcsfs convert reference.c reference_descriptors.parquet
 rcsfs zero-first reference_descriptors.parquet helium_descriptors.parquet ordered_descriptors.parquet --json
+rcsfs interacting reference_descriptors.parquet helium_descriptors.parquet -o filtered_descriptors.parquet --json
 rcsfs jsplit ordered_descriptors.parquet --prefix block
 rcsfs restore-csfs --descriptors ordered_descriptors.parquet --header ordered_header.toml --output ordered.c
 ```
@@ -73,9 +74,14 @@ descriptor and header. If the source filename already represents the largest
 active space, list the other spaces as split targets. Output paths must differ
 from the input pair. Run `rcsfs COMMAND --help` for flags.
 
-`interacting` takes descriptor datasets of the reference and candidate spaces
-and writes a conservative structural upper bound. Its output can retain false
-positives compared with full angular selection.
+`zero-first` and `interacting` read and write V2 descriptor/header pairs directly.
+`zero-first` writes the reference rows first in each explicit symmetry block,
+followed by the full-basis rows absent from that reference block.
+The output header records the number of leading reference rows in
+`[block_info].zero_order_counts`, one integer per block in file order.
+`interacting` writes the reference rows followed by the non-reference
+candidates that pass the occupation-based structural upper bound. This bound
+may retain candidates that full angular selection would discard.
 
 ## Python
 

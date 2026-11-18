@@ -41,6 +41,7 @@ rcsfs -c rcsfs.toml
 rcsfs info helium_descriptors.parquet --json
 rcsfs convert reference.c reference_descriptors.parquet
 rcsfs zero-first reference_descriptors.parquet helium_descriptors.parquet ordered_descriptors.parquet --json
+rcsfs interacting reference_descriptors.parquet helium_descriptors.parquet -o filtered_descriptors.parquet --json
 rcsfs jsplit ordered_descriptors.parquet --prefix block
 rcsfs restore-csfs --descriptors ordered_descriptors.parquet --header ordered_header.toml --output ordered.c
 ```
@@ -49,6 +50,12 @@ rcsfs restore-csfs --descriptors ordered_descriptors.parquet --header ordered_he
 可以用 `--estimate-only` 只查看规模和空间估计。设置 `conf` 和 `as` 后，
 生成文件名为 `{conf}_as{level}raw_descriptors.parquet`。
 用 `csfs-split` 拆分较小 active spaces，各输出均带自己的 header，文件名需与输入对不同。
+
+`zero-first` 和 `interacting` 直接读写 V2 描述符及配套 header。
+`zero-first` 在每个显式对称性块中先写零阶参考，再按原顺序写参考中没有的全空间 CSF。
+输出 header 的 `[block_info].zero_order_counts` 按文件分块顺序记录各块开头的零阶 CSF 数。
+`interacting` 先写参考，再写参考中没有且通过占据数结构上界筛选的候选 CSF。
+这个上界可能保留完整角代数筛选会排除的候选。
 
 Python 中用 `convert_csfs` 显式导入文本，`read_csfs` 读取 header 和数值行，
 `select_csfs` 按递增且唯一的零基索引选择，`restore_csfs_from_descriptors` 显式恢复

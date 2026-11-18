@@ -149,16 +149,48 @@ pub fn printed_seniority(
     subshell_two_j: u16,
     seniority: u8,
 ) -> Result<Option<u8>> {
-    let states = physical_states(two_j, electrons)?;
     let state = PhysicalState {
         two_j: subshell_two_j,
         seniority,
     };
+    let states = checked_physical_states(two_j, electrons, state)?;
+    Ok(label(states, state))
+}
+
+fn checked_physical_states(
+    two_j: u16,
+    electrons: u8,
+    state: PhysicalState,
+) -> Result<&'static [PhysicalState]> {
+    let states = physical_states(two_j, electrons)?;
     ensure!(
         states.contains(&state),
-        "illegal physical seniority {seniority} for 2j={two_j}, occupation={electrons}, subshell 2J={subshell_two_j}"
+        "illegal physical seniority {} for 2j={two_j}, occupation={electrons}, subshell 2J={}",
+        state.seniority,
+        state.two_j
     );
-    Ok(label(states, state))
+    Ok(states)
+}
+
+pub(crate) fn validate_physical_seniority(
+    two_j: u16,
+    occupation: u8,
+    subshell_two_j: Option<u16>,
+    seniority: u8,
+) -> Result<()> {
+    if let Some(two_j_subshell) = subshell_two_j {
+        let state = PhysicalState {
+            two_j: two_j_subshell,
+            seniority,
+        };
+        checked_physical_states(two_j, occupation, state)?;
+    } else {
+        ensure!(
+            seniority == physical_seniority(two_j, occupation, None)?,
+            "physical seniority does not match omitted subshell state"
+        );
+    }
+    Ok(())
 }
 
 /// Return the CSF printed-v value, using -1 when the label is omitted.

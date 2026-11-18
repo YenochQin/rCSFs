@@ -15,6 +15,11 @@
 - Read, select, merge, match, partition and split CSFs through numerical
   descriptors. Preserve explicit block order and distinguish missing couplings
   from printed zeros.
+- `interacting` streams candidate V2 rows against each reference block.
+  `interacting` and `zero-first` validate and compare numeric channels directly,
+  preserving physical seniority and the distinction between missing and zero.
+- `zero-first` writes the ordered zero-order counts to the bound header's
+  `block_info.zero_order_counts` field for use by suite MPI programs.
 - Use `convert` or `convert_csfs` to import text and `restore-csfs` or
   `restore_csfs_from_descriptors` to export it. The old three-string Parquet
   format, `gen-descriptors` and generation output toggles have been removed.

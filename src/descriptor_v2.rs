@@ -12,7 +12,8 @@ use crate::complete_csf::{
 use crate::configuration_generation::Subshell;
 use crate::csfs_descriptor::parse_peel_subshells_from_header_lines;
 use crate::descriptor_schema::{
-    DescriptorLayout, DescriptorVersion, MISSING, checked_angular_value, validate_record,
+    DescriptorLayout, DescriptorVersion, MISSING, UNOCCUPIED_V2, checked_angular_value,
+    validate_record,
 };
 use crate::seniority::{physical_seniority, printed_seniority};
 
@@ -125,7 +126,7 @@ fn parity_sign(parity: Parity) -> i8 {
     }
 }
 
-fn parity_from_sign(value: i8) -> Result<Parity> {
+pub(crate) fn parity_from_sign(value: i8) -> Result<Parity> {
     match value {
         1 => Ok(Parity::Even),
         -1 => Ok(Parity::Odd),
@@ -172,7 +173,7 @@ pub fn decode_v2_into(
         let two_k_raw = row[base + layout.two_k_offset()];
         if n_raw == 0 {
             ensure!(
-                two_j_raw == MISSING && seniority_raw == 0 && two_k_raw == MISSING,
+                [n_raw, two_j_raw, seniority_raw, two_k_raw] == UNOCCUPIED_V2,
                 "unoccupied subshell {index} must be encoded as [0, -1, 0, -1]"
             );
             continue;

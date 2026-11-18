@@ -1,6 +1,5 @@
 //! Full-CSF generation, disk processing, artifact encoding and Python adapters.
 mod complete_csf_generation_pipeline;
-pub(crate) mod csf_artifact_encoding;
 pub(crate) mod csf_output_capacity_estimation;
 #[allow(dead_code)]
 pub(crate) mod disk_csf_generation_pipeline;

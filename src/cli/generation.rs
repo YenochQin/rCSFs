@@ -239,8 +239,8 @@ fn estimate_json(
         "plan_stats": estimate.plan_stats, "space_checks": checks, "failure_recovery": "restart",
         "assumptions": c.assumption_lines(), "bytes": {"segments": c.segment_bytes, "root_buckets": c.root_bucket_bytes,
         "recursive_buckets": c.recursive_bucket_bytes, "survivor_bitsets": c.survivor_bitset_bytes,
-        "scratch_peak": c.scratch_peak_bytes, "descriptor": c.descriptor_bytes, "csf_text": c.csf_text_bytes,
-        "csf_parquet": c.csf_parquet_bytes, "staged_outputs": c.staged_output_bytes,
+        "scratch_peak": c.scratch_peak_bytes, "descriptor": c.descriptor_bytes,
+        "staged_outputs": c.staged_output_bytes,
         "required_scratch": c.required_scratch_bytes, "required_output": c.required_output_bytes}})
 }
 

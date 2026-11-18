@@ -127,8 +127,6 @@ pub(crate) fn estimate_disk_generation(
     bytes.set_item("survivor_bitsets", capacity.survivor_bitset_bytes)?;
     bytes.set_item("scratch_peak", capacity.scratch_peak_bytes)?;
     bytes.set_item("descriptor", capacity.descriptor_bytes)?;
-    bytes.set_item("csf_text", capacity.csf_text_bytes)?;
-    bytes.set_item("csf_parquet", capacity.csf_parquet_bytes)?;
     bytes.set_item("staged_outputs", capacity.staged_output_bytes)?;
     bytes.set_item("required_scratch", capacity.required_scratch_bytes)?;
     bytes.set_item("required_output", capacity.required_output_bytes)?;

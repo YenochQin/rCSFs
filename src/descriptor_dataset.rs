@@ -368,10 +368,13 @@ impl DescriptorRows {
             ("channels_per_subshell", "4"),
             ("missing_sentinel", "-1"),
             ("normalized", "false"),
-            ("source_header_sha256", hash.as_str()),
         ] {
             ensure!(get(key)? == expected, "invalid {key}");
         }
+        ensure!(
+            get("source_header_sha256")? == hash,
+            "descriptor source_header_sha256 does not match the hash of the supplied header"
+        );
         ensure!(
             get("subshell_count")?.parse::<usize>()? == header.peel.len(),
             "peel count mismatch"
@@ -487,22 +490,32 @@ pub struct DatasetWriter {
 pub(crate) struct PreparedDataset {
     header_temp: TemporaryOutput,
     output_temp: TemporaryOutput,
+    header_path: PathBuf,
+    output_path: PathBuf,
     stats: DatasetStats,
 }
 
 impl PreparedDataset {
     pub(crate) fn publish(self) -> Result<DatasetStats> {
-        publish_temporary_output(
-            self.header_temp.path(),
-            Path::new(&self.stats.header_file),
-            false,
-        )?;
-        publish_temporary_output(
-            self.output_temp.path(),
-            Path::new(&self.stats.output_file),
-            false,
-        )
-        .with_context(|| format!("header already published at {}", self.stats.header_file))?;
+        // Keep the staging link alive so we can identify our header if a
+        // concurrent writer takes the descriptor destination during publish.
+        fs::hard_link(self.header_temp.path(), &self.header_path)
+            .with_context(|| format!("failed to publish header {}", self.header_path.display()))?;
+        if let Err(error) =
+            publish_temporary_output(self.output_temp.path(), &self.output_path, false)
+        {
+            if crate::atomic_output::same_file_identity(self.header_temp.path(), &self.header_path)
+                .unwrap_or(false)
+            {
+                fs::remove_file(&self.header_path).with_context(|| {
+                    format!(
+                        "{error:#}; could not remove staged header {}",
+                        self.header_path.display()
+                    )
+                })?;
+            }
+            return Err(error);
+        }
         Ok(self.stats)
     }
 }
@@ -667,6 +680,8 @@ impl DatasetWriter {
         Ok(PreparedDataset {
             header_temp,
             output_temp,
+            header_path: self.header_output,
+            output_path: self.output,
             stats,
         })
     }
@@ -797,7 +812,12 @@ pub fn restore_text(
             writeln!(writer, " *")?;
         }
         prior_block = Some(block);
-        if source.header.peel.is_empty() {
+        if row[..row.len() - 2]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|slot| slot[0] == 0)
+        {
             writeln!(writer, "\n\n0+")?;
         } else {
             let (mut occupied, mut couplings) = (Vec::new(), Vec::new());

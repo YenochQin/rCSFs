@@ -50,6 +50,20 @@ def test_interactive_generation_matches_registered_hash(
             check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+        assert not list(work.glob("*.c"))
+        restored = cli.run(
+            [
+                "restore-csfs",
+                "--descriptors",
+                "rcsf_descriptors.parquet",
+                "--header",
+                "rcsf_header.toml",
+                "--output",
+                "rcsf.out",
+            ],
+            cwd=work,
+        )
+        assert restored.returncode == 0, restored.stderr
         with (work / "rcsf.out").open("rb") as output:
             assert hashlib.file_digest(output, "sha256").hexdigest() == expected_hash
 

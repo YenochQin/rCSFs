@@ -47,48 +47,43 @@ fn prepare_descriptor(dir: &Path) {
         dir,
         &[
             "csfsgenerate",
-            "input.c",
+            "--output",
+            "features_descriptors.parquet",
             "--transcript",
             "input.log",
             "--threads",
             "1",
         ],
     );
+}
+fn restore(dir: &Path, descriptor: &str, header: &str, output: &str) -> Value {
     json(
         dir,
         &[
-            "convert",
-            "input.c",
-            "input.parquet",
-            "--num-workers",
-            "1",
-            "--json",
-        ],
-    );
-    json(
-        dir,
-        &[
-            "gen-descriptors",
-            "input.parquet",
-            "features.parquet",
+            "restore-csfs",
+            "--descriptors",
+            descriptor,
             "--header",
-            "input_header.toml",
-            "--num-workers",
-            "1",
+            header,
+            "--output",
+            output,
             "--json",
         ],
-    );
+    )
 }
 #[test]
 fn output_paths_accept_current_directory_and_reject_other_directories() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
     fs::write(p.join("input.log"), TRANSCRIPT).unwrap();
-    let absolute = p.join("absolute.c");
-    let canonical = p.canonicalize().unwrap().join("canonical.c");
+    let absolute = p.join("absolute_descriptors.parquet");
+    let canonical = p
+        .canonicalize()
+        .unwrap()
+        .join("canonical_descriptors.parquet");
     for output in [
-        "relative.c",
-        "./explicit.c",
+        "relative_descriptors.parquet",
+        "./explicit_descriptors.parquet",
         absolute.to_str().unwrap(),
         canonical.to_str().unwrap(),
     ] {
@@ -96,6 +91,7 @@ fn output_paths_accept_current_directory_and_reject_other_directories() {
             p,
             &[
                 "csfsgenerate",
+                "--output",
                 output,
                 "--transcript",
                 "input.log",
@@ -107,9 +103,21 @@ fn output_paths_accept_current_directory_and_reject_other_directories() {
     }
     fs::create_dir(p.join("child")).unwrap();
     let outside = tempfile::tempdir().unwrap();
-    let external = outside.path().join("outside.c");
-    for output in ["child/nested.c", external.to_str().unwrap()] {
-        let result = invoke(p, &["csfsgenerate", output, "--transcript", "input.log"]);
+    let external = outside.path().join("outside_descriptors.parquet");
+    for output in [
+        "child/nested_descriptors.parquet",
+        external.to_str().unwrap(),
+    ] {
+        let result = invoke(
+            p,
+            &[
+                "csfsgenerate",
+                "--output",
+                output,
+                "--transcript",
+                "input.log",
+            ],
+        );
         assert!(!result.status.success());
         assert!(
             String::from_utf8_lossy(&result.stderr)
@@ -131,7 +139,6 @@ fn help_version_and_each_command_run_without_python() {
         "info",
         "csfsgenerate",
         "csfggenerate",
-        "gen-descriptors",
         "zero-first",
         "csfs-split",
         "jsplit",
@@ -150,42 +157,45 @@ fn help_version_and_each_command_run_without_python() {
     );
 }
 #[test]
+
 fn descriptor_roundtrip_preserves_states_headers_and_selected_rows() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
     prepare_descriptor(p);
-    let info = json(p, &["info", "features.parquet", "--json"]);
+    let info = json(p, &["info", "features_descriptors.parquet", "--json"]);
     assert_eq!(info["num_rows"], 3);
-    let meta: toml::Table =
-        toml::from_str(&fs::read_to_string(p.join("features.toml")).unwrap()).unwrap();
-    assert_eq!(meta["format_version"].as_integer(), Some(2));
-    assert_eq!(meta["normalized"].as_bool(), Some(false));
+    assert_eq!(info["key_value_metadata"]["descriptor_version"], "2");
+    assert!(!p.join("input.c").exists());
     fs::write(p.join("restored.c"), "previous complete output").unwrap();
-    json(
+    restore(
+        p,
+        "features_descriptors.parquet",
+        "features_header.toml",
+        "restored.c",
+    );
+    let imported = json(
         p,
         &[
-            "restore-csfs",
-            "--descriptors",
-            "features.parquet",
-            "--header",
-            "input_header.toml",
-            "--output",
+            "convert",
             "restored.c",
+            "copy_descriptors.parquet",
             "--json",
         ],
     );
+    assert_eq!(imported["block_lengths"], serde_json::json!([3]));
+    restore(p, "copy_descriptors.parquet", "copy_header.toml", "copy.c");
     assert_eq!(
-        CompleteCsfFile::parse_path(&p.join("input.c")).unwrap(),
-        CompleteCsfFile::parse_path(&p.join("restored.c")).unwrap()
+        CompleteCsfFile::parse_path(&p.join("restored.c")).unwrap(),
+        CompleteCsfFile::parse_path(&p.join("copy.c")).unwrap()
     );
     let stats = json(
         p,
         &[
             "restore-csfs",
             "--descriptors",
-            "features.parquet",
+            "features_descriptors.parquet",
             "--header",
-            "input_header.toml",
+            "features_header.toml",
             "--output",
             "selected.c",
             "--indices",
@@ -194,30 +204,37 @@ fn descriptor_roundtrip_preserves_states_headers_and_selected_rows() {
         ],
     );
     assert_eq!(stats["record_count"], 1);
-    let selected = CompleteCsfFile::parse_path(&p.join("selected.c")).unwrap();
-    assert_eq!(selected.records[0].total_two_j, 0);
+    assert_eq!(
+        CompleteCsfFile::parse_path(&p.join("selected.c"))
+            .unwrap()
+            .records[0]
+            .total_two_j,
+        0
+    );
 }
+
 #[test]
 fn invalid_header_and_path_aliases_preserve_existing_outputs() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
     prepare_descriptor(p);
-    let before = fs::read(p.join("input.parquet")).unwrap();
+    let before = fs::read(p.join("features_descriptors.parquet")).unwrap();
     let bad = invoke(
         p,
         &[
-            "gen-descriptors",
-            "input.parquet",
-            "input.parquet",
-            "--header",
-            "input_header.toml",
+            "convert",
+            "features_descriptors.parquet",
+            "features_descriptors.parquet",
             "--json",
         ],
     );
     assert!(!bad.status.success());
-    assert_eq!(before, fs::read(p.join("input.parquet")).unwrap());
+    assert_eq!(
+        before,
+        fs::read(p.join("features_descriptors.parquet")).unwrap()
+    );
     fs::write(p.join("saved.c"), "keep me").unwrap();
-    let mut header = fs::read_to_string(p.join("input_header.toml")).unwrap();
+    let mut header = fs::read_to_string(p.join("features_header.toml")).unwrap();
     header.push_str("\n# changed header\n");
     fs::write(p.join("wrong.toml"), header).unwrap();
     let bad = invoke(
@@ -225,7 +242,7 @@ fn invalid_header_and_path_aliases_preserve_existing_outputs() {
         &[
             "restore-csfs",
             "--descriptors",
-            "features.parquet",
+            "features_descriptors.parquet",
             "--header",
             "wrong.toml",
             "--output",
@@ -247,6 +264,7 @@ fn invalid_header_and_path_aliases_preserve_existing_outputs() {
     }));
 }
 #[test]
+
 fn generation_memory_disk_and_transcript_outputs_agree() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
@@ -255,46 +273,47 @@ fn generation_memory_disk_and_transcript_outputs_agree() {
         p,
         &[
             "csfsgenerate",
-            "memory.c",
+            "--output",
+            "memory_descriptors.parquet",
             "--transcript",
             "input.log",
             "--threads",
             "1",
+            "--generation-storage",
+            "memory",
             "--json",
         ],
     );
-    fs::write(p.join("model.toml"), format!("[csfsgenerate]\n{MODEL}rcsfs_out = 'disk.c'\ngenerate_descriptors = true\ngeneration_storage = 'disk'\nmemory_budget_mib = 32\n")).unwrap();
+    fs::write(p.join("model.toml"), format!("[csfsgenerate]\n{MODEL}output = 'disk_descriptors.parquet'\ngeneration_storage = 'disk'\nmemory_budget_mib = 32\n")).unwrap();
     let disk = json(p, &["csfsgenerate", "-c", "model.toml", "--json"]);
     assert_eq!(baseline["record_count"], disk["record_count"]);
-    assert_eq!(
-        fs::read(p.join("memory.c")).unwrap(),
-        fs::read(p.join("disk.c")).unwrap()
-    );
-    json(
+    assert_eq!(disk["record_count"], 3);
+    assert!(!p.join("memory.c").exists() && !p.join("disk.c").exists());
+    restore(
         p,
-        &[
-            "restore-csfs",
-            "--descriptors",
-            "disk_descriptors.parquet",
-            "--header",
-            "disk_header.toml",
-            "--output",
-            "roundtrip.c",
-            "--json",
-        ],
+        "memory_descriptors.parquet",
+        "memory_header.toml",
+        "expected.c",
+    );
+    restore(
+        p,
+        "disk_descriptors.parquet",
+        "disk_header.toml",
+        "actual.c",
     );
     assert_eq!(
-        fs::read(p.join("memory.c")).unwrap(),
-        fs::read(p.join("roundtrip.c")).unwrap()
+        fs::read(p.join("expected.c")).unwrap(),
+        fs::read(p.join("actual.c")).unwrap()
     );
 }
+
 #[test]
 fn estimate_creates_no_outputs_and_cli_overrides_config() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
     fs::write(
         p.join("model.toml"),
-        format!("[csfsgenerate]\n{MODEL}rcsfs_out = 'unused.c'\ngeneration_storage = 'disk'\n"),
+        format!("[csfsgenerate]\n{MODEL}output = 'unused_descriptors.parquet'\ngeneration_storage = 'disk'\n"),
     )
     .unwrap();
     let stats = json(
@@ -318,15 +337,16 @@ fn estimate_creates_no_outputs_and_cli_overrides_config() {
         p,
         &[
             "csfsgenerate",
-            "chosen.c",
+            "--output",
+            "chosen_descriptors.parquet",
             "-c",
             "model.toml",
             "--generation-storage",
             "memory",
         ],
     );
-    assert!(p.join("chosen.c").exists());
-    assert!(!p.join("unused.c").exists());
+    assert!(p.join("chosen_descriptors.parquet").exists());
+    assert!(!p.join("unused_descriptors.parquet").exists());
 }
 #[test]
 fn batch_generation_split_uses_conf_naming_and_writes_log() {
@@ -334,8 +354,8 @@ fn batch_generation_split_uses_conf_naming_and_writes_log() {
     let p = dir.path();
     fs::write(p.join("model.toml"), format!("conf = 'helium'\n[csfsgenerate]\nas = 2\n{MODEL}\n[csfs-split.active_spaces]\nAS1 = '1s'\n")).unwrap();
     success(p, &["-c", "model.toml"]);
-    assert!(p.join("helium_as2raw.parquet").exists());
-    assert!(p.join("helium_as1raw.c").exists());
+    assert!(p.join("helium_as2raw_descriptors.parquet").exists());
+    assert!(p.join("helium_as1raw_descriptors.parquet").exists());
     let log = fs::read_to_string(p.join("rcsfs_helium.log")).unwrap();
     let records: Vec<Value> = log
         .lines()
@@ -343,10 +363,7 @@ fn batch_generation_split_uses_conf_naming_and_writes_log() {
         .collect();
     assert_eq!(records.last().unwrap()["event"], "complete");
     assert_eq!(
-        CompleteCsfFile::parse_path(&p.join("helium_as1raw.c"))
-            .unwrap()
-            .records
-            .len(),
+        json(p, &["info", "helium_as1raw_descriptors.parquet", "--json"])["num_rows"],
         1
     );
 }
@@ -354,13 +371,13 @@ fn batch_generation_split_uses_conf_naming_and_writes_log() {
 fn batch_is_validated_before_any_generation() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
-    fs::write(p.join("bad.toml"), format!("[[csfsgenerate]]\n{MODEL}rcsfs_out = 'same.c'\n[[csfsgenerate]]\n{MODEL}rcsfs_out = 'same.c'\n")).unwrap();
+    fs::write(p.join("bad.toml"), format!("[[csfsgenerate]]\n{MODEL}output = 'same_descriptors.parquet'\n[[csfsgenerate]]\n{MODEL}output = 'same_descriptors.parquet'\n")).unwrap();
     let bad = invoke(p, &["-c", "bad.toml"]);
     assert_eq!(bad.status.code(), Some(2));
     assert_eq!(fs::read_dir(p).unwrap().count(), 1);
     fs::write(
         p.join("bad.toml"),
-        format!("[csfsgenerate]\n{MODEL}rcsfs_out = 'out.c'\n[gen-descriptors]\nunknown = true\n"),
+        format!("[csfsgenerate]\n{MODEL}output = 'out.c'\n[gen-descriptors]\nunknown = true\n"),
     )
     .unwrap();
     let bad = invoke(p, &["-c", "bad.toml"]);
@@ -372,7 +389,7 @@ fn continuation_lists_are_merged_in_disk_mode() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
     let list = "reference_configuration = ['1s(2,*)']\nactive_space = '2s'\nj_min = 0\nj_max = 0\nexcitations = 2\n";
-    fs::write(p.join("model.toml"), format!("[csfsgenerate]\ninactive_core = 0\nthreads = 1\nrcsfs_out = 'union.c'\n[[csfsgenerate.lists]]\n{list}[[csfsgenerate.lists]]\n{list}")).unwrap();
+    fs::write(p.join("model.toml"), format!("[csfsgenerate]\ninactive_core = 0\nthreads = 1\noutput = 'union_descriptors.parquet'\n[[csfsgenerate.lists]]\n{list}[[csfsgenerate.lists]]\n{list}")).unwrap();
     let stats = json(p, &["csfsgenerate", "-c", "model.toml", "--json"]);
     assert!(stats["duplicate_count"].as_u64().unwrap() > 0);
     assert_eq!(
@@ -394,7 +411,7 @@ fn continuation_lists_are_merged_in_disk_mode() {
 fn human_console_is_concise_and_full_details_are_logged() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
-    let source = fs::read_to_string(fixture("complete.csf")).unwrap();
+    let source = fs::read_to_string(fixture("descriptor_multiblock.c")).unwrap();
     let lines: Vec<_> = source.lines().collect();
     let text = format!(
         "{}\n{}",
@@ -402,10 +419,7 @@ fn human_console_is_concise_and_full_details_are_logged() {
         format!("{}\n", lines[5..8].join("\n")).repeat(1234)
     );
     fs::write(p.join("many.c"), text).unwrap();
-    let converted = success(
-        p,
-        &["convert", "many.c", "many.parquet", "--num-workers", "1"],
-    );
+    let converted = success(p, &["convert", "many.c", "many.parquet"]);
     let stdout = String::from_utf8(converted.stdout).unwrap();
     let stderr = String::from_utf8(converted.stderr).unwrap();
     assert!(stdout.contains("1,234"), "{stdout}");
@@ -420,12 +434,12 @@ fn human_console_is_concise_and_full_details_are_logged() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert!(events.iter().any(|event| event["event"] == "diagnostic"));
+    assert!(events.iter().any(|event| event["event"] == "step_start"));
     assert_eq!(
         events
             .iter()
             .find(|event| event["event"] == "result")
-            .unwrap()["stats"]["csf_count"],
+            .unwrap()["stats"]["record_count"],
         1234
     );
     assert_eq!(events.last().unwrap()["success"], true);
@@ -445,39 +459,24 @@ fn human_console_is_concise_and_full_details_are_logged() {
 }
 
 #[test]
-fn warnings_and_errors_remain_visible_and_are_logged() {
+
+fn malformed_import_reports_error_and_preserves_complete_output() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
-    let mut source = fs::read_to_string(fixture("complete.csf")).unwrap();
+    let mut source = fs::read_to_string(fixture("descriptor_multiblock.c")).unwrap();
     source.push_str("incomplete trailing record\n");
-    fs::write(p.join("warning.c"), source).unwrap();
-    let output = success(
-        p,
-        &[
-            "convert",
-            "warning.c",
-            "out.parquet",
-            "--num-workers",
-            "1",
-            "--json",
-        ],
-    );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("警告:"));
-    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["csf_count"], 2);
-    let log = fs::read_to_string(p.join("rcsfs.log")).unwrap();
-    assert!(
-        log.lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .any(|event| event["level"] == "warning")
-    );
-    let failed = invoke(p, &["info", "missing.parquet", "--json"]);
-    assert!(!failed.status.success());
-    assert!(String::from_utf8_lossy(&failed.stderr).contains("error:"));
+    fs::write(p.join("invalid.c"), source).unwrap();
+    fs::write(p.join("out.parquet"), b"previous").unwrap();
+    let bad = invoke(p, &["convert", "invalid.c", "out.parquet", "--json"]);
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("truncated CSF state line"));
+    assert_eq!(fs::read(p.join("out.parquet")).unwrap(), b"previous");
+    assert!(!p.join("out_header.toml").exists());
     let log = fs::read_to_string(p.join("rcsfs.log")).unwrap();
     let last: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
     assert_eq!(last["success"], false);
 }
+
 #[test]
 fn csfg_matches_independent_fixture_and_protects_existing_files() {
     let dir = tempfile::tempdir().unwrap();
@@ -527,36 +526,44 @@ fn csfg_numbered_layers_are_published_only_after_all_models_succeed() {
     assert!(!p.join("bad_as2raw.g").exists());
 }
 #[test]
-fn jsplit_copies_orbitals_and_aliases_accept_config() {
+
+fn jsplit_copies_orbitals_and_accepts_config() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
-    let input = fixture("multi_j.c");
+    success(
+        p,
+        &[
+            "convert",
+            fixture("descriptor_multiblock.c").to_str().unwrap(),
+            "basis_descriptors.parquet",
+        ],
+    );
+    fs::copy(fixture("multi_j.w"), p.join("basis.w")).unwrap();
     let stats = json(
         p,
         &[
-            "split-j",
-            input.to_str().unwrap(),
+            "jsplit",
+            "basis_descriptors.parquet",
             "--prefix",
             "block",
             "--json",
         ],
     );
-    assert_eq!(stats["block_count"], 3);
-    for block in stats["outputs"].as_array().unwrap() {
+    let blocks = stats["outputs"].as_array().unwrap();
+    assert_eq!(blocks.len(), 2);
+    for block in blocks {
         assert_eq!(
             fs::read(p.join(block["w_file"].as_str().unwrap())).unwrap(),
             fs::read(fixture("multi_j.w")).unwrap()
         );
+        assert_eq!(block["record_count"], 1);
     }
     fs::write(
         p.join("config.toml"),
-        format!(
-            "[jsplit]\ninput_csf = {:?}\nprefix = 'nocopy'\ncopy_w = false\n",
-            input.to_str().unwrap()
-        ),
+        "[jsplit]\ninput_csf = 'basis_descriptors.parquet'\nprefix = 'nocopy'\ncopy_w = false\n",
     )
     .unwrap();
-    let stats = json(p, &["rasfsplit", "-c", "config.toml", "--json"]);
+    let stats = json(p, &["jsplit", "-c", "config.toml", "--json"]);
     assert!(
         stats["outputs"]
             .as_array()
@@ -565,62 +572,49 @@ fn jsplit_copies_orbitals_and_aliases_accept_config() {
             .all(|b| b["w_file"].is_null())
     );
 }
+
 #[test]
+
 fn zero_first_and_interaction_use_shared_algorithms() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
-    fs::copy(fixture("complete.csf"), p.join("reference.c")).unwrap();
-    fs::copy(fixture("complete.csf"), p.join("full.c")).unwrap();
+    for output in ["reference_descriptors.parquet", "full_descriptors.parquet"] {
+        success(
+            p,
+            &[
+                "convert",
+                fixture("descriptor_multiblock.c").to_str().unwrap(),
+                output,
+            ],
+        );
+    }
     let stats = json(
         p,
         &[
             "zero-first",
-            "reference.c",
-            "full.c",
-            "zf.c",
-            "--num-workers",
-            "1",
+            "reference_descriptors.parquet",
+            "full_descriptors.parquet",
+            "zf_descriptors.parquet",
             "--json",
         ],
     );
     assert_eq!(stats["first_order_count"], 0);
-    let redirected = success(
-        p,
-        &[
-            "zero-first",
-            "reference.c",
-            "full.c",
-            "zf.c",
-            "--num-workers",
-            "1",
-        ],
-    );
-    let stderr = String::from_utf8(redirected.stderr).unwrap();
-    assert!(stderr.contains("Zero-order Space"));
-    let rows: Vec<Vec<u64>> = stderr
-        .lines()
-        .filter_map(|line| {
-            line.split_whitespace()
-                .map(str::parse::<u64>)
-                .collect::<Result<Vec<_>, _>>()
-                .ok()
-        })
-        .filter(|row| row.len() == 3)
-        .collect();
-    assert_eq!(rows, vec![vec![1, 1, 1], vec![2, 1, 1]]);
-    assert!(!stderr.contains("开始"));
-    assert_eq!(
-        CompleteCsfFile::parse_path(&p.join("full.c")).unwrap(),
-        CompleteCsfFile::parse_path(&p.join("zf.c")).unwrap()
-    );
+    let blocks = stats["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert!(blocks.iter().all(|block| block["zero_count"] == 1));
+    assert!(!p.join("zf.c").exists());
+    restore(p, "full_descriptors.parquet", "full_header.toml", "full.c");
+    restore(p, "zf_descriptors.parquet", "zf_header.toml", "zf.c");
+    let full = CompleteCsfFile::parse_path(&p.join("full.c")).unwrap();
+    assert_eq!(full, CompleteCsfFile::parse_path(&p.join("zf.c")).unwrap());
     let stats = json(
         p,
         &[
             "interacting",
-            "reference.c",
-            "full.c",
+            "reference_descriptors.parquet",
+            "full_descriptors.parquet",
             "-o",
-            "selected.c",
+            "selected_descriptors.parquet",
             "--threads",
             "1",
             "--json",
@@ -630,6 +624,7 @@ fn zero_first_and_interaction_use_shared_algorithms() {
     assert_eq!(stats["hamiltonian"], "dirac_coulomb");
     assert_eq!(stats["exact_reference_skipped"], 2);
 }
+
 #[test]
 fn malformed_arguments_and_output_config_collision_are_errors() {
     let dir = tempfile::tempdir().unwrap();
@@ -652,7 +647,7 @@ fn malformed_arguments_and_output_config_collision_are_errors() {
     }
     fs::write(
         p.join("model.toml"),
-        format!("[csfsgenerate]\n{MODEL}rcsfs_out = 'model.toml'\n"),
+        format!("[csfsgenerate]\n{MODEL}output = 'model.toml'\n"),
     )
     .unwrap();
     let before = fs::read(p.join("model.toml")).unwrap();
@@ -668,7 +663,14 @@ fn interactive_generation_saves_reusable_configuration() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
     let mut child = Command::new(env!("CARGO_BIN_EXE_rcsfs"))
-        .args(["csfsgenerate", "interactive.c", "--threads", "1", "--json"])
+        .args([
+            "csfsgenerate",
+            "--output",
+            "interactive_descriptors.parquet",
+            "--threads",
+            "1",
+            "--json",
+        ])
         .current_dir(p)
         .env("PATH", "")
         .stdin(Stdio::piped())
@@ -690,7 +692,27 @@ fn interactive_generation_saves_reusable_configuration() {
     );
     let stats: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stats["success"], true);
-    success(p, &["csfsgenerate", "repeat.c", "-c"]);
+    success(
+        p,
+        &[
+            "csfsgenerate",
+            "--output",
+            "repeat_descriptors.parquet",
+            "-c",
+        ],
+    );
+    restore(
+        p,
+        "interactive_descriptors.parquet",
+        "interactive_header.toml",
+        "interactive.c",
+    );
+    restore(
+        p,
+        "repeat_descriptors.parquet",
+        "repeat_header.toml",
+        "repeat.c",
+    );
     assert_eq!(
         fs::read(p.join("interactive.c")).unwrap(),
         fs::read(p.join("repeat.c")).unwrap()

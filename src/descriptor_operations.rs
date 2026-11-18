@@ -44,7 +44,11 @@ fn common_header(headers: &[DatasetHeader]) -> Result<DatasetHeader> {
         edges.retain(|(before, _)| before != &label);
         ordered.push(label);
     }
-    header.lines[3] = ordered.join("  ");
+    if let Some(source) = headers.iter().find(|source| source.peel == ordered) {
+        header.lines[3].clone_from(&source.lines[3]);
+    } else {
+        header.lines[3] = ordered.join("  ");
+    }
     header.peel = ordered;
     Ok(header)
 }
@@ -281,10 +285,10 @@ pub fn split_active_spaces(
                 !label.ends_with('-'),
                 "active-space limits must use nonrelativistic orbital names"
             );
-            maxima
-                .entry(orbital.l())
-                .and_modify(|n| *n = (*n).max(orbital.n()))
-                .or_insert(orbital.n());
+            ensure!(
+                maxima.insert(orbital.l(), orbital.n()).is_none(),
+                "duplicate active orbital symmetry: {label}"
+            );
         }
         ensure!(!maxima.is_empty(), "active space is empty");
         let retained = source

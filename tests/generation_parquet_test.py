@@ -4,7 +4,6 @@ import _native_cli as cli
 
 import hashlib
 import json
-import tomllib
 from pathlib import Path
 
 import polars as pl
@@ -14,12 +13,11 @@ import pytest
 from rcsfs import (
     CsfGenerationEstimate,
     estimate_disk_generation,
-    generate_disk_outputs_from_transcript,
+    generate_csfs_from_transcript,
     get_parquet_info,
     read_peel_subshells,
     restore_csfs_from_descriptors,
 )
-from rcsfs._rcsfs import generate_csfs_from_transcript
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -33,9 +31,12 @@ def test_grasp_five_g_text_is_byte_exact(tmp_path: Path) -> None:
         "*\n5g\n8,8\n3 ! Number of excitations\nn\n"
     )
     output = tmp_path / "rcsfs.c"
-    stats = generate_csfs_from_transcript(transcript, str(output), 8)
+    descriptors = tmp_path / "rcsfs_descriptors.parquet"
+    stats = generate_csfs_from_transcript(transcript, descriptors, 8)
     assert stats["success"] is True
     assert stats["record_count"] == 13_129
+    assert not output.exists()
+    restore_csfs_from_descriptors(descriptors, tmp_path / "rcsfs_header.toml", output)
     assert hashlib.sha256(output.read_bytes()).hexdigest() == (
         "3cd1174cb277ab71ac0a17bb0551302bf2ab998a8b19271a6aa015924adeba47"
     )
@@ -62,15 +63,10 @@ def test_generation_estimate_type_names_the_deduplication_strategy() -> None:
 
 def config_file(tmp_path: Path, **outputs: object) -> Path:
     config = tmp_path / "generation.toml"
-    values = {
-        "csf": str(tmp_path / "out.c"),
-        "generate_descriptors": True,
-        **outputs,
-    }
+    values = {"output": str(tmp_path / "out_descriptors.parquet"), **outputs}
     config.write_text(
-        '[generate]\norder = "*"\ncore = 0\nreferences = ["1s(2,*)"]\n'
-        'active_orbitals = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
-        "continue_lists = false\n[output]\n"
+        '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
+        'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
         + "\n".join(f"{key} = {json.dumps(value)}" for key, value in values.items())
     )
     return config
@@ -80,21 +76,11 @@ def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
     config = config_file(tmp_path)
     assert cli.main(["csfsgenerate", "--config", str(config)]) == 0
     frame = pl.read_parquet(tmp_path / "out_descriptors.parquet")
-    metadata = tomllib.loads((tmp_path / "out_descriptors.toml").read_text())
-    assert metadata == {
-        "format_version": 2,
-        "encoding": "parquet",
-        "descriptor_dtype": "int8",
-        "max_two_j": 126,
-        "seniority_encoding": "physical",
-        "normalized": False,
-        "record_count": frame.height,
-        "subshells": read_peel_subshells(tmp_path / "out_header.toml"),
-    }
+    peel = read_peel_subshells(tmp_path / "out_header.toml")
     assert frame.height == 1
     assert frame.columns == [
         f"sub{index}_{channel}"
-        for index in range(len(metadata["subshells"]))
+        for index in range(len(peel))
         for channel in ("n", "2j", "v", "2k")
     ] + ["total_two_j", "parity"]
     assert frame.dtypes == [pl.Int8] * frame.width
@@ -110,17 +96,18 @@ def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
         tmp_path / "out_descriptors.parquet", tmp_path / "out_header.toml", restored
     )
     assert stats["record_count"] == frame.height
-    assert restored.read_bytes() == (tmp_path / "out.c").read_bytes()
+    assert "1s ( 2)" in restored.read_text()
+    assert not (tmp_path / "out.c").exists()
 
 
 def test_config_multiple_lists_union_and_exact_dedup(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     config = tmp_path / "multiple.toml"
-    output = tmp_path / "union.c"
+    output = tmp_path / "union_descriptors.parquet"
     config.write_text(
-        f"[csfsgenerate]\ninactive_core = 0\nrcsfs_out = {json.dumps(str(output))}\n"
-        'generate_descriptors = true\ngeneration_storage = "disk"\n'
+        f"[csfsgenerate]\ninactive_core = 0\noutput = {json.dumps(str(output))}\n"
+        'generation_storage = "disk"\n'
         '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
         'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
         "[[csfsgenerate.lists]]\n"
@@ -149,16 +136,17 @@ def test_config_multiple_lists_union_and_exact_dedup(
         tmp_path / "union_header.toml",
         restored,
     )
-    assert restored.read_bytes() == output.read_bytes()
+    assert "1s ( 2)" in restored.read_text()
+    assert "2s ( 2)" in restored.read_text()
 
 
-def test_config_multiple_lists_text_only_and_distinct_j_ranges(
+def test_config_multiple_lists_with_distinct_j_ranges(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     config = tmp_path / "multiple-text.toml"
-    output = tmp_path / "union.c"
+    output = tmp_path / "union_descriptors.parquet"
     config.write_text(
-        f"[csfsgenerate]\ninactive_core = 0\nrcsfs_out = {json.dumps(str(output))}\n"
+        f"[csfsgenerate]\ninactive_core = 0\noutput = {json.dumps(str(output))}\n"
         '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
         'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
         "[[csfsgenerate.lists]]\n"
@@ -169,17 +157,21 @@ def test_config_multiple_lists_text_only_and_distinct_j_ranges(
     stats = json.loads(capfd.readouterr().out)
     assert stats["record_count"] == 2
     assert stats["block_count"] == 2
-    assert "descriptor_file" not in stats
-    assert set(tmp_path.iterdir()) == {config, output, tmp_path / "rcsfs.log"}
+    assert set(tmp_path.iterdir()) == {
+        config,
+        output,
+        tmp_path / "union_header.toml",
+        tmp_path / "rcsfs.log",
+    }
 
 
 def test_config_multiple_lists_reject_different_electron_counts(
     tmp_path: Path, capfd: pytest.CaptureFixture[str]
 ) -> None:
     config = tmp_path / "different-electrons.toml"
-    output = tmp_path / "union.c"
+    output = tmp_path / "union_descriptors.parquet"
     config.write_text(
-        f"[csfsgenerate]\ninactive_core = 0\nrcsfs_out = {json.dumps(str(output))}\n"
+        f"[csfsgenerate]\ninactive_core = 0\noutput = {json.dumps(str(output))}\n"
         '[[csfsgenerate.lists]]\nreference_configuration = ["1s(2,*)"]\n'
         'active_space = "2s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
         '[[csfsgenerate.lists]]\nreference_configuration = ["2s(1,*)"]\n'
@@ -214,13 +206,7 @@ def test_config_generation_json_contains_stage_stats(
         "csf_generation",
         "deduplication",
         "header_write",
-        "final_encoding_read",
-        "final_encoding_select",
-        "final_encoding_prepare",
-        "final_encoding_descriptor_encode",
-        "final_encoding_descriptor_write",
-        "final_encoding_csf_outputs_encode",
-        "final_encoding_csf_outputs_write",
+        "final_descriptor_merge",
     ]
     plan_stats = payload["plan_stats"]
     assert plan_stats["task_count"] >= 1
@@ -249,13 +235,8 @@ def test_segment_codec_reaches_the_run_and_is_reported(
         # Each run gets its own set: the API refuses to write over staged output.
         directory = tmp_path / label
         directory.mkdir()
-        stats = generate_disk_outputs_from_transcript(
-            transcript,
-            directory / "out.c",
-            directory / "out.parquet",
-            directory / "descriptors.parquet",
-            directory / "header.toml",
-            directory / "scratch",
+        stats = generate_csfs_from_transcript(
+            transcript, directory / "descriptors.parquet"
         )
         return stats, pl.read_parquet(directory / "descriptors.parquet").rows()
 
@@ -270,7 +251,7 @@ def test_segment_codec_reaches_the_run_and_is_reported(
     assert compressed["record_count"] == default["record_count"]
 
     monkeypatch.setenv("RCSFS_SEGMENT_CODEC", "gzip")
-    with pytest.raises(ValueError, match="invalid segment codec"):
+    with pytest.raises(OSError, match="invalid segment codec"):
         run("invalid")
 
 
@@ -305,13 +286,8 @@ def test_deduplication_strategy_is_reported_and_selectable(
     def run(label: str) -> dict[str, object]:
         directory = tmp_path / label
         directory.mkdir()
-        return generate_disk_outputs_from_transcript(
-            transcript,
-            directory / "out.c",
-            directory / "out.parquet",
-            directory / "descriptors.parquet",
-            directory / "header.toml",
-            directory / "scratch",
+        return generate_csfs_from_transcript(
+            transcript, directory / "descriptors.parquet"
         )
 
     monkeypatch.delenv("RCSFS_DEDUPLICATION", raising=False)
@@ -328,7 +304,7 @@ def test_deduplication_strategy_is_reported_and_selectable(
     assert exact["block_count"] == verified["block_count"]
 
     monkeypatch.setenv("RCSFS_DEDUPLICATION", "trusted")
-    with pytest.raises(ValueError, match="invalid de-duplication strategy"):
+    with pytest.raises(OSError, match="invalid de-duplication strategy"):
         run("invalid")
 
 
@@ -362,86 +338,21 @@ def test_the_estimate_prices_the_strategy_the_run_will_use(
     )
 
 
-def test_the_final_encoding_bounds_the_memory_owned_by_its_writers(
-    tmp_path: Path,
-) -> None:
-    """A budget must be spent on what the run is about to hold, not after.
-
-    The one-pass final encoding holds a batch's selected columns, its formatted
-    three-line records, two live Parquet writers and one parallel descriptor row
-    group at once. Each of those has to
-    be reserved *before* it exists and for what it really is, or a low budget
-    fails only after the allocation it was meant to prevent and then reports a
-    managed peak lower than the process held. The ladder below is the observable
-    form of that: as the budget rises the refusal moves from the generation
-    batch to the CSF Parquet writer, then to the final-encoding batch and
-    parallel row group; only a budget covering all of them runs.
-    """
+def test_descriptor_merge_respects_memory_and_row_group_bounds(tmp_path: Path) -> None:
     transcript = (FIXTURES / "o1_cc1as1.rcsfgenerate").read_text(encoding="utf-8")
-
-    def run(budget_mib: int) -> tuple[str, float, Path | None, Path | None]:
-        directory = tmp_path / f"budget-{budget_mib}"
-        directory.mkdir()
-        csf_parquet = directory / "out.parquet"
-        descriptor_parquet = directory / "descriptors.parquet"
-        try:
-            stats = generate_disk_outputs_from_transcript(
-                transcript,
-                directory / "out.c",
-                csf_parquet,
-                descriptor_parquet,
-                directory / "header.toml",
-                directory / "scratch",
-                threads=1,
-                memory_budget_mib=budget_mib,
-            )
-        except (OSError, ValueError) as error:
-            return str(error), 0.0, None, None
-        resource_stats = stats["resource_stats"]
-        return (
-            "ok",
-            resource_stats["peak_managed_bytes"] / 2**20,
-            descriptor_parquet,
-            csf_parquet,
-        )
-
-    # Far too small: the generation stage's own batch reservation refuses first.
-    message, _, _, _ = run(1)
-    assert "descriptor generation batch" in message, message
-
-    # Enough for generation, not for the final encoding: the refusal must name a
-    # reservation this stage makes, which is what proves the charge exists and
-    # happens before the allocation.
-    for budget in (8, 12, 16, 20, 24, 28, 32, 36):
-        message, _, _, _ = run(budget)
-        assert message != "ok", f"{budget} MiB was accepted; the charges are too small"
-        assert any(
-            label in message
-            for label in (
-                "CSF Parquet encoding",
-                "final descriptor encoding",
-                "final-encoding source batch",
-                "final-encoding batch",
-                "parallel descriptor row group",
-            )
-        ), f"{budget} MiB refused for an unrelated reason: {message}"
-
-    # And the two writers are charged separately: a budget that covers one
-    # writer's allowance plus the batch is not automatically enough for both.
-    # Int8 lowers the Arrow/source payload, while both Parquet encoders keep
-    # their physical INT32/string allowances. The managed peak lies above 36.
-    outcome, peak, descriptor_parquet, csf_parquet = run(40)
-    assert outcome == "ok", outcome
-    assert 36.0 < peak <= 40.0, peak
-    assert descriptor_parquet is not None
-    assert csf_parquet is not None
-    for path in (descriptor_parquet, csf_parquet):
-        metadata = pq.ParquetFile(path).metadata
-        assert metadata.num_row_groups > 1
-        assert all(
-            metadata.row_group(index).num_rows <= 8_192
-            for index in range(metadata.num_row_groups)
-        )
+    failed = tmp_path / "low_descriptors.parquet"
+    with pytest.raises(OSError, match="memory budget exceeded"):
+        generate_csfs_from_transcript(transcript, failed, 1, memory_budget_mib=1)
+    assert not failed.exists() and not (tmp_path / "low_header.toml").exists()
+    output = tmp_path / "out_descriptors.parquet"
+    stats = generate_csfs_from_transcript(transcript, output, 1, memory_budget_mib=32)
+    assert 0 < stats["resource_stats"]["peak_managed_bytes"] <= 32 * 2**20
+    metadata = pq.ParquetFile(output).metadata
+    assert metadata.num_row_groups > 1
+    assert all(
+        metadata.row_group(index).num_rows <= 8_192
+        for index in range(metadata.num_row_groups)
+    )
 
 
 def test_config_generation_reads_memory_budget(
@@ -450,7 +361,7 @@ def test_config_generation_reads_memory_budget(
     config = config_file(tmp_path)
     config.write_text(
         config.read_text().replace(
-            "[generate]\n", "[generate]\nmemory_budget_mib = 64\n", 1
+            "[csfsgenerate]\n", "[csfsgenerate]\nmemory_budget_mib = 64\n", 1
         )
     )
     assert cli.main(["csfsgenerate", "--config", str(config), "--json"]) == 0
@@ -464,7 +375,7 @@ def test_cli_memory_budget_overrides_toml(
     config = config_file(tmp_path)
     config.write_text(
         config.read_text().replace(
-            "[generate]\n", "[generate]\nmemory_budget_mib = 64\n", 1
+            "[csfsgenerate]\n", "[csfsgenerate]\nmemory_budget_mib = 64\n", 1
         )
     )
     assert (
@@ -482,16 +393,7 @@ def test_cli_memory_budget_overrides_toml(
     assert "memory budget exceeded" in capfd.readouterr().err
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "out.c",
-        "out.parquet",
-        "out_header.toml",
-        "out_descriptors.parquet",
-        "out_descriptors.toml",
-    ],
-)
+@pytest.mark.parametrize("name", ["out_header.toml", "out_descriptors.parquet"])
 def test_existing_output_replaced(tmp_path: Path, name: str) -> None:
     config = config_file(tmp_path)
     sentinel = tmp_path / name
@@ -503,7 +405,7 @@ def test_existing_output_replaced(tmp_path: Path, name: str) -> None:
 
 @pytest.mark.parametrize("output", ["out.c", "out_header.toml", "generation.toml"])
 def test_output_aliases_rejected(tmp_path: Path, output: str) -> None:
-    config = config_file(tmp_path, descriptor_parquet=str(tmp_path / output))
+    config = config_file(tmp_path, output=str(tmp_path / output))
     before = config.read_bytes()
     assert cli.main(["csfsgenerate", "--config", str(config)]) == 1
     assert config.read_bytes() == before
@@ -513,19 +415,19 @@ def test_output_aliases_rejected(tmp_path: Path, output: str) -> None:
 def test_symlink_output_replaced_without_touching_target(tmp_path: Path) -> None:
     config = config_file(tmp_path)
     target = tmp_path / "missing"
-    (tmp_path / "out.parquet").symlink_to(target)
+    (tmp_path / "out_descriptors.parquet").symlink_to(target)
     assert cli.main(["csfsgenerate", "--config", str(config)]) == 0
     assert not target.exists()
-    assert (tmp_path / "out.c").is_file()
-    assert (tmp_path / "out.parquet").is_file()
-    assert not (tmp_path / "out.parquet").is_symlink()
+    assert (tmp_path / "out_header.toml").is_file()
+    assert (tmp_path / "out_descriptors.parquet").is_file()
+    assert not (tmp_path / "out_descriptors.parquet").is_symlink()
 
 
 def test_extension_positional_signature(tmp_path: Path) -> None:
     transcript = "* ! Orbital order\n0\n1s(2,*)\n\n1s\n0,0\n0\nn\n"
-    assert generate_csfs_from_transcript(transcript, str(tmp_path / "out.c"), 1)[
-        "success"
-    ]
+    assert generate_csfs_from_transcript(
+        transcript, str(tmp_path / "out_descriptors.parquet"), 1
+    )["success"]
     with pytest.raises(TypeError):
         generate_csfs_from_transcript(
             transcript, str(tmp_path / "other.c"), descriptor_path=None
@@ -609,7 +511,7 @@ def test_estimate_checks_every_volume_it_is_given(
         scratch_dir=tmp_path,
         staging_dir=tmp_path,
         destinations={
-            "csf_text": tmp_path / "out.c",
+            "header": tmp_path / "out_header.toml",
             "descriptor": tmp_path / "out_descriptors.parquet",
         },
     )
@@ -652,14 +554,8 @@ def test_the_run_api_carries_the_space_policy(tmp_path: Path) -> None:
     unmeasurable or insufficient case without a dedicated filesystem.
     """
     transcript = "* ! Orbital order\n0\n1s(2,*)\n\n1s\n0,0\n0\nn\n"
-    stats = generate_disk_outputs_from_transcript(
-        transcript,
-        tmp_path / "out.c",
-        tmp_path / "out.parquet",
-        tmp_path / "out_descriptors.parquet",
-        tmp_path / "out_header.toml",
-        tmp_path / "scratch",
-        allow_unchecked_space=True,
+    stats = generate_csfs_from_transcript(
+        transcript, tmp_path / "out_descriptors.parquet", allow_unchecked_space=True
     )
     assert stats["success"] is True
 
@@ -677,14 +573,8 @@ def test_estimate_and_generation_reject_the_same_low_budget(tmp_path: Path) -> N
     with pytest.raises(OSError, match="memory budget exceeded"):
         estimate_disk_generation(transcript, memory_budget_mib=1)
     with pytest.raises(OSError, match="memory budget exceeded"):
-        generate_disk_outputs_from_transcript(
-            transcript,
-            tmp_path / "out.c",
-            tmp_path / "out.parquet",
-            tmp_path / "out_descriptors.parquet",
-            tmp_path / "out_header.toml",
-            tmp_path / "scratch",
-            memory_budget_mib=1,
+        generate_csfs_from_transcript(
+            transcript, tmp_path / "out_descriptors.parquet", memory_budget_mib=1
         )
     # Neither attempt may leave an artifact behind. The API owns the scratch
     # directory it was asked to create; the CLI removes its own on failure.

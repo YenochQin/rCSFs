@@ -21,7 +21,7 @@ fn transcript_pipeline_matches_registered_e1_cc1as1() {
             .as_nanos()
     ));
     fs::create_dir(&dir).expect("failed to create temp dir");
-    let output = dir.join("out.c");
+    let output = dir.join("out_descriptors.parquet");
 
     let stats = generate_csfs_from_transcript(&transcript, &output, None)
         .expect("generation must succeed for the registered fixture");
@@ -29,7 +29,9 @@ fn transcript_pipeline_matches_registered_e1_cc1as1() {
     assert_eq!(stats.record_count, 452_373);
     assert_eq!(stats.block_count, 7);
     assert!(stats.output_bytes > 0);
-    assert!(stats.descriptor_count.is_none());
+    assert_eq!(stats.descriptor_count, Some(452_373));
+    assert!(dir.join("out_header.toml").is_file());
+    assert!(!dir.join("out.c").exists());
     assert!(output.exists());
 
     fs::remove_dir_all(&dir).ok();

@@ -116,7 +116,7 @@ pub(crate) struct UnsplittableWork {
 
 /// Distribution of one quantity across the plan, for benchmark reporting.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[cfg_attr(feature = "cli", derive(serde::Serialize))]
+#[cfg_attr(any(feature = "cli", feature = "python"), derive(serde::Serialize))]
 pub(crate) struct RecordDistribution {
     pub(crate) count: usize,
     pub(crate) total: u64,
@@ -204,7 +204,7 @@ impl GenerationPlan {
 /// the generated total is reported separately and the two are compared by the
 /// benchmark so a drifting counter is visible instead of silent.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "cli", derive(serde::Serialize))]
+#[cfg_attr(any(feature = "cli", feature = "python"), derive(serde::Serialize))]
 pub(crate) struct PlanStats {
     pub(crate) task_count: usize,
     pub(crate) target_records_per_task: u64,

@@ -5,6 +5,7 @@ Use convert_csfs for explicit text import and restore_csfs_from_descriptors
 for explicit text export. String-Parquet inputs and implicit conversion are
 not supported.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -16,9 +17,17 @@ from polars import DataFrame
 from . import _rcsfs as _native
 from ._csfg import generate_csfgs
 from ._types import (
-    CsfDatasetStats, CsfDatasetSplitStats, CsfGenerationEstimate,
-    CsfGenerationStats, CsfHeaderData, CsfRestoreStats,
-    InteractionHamiltonian, InteractionMethod, InteractionStats, ParquetInfo,
+    CsfDatasetSplitStats,
+    CsfDatasetStats,
+    CsfGenerationEstimate,
+    CsfGenerationStats,
+    CsfgGenerationStats,
+    CsfHeaderData,
+    CsfRestoreStats,
+    InteractionHamiltonian,
+    InteractionMethod,
+    InteractionStats,
+    ParquetInfo,
     PartitionStats,
 )
 
@@ -41,7 +50,8 @@ def convert_csfs(
 ) -> CsfDatasetStats:
     """Import text CSFs directly to a descriptor/header pair without truncation."""
     return _native.convert_csfs(
-        str(input_path), str(output_path),
+        str(input_path),
+        str(output_path),
         None if header_path is None else str(header_path),
     )
 
@@ -60,8 +70,10 @@ def read_csfs(
     Text input must first be imported with convert_csfs.
     """
     header, stream = _native.read_csfs_arrow(
-        str(input_path), None if header_path is None else str(header_path),
-        include_block_id, include_coupling_signature,
+        str(input_path),
+        None if header_path is None else str(header_path),
+        include_block_id,
+        include_coupling_signature,
     )
     return header, DataFrame(stream)
 
@@ -76,7 +88,9 @@ def select_csfs(
 ) -> CsfDatasetStats:
     """Write a descriptor subset from unique increasing source row indices."""
     return _native.select_csfs(
-        str(input_path), str(output_path), list(indices),
+        str(input_path),
+        str(output_path),
+        list(indices),
         None if header_path is None else str(header_path),
         None if output_header is None else str(output_header),
     )
@@ -91,7 +105,8 @@ def merge_csfs(
 ) -> CsfDatasetStats:
     """Append bases with stable orbital mapping, preserving explicit blocks."""
     return _native.merge_csfs(
-        [str(p) for p in input_paths], str(output_path),
+        [str(p) for p in input_paths],
+        str(output_path),
         None if header_paths is None else [str(p) for p in header_paths],
         None if output_header is None else str(output_header),
     )
@@ -107,9 +122,11 @@ def match_csfs(
 ) -> list[int | None]:
     """Return a full-pool index per selected row; reject ambiguous duplicates."""
     return _native.match_csfs(
-        str(full_path), str(selected_path),
+        str(full_path),
+        str(selected_path),
         None if full_header is None else str(full_header),
-        None if selected_header is None else str(selected_header), require_all,
+        None if selected_header is None else str(selected_header),
+        require_all,
     )
 
 
@@ -125,7 +142,9 @@ def restore_csfs_from_descriptors(
     block boundaries remain distinct even for adjacent equal J/parity blocks.
     """
     return _native.restore_csfs_from_descriptors(
-        str(descriptor_parquet), str(header_path), str(output),
+        str(descriptor_parquet),
+        str(header_path),
+        str(output),
         None if indices is None else list(indices),
     )
 
@@ -139,49 +158,68 @@ def read_peel_subshells(header_path: str | Path) -> list[str]:
 
 
 def seniority_to_printed_v(
-    two_j: int, occupation: int, subshell_two_j: int, seniority: int,
+    two_j: int,
+    occupation: int,
+    subshell_two_j: int,
+    seniority: int,
 ) -> int:
     return _native.seniority_to_printed_v(two_j, occupation, subshell_two_j, seniority)
 
 
 def partition_csfs(
-    zero_parquet: str | Path, zero_header: str | Path,
-    full_parquet: str | Path, full_header: str | Path,
+    zero_parquet: str | Path,
+    zero_header: str | Path,
+    full_parquet: str | Path,
+    full_header: str | Path,
     output_path: str | Path,
 ) -> PartitionStats:
     """Write reference-first descriptor blocks using exact numeric matching."""
     return _native.partition_csfs(
-        str(zero_parquet), str(zero_header), str(full_parquet),
-        str(full_header), str(output_path),
+        str(zero_parquet),
+        str(zero_header),
+        str(full_parquet),
+        str(full_header),
+        str(output_path),
     )
 
 
 def split_csfs_by_active_spaces(
-    input_parquet: str | Path, header_path: str | Path,
+    input_parquet: str | Path,
+    header_path: str | Path,
     targets: Mapping[str | Path, str],
 ) -> CsfDatasetSplitStats:
     """Filter numerical occupations into descriptor datasets for active spaces."""
     return _native.split_csfs_by_active_spaces(
-        str(input_parquet), str(header_path),
+        str(input_parquet),
+        str(header_path),
         [(str(path), space) for path, space in targets.items()],
     )
 
 
 def split_csfs_by_j(
-    input_path: str | Path, output_dir: str | Path | None = None,
-    prefix: str | None = None, *, header_path: str | Path | None = None,
+    input_path: str | Path,
+    output_dir: str | Path | None = None,
+    prefix: str | None = None,
+    *,
+    header_path: str | Path | None = None,
 ) -> CsfDatasetSplitStats:
     """Split each explicit block; filenames include block index, 2J and parity."""
     return _native.split_csfs_by_j(
-        str(input_path), None if output_dir is None else str(output_dir),
-        prefix, None if header_path is None else str(header_path),
+        str(input_path),
+        None if output_dir is None else str(output_dir),
+        prefix,
+        None if header_path is None else str(header_path),
     )
 
 
 def generate_csfs_from_transcript(
-    transcript: str | Sequence[str], output_path: str | Path,
-    threads: int | None = None, *, storage: Literal["disk", "memory"] = "disk",
-    memory_budget_mib: int | None = None, allow_unchecked_space: bool = False,
+    transcript: str | Sequence[str],
+    output_path: str | Path,
+    threads: int | None = None,
+    *,
+    storage: Literal["disk", "memory"] = "disk",
+    memory_budget_mib: int | None = None,
+    allow_unchecked_space: bool = False,
 ) -> CsfGenerationStats:
     """Generate descriptor/header output; no text or string-Parquet intermediate.
 
@@ -190,49 +228,87 @@ def generate_csfs_from_transcript(
     """
     return _native.generate_csfs_from_transcript(
         transcript if isinstance(transcript, str) else list(transcript),
-        str(output_path), threads, storage, memory_budget_mib, allow_unchecked_space,
+        str(output_path),
+        threads,
+        storage,
+        memory_budget_mib,
+        allow_unchecked_space,
     )
 
 
 def estimate_disk_generation(
-    transcript: str | Sequence[str], threads: int | None = None, *,
-    memory_budget_mib: int | None = None, scratch_dir: str | Path | None = None,
+    transcript: str | Sequence[str],
+    threads: int | None = None,
+    *,
+    memory_budget_mib: int | None = None,
+    scratch_dir: str | Path | None = None,
     staging_dir: str | Path | None = None,
     destinations: Mapping[str, str | Path] | None = None,
 ) -> CsfGenerationEstimate:
     """Estimate the numerical generation pipeline without writing CSFs."""
     return _native.estimate_disk_generation(
         transcript if isinstance(transcript, str) else list(transcript),
-        threads, memory_budget_mib,
+        threads,
+        memory_budget_mib,
         None if scratch_dir is None else str(scratch_dir),
         None if staging_dir is None else str(staging_dir),
-        None if destinations is None else [(kind, str(path)) for kind, path in destinations.items()],
+        None
+        if destinations is None
+        else [(kind, str(path)) for kind, path in destinations.items()],
     )
 
 
 def select_interacting_csfs(
-    reference_csf: str | Path, candidate_csf: str | Path, output_csf: str | Path,
-    *, hamiltonian: InteractionHamiltonian = "dirac_coulomb",
+    reference_csf: str | Path,
+    candidate_csf: str | Path,
+    output_csf: str | Path,
+    *,
+    hamiltonian: InteractionHamiltonian = "dirac_coulomb",
     method: InteractionMethod = "structural_upper_bound",
-    num_workers: int | None = None, overwrite: bool = False,
+    num_workers: int | None = None,
+    overwrite: bool = False,
 ) -> InteractionStats:
     """Select a conservative interaction upper bound directly from descriptors."""
     return _native.select_interacting_csfs(
-        str(reference_csf), str(candidate_csf), str(output_csf),
-        hamiltonian=hamiltonian, method=method,
-        num_workers=num_workers, overwrite=overwrite,
+        str(reference_csf),
+        str(candidate_csf),
+        str(output_csf),
+        hamiltonian=hamiltonian,
+        method=method,
+        num_workers=num_workers,
+        overwrite=overwrite,
     )
 
 
 __all__ = [
-    "__version__", "convert_csfs", "descriptor_header_path",
-    "estimate_disk_generation", "generate_csfgs", "generate_csfs_from_transcript",
-    "get_parquet_info", "match_csfs", "merge_csfs", "partition_csfs",
-    "read_csfs", "read_peel_subshells", "restore_csfs_from_descriptors",
-    "select_csfs", "select_interacting_csfs", "seniority_to_printed_v",
-    "split_csfs_by_active_spaces", "split_csfs_by_j",
-    "CsfDatasetStats", "CsfDatasetSplitStats", "CsfGenerationEstimate",
-    "CsfGenerationStats", "CsfHeaderData", "CsfRestoreStats",
-    "InteractionHamiltonian", "InteractionMethod", "InteractionStats",
-    "ParquetInfo", "PartitionStats",
+    "CsfDatasetSplitStats",
+    "CsfDatasetStats",
+    "CsfGenerationEstimate",
+    "CsfGenerationStats",
+    "CsfHeaderData",
+    "CsfRestoreStats",
+    "CsfgGenerationStats",
+    "InteractionHamiltonian",
+    "InteractionMethod",
+    "InteractionStats",
+    "ParquetInfo",
+    "PartitionStats",
+    "__version__",
+    "convert_csfs",
+    "descriptor_header_path",
+    "estimate_disk_generation",
+    "generate_csfgs",
+    "generate_csfs_from_transcript",
+    "get_parquet_info",
+    "match_csfs",
+    "merge_csfs",
+    "partition_csfs",
+    "read_csfs",
+    "read_peel_subshells",
+    "restore_csfs_from_descriptors",
+    "select_csfs",
+    "select_interacting_csfs",
+    "seniority_to_printed_v",
+    "split_csfs_by_active_spaces",
+    "split_csfs_by_j",
 ]

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::{
     fmt,
     fs::{self, File, OpenOptions},
-    io::{IsTerminal, Write},
+    io::Write,
     path::{Path, PathBuf},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -17,7 +17,6 @@ struct State {
     error: Option<String>,
     command: String,
     step: usize,
-    legacy_table: bool,
 }
 static ACTIVE: Mutex<Option<State>> = Mutex::new(None);
 
@@ -107,7 +106,6 @@ impl RunLog {
             error: None,
             command: String::new(),
             step: 0,
-            legacy_table: false,
         });
         crate::reporting::set_sink(diagnostic);
         let log = Self;
@@ -126,9 +124,6 @@ impl RunLog {
             let state = active.as_mut().context("run log is not open")?;
             state.command.clone_from(&job.command);
             state.step = index;
-            state.legacy_table = job.command == "zero-first"
-                && !job.settings.flag("json", false)?
-                && !std::io::stdout().is_terminal();
         }
         self.event(json!({"event": "step_start", "command": job.command,
             "step": index, "resolved_parameters": job.settings.values}))
@@ -157,7 +152,7 @@ fn diagnostic(kind: crate::reporting::Kind, message: fmt::Arguments<'_>) {
     use crate::reporting::Kind;
     let mut active = ACTIVE.lock().unwrap();
     if let Some(state) = active.as_mut() {
-        if kind == Kind::Warning || kind == Kind::LegacyTable && state.legacy_table {
+        if kind == Kind::Warning {
             eprintln!("{message}");
         }
         if state.error.is_some() {

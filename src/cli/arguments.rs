@@ -62,9 +62,6 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
         "Restore CSFs from V2 descriptors, verifying the source header.",
     ),
 ];
-pub(super) fn canonical(name: &str) -> &str {
-    name
-}
 pub(super) fn fields(command: &str) -> Vec<Field> {
     let mut result = match command {
         "convert" => vec![
@@ -272,9 +269,6 @@ pub(super) fn parser() -> Command {
             };
             if f.key == "output" {
                 arg = arg.short('o');
-            }
-            if f.key == "active_spaces" {
-                arg = arg.visible_alias("active-space");
             }
             if name == "interacting" && f.key == "num_workers" {
                 arg = arg.visible_alias("num-workers");

@@ -135,7 +135,6 @@ fn details(out: &mut String, command: &str, stats: &Value) {
         for (key, label) in [
             ("required_scratch", "Required scratch"),
             ("required_output", "Required output"),
-            ("csf_text", "CSF text estimate"),
             ("descriptor", "Descriptor estimate"),
         ] {
             if let Some(bytes) = stats["bytes"][key].as_u64() {

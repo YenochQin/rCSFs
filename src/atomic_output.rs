@@ -100,7 +100,7 @@ pub fn ensure_distinct_inputs(left: &Path, right: &Path, message: &str) -> Resul
 }
 
 #[cfg(unix)]
-fn same_file_identity(left: &Path, right: &Path) -> Result<bool> {
+pub(crate) fn same_file_identity(left: &Path, right: &Path) -> Result<bool> {
     use std::os::unix::fs::MetadataExt;
 
     let left = fs::metadata(left)?;
@@ -109,13 +109,13 @@ fn same_file_identity(left: &Path, right: &Path) -> Result<bool> {
 }
 
 #[cfg(windows)]
-fn same_file_identity(left: &Path, right: &Path) -> Result<bool> {
+pub(crate) fn same_file_identity(left: &Path, right: &Path) -> Result<bool> {
     Ok(crate::windows_filesystem::file_identity(left)?
         == crate::windows_filesystem::file_identity(right)?)
 }
 
 #[cfg(not(any(unix, windows)))]
-fn same_file_identity(_left: &Path, _right: &Path) -> Result<bool> {
+pub(crate) fn same_file_identity(_left: &Path, _right: &Path) -> Result<bool> {
     // Canonical paths catch ordinary names and symlinks on non-Unix targets.
     // Rust's standard library does not expose a portable file-ID comparison.
     Ok(false)

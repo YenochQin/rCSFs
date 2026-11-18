@@ -1,8 +1,8 @@
 use _rcsfs::complete_csf::CompleteCsfFile;
 use _rcsfs::csf_generation::{GenerationRequest, SubshellOccupation, generate_csfs};
+use _rcsfs::descriptor_dataset::{header_path, import_text, restore_text};
 use _rcsfs::interaction::{HamiltonianMode, InteractionMethod, select_interacting_csfs};
 use std::fs;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -61,19 +61,26 @@ fn csf(core: &str, peel: &str, records: &[&str]) -> String {
     )
 }
 
+fn write_dataset(path: &Path, text: &str) {
+    let input = path.with_extension("c");
+    fs::write(&input, text).unwrap();
+    import_text(&input, path, &header_path(path).unwrap()).unwrap();
+    fs::remove_file(input).unwrap();
+}
+
 fn write_inputs(directory: &TestDirectory) -> (PathBuf, PathBuf, String, String, String) {
-    let reference_record = generated_record(&[("2p", 1)], 3);
-    let selected_record = generated_record(&[("3p", 1)], 3);
-    // Same J/P, but two additional peel electrons: electron conservation rejects it.
-    let rejected_record = generated_record(&[("2p", 1), ("3s", 2)], 3);
-    let reference = directory.join("reference.csf");
-    let candidates = directory.join("candidates.csf");
-    fs::write(&reference, csf("", "  2p", &[&reference_record])).unwrap();
-    fs::write(
+    let reference_record = generated_record(&[("1s", 2), ("2s", 2), ("2p", 1)], 3);
+    let selected_record = generated_record(&[("1s", 2), ("2s", 2), ("3p", 1)], 3);
+    // A double shell replacement requires four one-electron substitutions.
+    let rejected_record = generated_record(&[("2p", 1), ("3s", 2), ("4s", 2)], 3);
+    let reference = directory.join("reference_descriptors.parquet");
+    let candidates = directory.join("candidates_descriptors.parquet");
+    write_dataset(&reference, &csf("", "  1s   2s   2p", &[&reference_record]));
+    write_dataset(
         &candidates,
-        csf(
+        &csf(
             "",
-            "  2p   3s   3p",
+            "  1s   2s   2p   3s   4s   3p",
             &[
                 &reference_record,
                 &selected_record,
@@ -81,8 +88,7 @@ fn write_inputs(directory: &TestDirectory) -> (PathBuf, PathBuf, String, String,
                 &rejected_record,
             ],
         ),
-    )
-    .unwrap();
+    );
     (
         reference,
         candidates,
@@ -93,7 +99,10 @@ fn write_inputs(directory: &TestDirectory) -> (PathBuf, PathBuf, String, String,
 }
 
 fn record_texts(path: &Path) -> (CompleteCsfFile, Vec<String>) {
-    let parsed = CompleteCsfFile::parse_path(path).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let text = dir.path().join("restored.c");
+    restore_text(path, &header_path(path).unwrap(), &text, None).unwrap();
+    let parsed = CompleteCsfFile::parse_path(&text).unwrap();
     let records = parsed
         .records
         .iter()
@@ -110,7 +119,7 @@ fn record_texts(path: &Path) -> (CompleteCsfFile, Vec<String>) {
 fn selects_structural_upper_bound_skips_exact_mr_and_preserves_other_duplicates() {
     let directory = TestDirectory::new();
     let (reference, candidates, reference_record, selected_record, _) = write_inputs(&directory);
-    let output = directory.join("selected.csf");
+    let output = directory.join("selected_descriptors.parquet");
 
     let stats = select_interacting_csfs(
         &reference,
@@ -142,7 +151,7 @@ fn selects_structural_upper_bound_skips_exact_mr_and_preserves_other_duplicates(
     assert_eq!(stats.output_bytes, fs::metadata(&output).unwrap().len());
 
     let (parsed, records) = record_texts(&output);
-    assert_eq!(parsed.header_lines[3], "  2p   3s   3p");
+    assert_eq!(parsed.header_lines[3], "  1s   2s   2p   3s   4s   3p");
     assert_eq!(
         records,
         [reference_record, selected_record.clone(), selected_record]
@@ -153,8 +162,8 @@ fn selects_structural_upper_bound_skips_exact_mr_and_preserves_other_duplicates(
 fn worker_count_does_not_change_output_order_or_stats() {
     let directory = TestDirectory::new();
     let (reference, candidates, _, _, _) = write_inputs(&directory);
-    let serial_output = directory.join("serial.csf");
-    let parallel_output = directory.join("parallel.csf");
+    let serial_output = directory.join("serial_descriptors.parquet");
+    let parallel_output = directory.join("parallel_descriptors.parquet");
     let serial = select_interacting_csfs(
         &reference,
         &candidates,
@@ -176,11 +185,9 @@ fn worker_count_does_not_change_output_order_or_stats() {
     )
     .unwrap();
 
-    assert_eq!(
-        fs::read(serial_output).unwrap(),
-        fs::read(parallel_output).unwrap()
-    );
-    assert_eq!(serial, parallel);
+    assert_eq!(record_texts(&serial_output), record_texts(&parallel_output));
+    assert_eq!(serial.blocks, parallel.blocks);
+    assert_eq!(serial.output_count, parallel.output_count);
 }
 
 #[test]
@@ -188,11 +195,11 @@ fn preserves_adjacent_explicit_blocks_with_the_same_symmetry() {
     let directory = TestDirectory::new();
     let record = generated_record(&[("2p", 1)], 3);
     let two_blocks = csf("", "  2p", &[&record, " *\n", &record]);
-    let reference = directory.join("reference.csf");
-    let candidates = directory.join("candidates.csf");
-    let output = directory.join("selected.csf");
-    fs::write(&reference, &two_blocks).unwrap();
-    fs::write(&candidates, &two_blocks).unwrap();
+    let reference = directory.join("reference_descriptors.parquet");
+    let candidates = directory.join("candidates_descriptors.parquet");
+    let output = directory.join("selected_descriptors.parquet");
+    write_dataset(&reference, &two_blocks);
+    write_dataset(&candidates, &two_blocks);
 
     let stats = select_interacting_csfs(
         &reference,
@@ -206,7 +213,7 @@ fn preserves_adjacent_explicit_blocks_with_the_same_symmetry() {
     .unwrap();
 
     assert_eq!(stats.block_count, 2);
-    let parsed = CompleteCsfFile::parse_path(&output).unwrap();
+    let (parsed, _) = record_texts(&output);
     assert_eq!(parsed.blocks.len(), 2);
     assert_eq!(parsed.blocks[0].total_two_j, parsed.blocks[1].total_two_j);
     assert_eq!(parsed.blocks[0].parity, parsed.blocks[1].parity);
@@ -216,11 +223,11 @@ fn preserves_adjacent_explicit_blocks_with_the_same_symmetry() {
 fn rejects_duplicate_reference_csfs_without_creating_output() {
     let directory = TestDirectory::new();
     let record = generated_record(&[("2p", 1)], 3);
-    let reference = directory.join("reference.csf");
-    let candidates = directory.join("candidates.csf");
-    let output = directory.join("selected.csf");
-    fs::write(&reference, csf("", "  2p", &[&record, &record])).unwrap();
-    fs::write(&candidates, csf("", "  2p", &[&record])).unwrap();
+    let reference = directory.join("reference_descriptors.parquet");
+    let candidates = directory.join("candidates_descriptors.parquet");
+    let output = directory.join("selected_descriptors.parquet");
+    write_dataset(&reference, &csf("", "  2p", &[&record, &record]));
+    write_dataset(&candidates, &csf("", "  2p", &[&record]));
 
     let error = select_interacting_csfs(
         &reference,
@@ -241,7 +248,7 @@ fn rejects_duplicate_reference_csfs_without_creating_output() {
 fn rejects_the_same_file_for_reference_and_candidates() {
     let directory = TestDirectory::new();
     let (reference, _, _, _, _) = write_inputs(&directory);
-    let output = directory.join("selected.csf");
+    let output = directory.join("selected_descriptors.parquet");
 
     let error = select_interacting_csfs(
         &reference,
@@ -262,7 +269,7 @@ fn rejects_the_same_file_for_reference_and_candidates() {
 fn validation_and_no_overwrite_errors_preserve_existing_output() {
     let directory = TestDirectory::new();
     let (reference, candidates, _, _, _) = write_inputs(&directory);
-    let output = directory.join("existing.csf");
+    let output = directory.join("existing_descriptors.parquet");
     fs::write(&output, b"sentinel").unwrap();
 
     let error = select_interacting_csfs(
@@ -278,13 +285,9 @@ fn validation_and_no_overwrite_errors_preserve_existing_output() {
     assert!(error.to_string().contains("already exists"));
     assert_eq!(fs::read(&output).unwrap(), b"sentinel");
 
-    let bad_candidates = directory.join("bad-candidates.csf");
-    let text = fs::read_to_string(&candidates).unwrap().replacen(
-        "Core subshells:\n\n",
-        "Core subshells:\n  1s\n",
-        1,
-    );
-    fs::write(&bad_candidates, text).unwrap();
+    let bad_candidates = directory.join("bad-candidates_descriptors.parquet");
+    let record = generated_record(&[("2p", 1)], 3);
+    write_dataset(&bad_candidates, &csf("  1s", "  2p", &[&record]));
     let error = select_interacting_csfs(
         &reference,
         &bad_candidates,
@@ -319,7 +322,7 @@ fn overwrite_rejects_output_aliasing_an_input() {
 
     #[cfg(unix)]
     {
-        let alias = directory.join("candidate-hard-link.csf");
+        let alias = directory.join("candidate-hard-link_descriptors.parquet");
         fs::hard_link(&candidates, &alias).unwrap();
         let original_candidates = fs::read(&candidates).unwrap();
         let error = select_interacting_csfs(
@@ -341,12 +344,12 @@ fn overwrite_rejects_output_aliasing_an_input() {
 fn rejects_non_prefix_peel_and_misaligned_jp_without_creating_output() {
     let directory = TestDirectory::new();
     let reference_record = generated_record(&[("2p", 1)], 3);
-    let reference = directory.join("reference.csf");
-    fs::write(&reference, csf("", "  2p", &[&reference_record])).unwrap();
+    let reference = directory.join("reference_descriptors.parquet");
+    write_dataset(&reference, &csf("", "  2p", &[&reference_record]));
 
-    let non_prefix = directory.join("non-prefix.csf");
-    fs::write(&non_prefix, csf("", "  3p   2p", &[&reference_record])).unwrap();
-    let output = directory.join("must-not-exist.csf");
+    let non_prefix = directory.join("non-prefix_descriptors.parquet");
+    write_dataset(&non_prefix, &csf("", "  3p   2p", &[&reference_record]));
+    let output = directory.join("must-not-exist_descriptors.parquet");
     let error = select_interacting_csfs(
         &reference,
         &non_prefix,
@@ -361,8 +364,11 @@ fn rejects_non_prefix_peel_and_misaligned_jp_without_creating_output() {
     assert!(!output.exists());
 
     let different_jp_record = generated_record(&[("2s", 1)], 1);
-    let different_jp = directory.join("different-jp.csf");
-    fs::write(&different_jp, csf("", "  2p   2s", &[&different_jp_record])).unwrap();
+    let different_jp = directory.join("different-jp_descriptors.parquet");
+    write_dataset(
+        &different_jp,
+        &csf("", "  2p   2s", &[&different_jp_record]),
+    );
     let error = select_interacting_csfs(
         &reference,
         &different_jp,
@@ -381,7 +387,7 @@ fn rejects_non_prefix_peel_and_misaligned_jp_without_creating_output() {
 fn zero_workers_is_rejected_before_touching_output() {
     let directory = TestDirectory::new();
     let (reference, candidates, _, _, _) = write_inputs(&directory);
-    let output = directory.join("output.csf");
+    let output = directory.join("output_descriptors.parquet");
     let error = select_interacting_csfs(
         &reference,
         &candidates,
@@ -400,7 +406,7 @@ fn zero_workers_is_rejected_before_touching_output() {
 fn complete_output_is_parseable_after_overwrite() {
     let directory = TestDirectory::new();
     let (reference, candidates, _, _, _) = write_inputs(&directory);
-    let output = directory.join("output.csf");
+    let output = directory.join("output_descriptors.parquet");
     fs::write(&output, b"old").unwrap();
     select_interacting_csfs(
         &reference,
@@ -412,6 +418,6 @@ fn complete_output_is_parseable_after_overwrite() {
         true,
     )
     .unwrap();
-    let bytes = fs::read(&output).unwrap();
-    CompleteCsfFile::parse_reader(Cursor::new(bytes)).unwrap();
+    let (parsed, _) = record_texts(&output);
+    assert_eq!(parsed.records.len(), 3);
 }

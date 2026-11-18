@@ -6,8 +6,6 @@ import pytest
 
 from rcsfs import (
     convert_csfs,
-    generate_descriptors_from_parquet,
-    read_peel_subshells,
     restore_csfs_from_descriptors,
 )
 
@@ -22,29 +20,15 @@ def _inputs(tmp_path: Path, *, large_j: bool = False) -> tuple[Path, Path, Path]
     if large_j:
         text = text.replace("                  0-", "                 64-")
     source.write_text(text, encoding="utf-8", newline="\n")
-    converted = tmp_path / "source.parquet"
-    stats = convert_csfs(source, converted, num_workers=1)
-    return source, converted, Path(stats["header_file"])
-
-
-def _generate(tmp_path: Path, workers: int = 1) -> tuple[Path, Path, Path]:
-    source, converted, header = _inputs(tmp_path)
-    descriptors = tmp_path / "descriptors.parquet"
-    generate_descriptors_from_parquet(
-        converted,
-        descriptors,
-        read_peel_subshells(header),
-        num_workers=workers,
-        header_path=header,
-    )
+    descriptors = tmp_path / "source_descriptors.parquet"
+    header = tmp_path / "source_header.toml"
+    if not large_j:
+        convert_csfs(source, descriptors)
     return source, header, descriptors
 
 
-@pytest.mark.parametrize("workers", [1, 2])
-def test_int8_parquet_and_one_byte_buffers_round_trip(
-    tmp_path: Path, workers: int
-) -> None:
-    source, header, descriptors = _generate(tmp_path, workers)
+def test_int8_parquet_and_one_byte_buffers_round_trip(tmp_path: Path) -> None:
+    source, header, descriptors = _inputs(tmp_path)
     table = pq.read_table(descriptors)
     assert all(field.type == pa.int8() and not field.nullable for field in table.schema)
     for column in table.columns:
@@ -61,7 +45,7 @@ def test_int8_parquet_and_one_byte_buffers_round_trip(
 def test_restore_rejects_int32_columns_even_with_int8_metadata(
     tmp_path: Path, indices: list[int] | None
 ) -> None:
-    _, header, descriptors = _generate(tmp_path)
+    _, header, descriptors = _inputs(tmp_path)
     table = pq.read_table(descriptors)
     metadata = dict(pq.read_metadata(descriptors).metadata)
     metadata.pop(b"ARROW:schema", None)
@@ -81,7 +65,7 @@ def test_restore_rejects_int32_columns_even_with_int8_metadata(
 def test_restore_rejects_int8_127_as_angular_value(
     tmp_path: Path, indices: list[int] | None
 ) -> None:
-    _, header, descriptors = _generate(tmp_path)
+    _, header, descriptors = _inputs(tmp_path)
     table = pq.read_table(descriptors)
     column = table.schema.get_field_index("total_two_j")
     table = table.set_column(
@@ -100,14 +84,7 @@ def test_restore_rejects_int8_127_as_angular_value(
 def test_out_of_range_generation_does_not_publish_partial_descriptors(
     tmp_path: Path,
 ) -> None:
-    _, converted, header = _inputs(tmp_path, large_j=True)
-    output = tmp_path / "rejected.parquet"
+    source, header, output = _inputs(tmp_path, large_j=True)
     with pytest.raises((ValueError, RuntimeError, OSError), match="angular bound"):
-        generate_descriptors_from_parquet(
-            converted,
-            output,
-            read_peel_subshells(header),
-            num_workers=1,
-            header_path=header,
-        )
-    assert not output.exists()
+        convert_csfs(source, output)
+    assert not output.exists() and not header.exists()

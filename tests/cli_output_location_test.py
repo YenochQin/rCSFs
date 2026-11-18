@@ -16,8 +16,8 @@ def test_all_processing_outputs_and_scratch_stay_in_invocation_directory(
     config.write_text(
         'conf = "calc_"\n[csfsgenerate]\nas = 0\ninactive_core = 0\n'
         'reference_configuration = ["1s(2,*)"]\nactive_space = "1s"\n'
-        "j_min = 0\nj_max = 0\nexcitations = 0\ngenerate_descriptors = true\n"
-        '[csfs-split]\nactive_spaces = ["AS0=1s"]\n',
+        "j_min = 0\nj_max = 0\nexcitations = 0\n"
+        '[csfs-split]\nactive_spaces = ["AS1=1s"]\n',
         encoding="utf-8",
     )
     assert cli.main(["csfsgenerate", "-c"]) == 0
@@ -25,25 +25,11 @@ def test_all_processing_outputs_and_scratch_stay_in_invocation_directory(
     inputs.mkdir()
     for path in tmp_path.glob("calc_*"):
         shutil.copy2(path, inputs / path.name)
-    shutil.copy2(inputs / "calc_as0raw.c", inputs / "reference.c")
-    original = {path.name: path.read_bytes() for path in inputs.iterdir()}
-
-    parquet = inputs / "calc_as0raw.parquet"
+    descriptors = inputs / "calc_as0raw_descriptors.parquet"
     header = inputs / "calc_as0raw_header.toml"
-    descriptors = inputs / "calc__desc.parquet"
-    source = inputs / "calc_as0raw.c"
-    assert (
-        cli.main(
-            [
-                "gen-descriptors",
-                str(parquet),
-                "rebuilt.parquet",
-                "--header",
-                str(header),
-            ]
-        )
-        == 0
-    )
+    shutil.copy2(descriptors, inputs / "reference_descriptors.parquet")
+    shutil.copy2(header, inputs / "reference_header.toml")
+    original = {path.name: path.read_bytes() for path in inputs.iterdir()}
     assert (
         cli.main(
             [
@@ -58,28 +44,26 @@ def test_all_processing_outputs_and_scratch_stay_in_invocation_directory(
         )
         == 0
     )
-    assert cli.main(["zero-first", str(source), str(source)]) == 0
+    assert cli.main(["zero-first", str(descriptors), str(descriptors)]) == 0
     assert (
         cli.main(
             [
                 "interacting",
-                str(inputs / "reference.c"),
-                str(source),
+                str(inputs / "reference_descriptors.parquet"),
+                str(descriptors),
                 "--output",
-                "selected.c",
+                "selected_descriptors.parquet",
             ]
         )
         == 0
     )
-    assert cli.main(["csfs-split", str(parquet), "--header", str(header)]) == 0
+    assert cli.main(["csfs-split", str(descriptors), "--header", str(header)]) == 0
 
     for name in (
-        "rebuilt.parquet",
-        "rebuilt.toml",
         "restored.c",
-        "calc_as0raw_zf.csf",
-        "selected.c",
-        "calc_as0raw.c",
+        "zero_first_descriptors.parquet",
+        "selected_descriptors.parquet",
+        "calc_as1raw_descriptors.parquet",
     ):
         assert (tmp_path / name).is_file()
     assert {path.name: path.read_bytes() for path in inputs.iterdir()} == original
@@ -92,11 +76,11 @@ def test_all_processing_outputs_and_scratch_stay_in_invocation_directory(
     [
         (
             "csfsgenerate",
-            '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\nactive_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\nrcsfs_out = "elsewhere/out.c"\n',
+            '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\nactive_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\noutput = "elsewhere/out_descriptors.parquet"\n',
         ),
         (
-            "gen-descriptors",
-            '[gen-descriptors]\ninput_parquet = "input.parquet"\nheader = "header.toml"\noutput_parquet = "elsewhere/out.parquet"\n',
+            "convert",
+            '[convert]\ninput_csf = "input.c"\noutput_parquet = "elsewhere/out.parquet"\n',
         ),
         (
             "restore-csfs",
@@ -104,11 +88,11 @@ def test_all_processing_outputs_and_scratch_stay_in_invocation_directory(
         ),
         (
             "zero-first",
-            '[zero-first]\nzero_csf = "zero.c"\nfull_csf = "full.c"\noutput_csf = "elsewhere/out.c"\n',
+            '[zero-first]\nzero_csf = "zero_descriptors.parquet"\nfull_csf = "full_descriptors.parquet"\noutput_csf = "elsewhere/out_descriptors.parquet"\n',
         ),
         (
             "interacting",
-            '[interacting]\nreference = "ref.c"\ncandidates = "all.c"\noutput = "elsewhere/out.c"\n',
+            '[interacting]\nreference = "ref_descriptors.parquet"\ncandidates = "all_descriptors.parquet"\noutput = "elsewhere/out_descriptors.parquet"\n',
         ),
     ],
 )

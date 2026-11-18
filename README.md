@@ -11,1026 +11,105 @@ rCSFs focuses on two jobs:
 
 The current Python API is function-based and centered around streaming, parallel processing, and Parquet-first data pipelines.
 
-## What It Does
+## Descriptor CSF datasets
 
-rCSFs is a Rust + PyO3 library for CSF datasets used in atomic-structure and spectroscopy workflows.
+rCSFs 3.1.0 generates and processes CSFs as V2 descriptor Parquet with a
+companion TOML header. The compact Int8 columns preserve occupations, physical
+seniority, intermediate coupling, total 2J and parity. The header records the
+orbital tables, electron count and explicit block lengths. Parquet metadata binds
+the dataset to the exact header bytes by SHA-256.
 
-It helps you:
+The Python wheel includes the `rcsfs` package and native CLI. See
+[development](docs/development.md) for building from this checkout and
+[release preparation](docs/releasing.md) for version and packaging details.
 
-- Convert CSF text files into columnar Parquet files.
-- Preserve the original CSF ordering during conversion.
-- Extract peel subshell definitions from the generated header TOML.
-- Generate descriptor Parquet files from converted CSFs.
+## Generate a dataset
 
-## Why rCSFs
-
-- Rust core for throughput and predictable memory behavior.
-- Streaming batch processing for large files.
-- Parallel execution via `rayon`.
-- Python-friendly API with `Path` support.
-- Parquet output that works well with tools like Polars and PyArrow.
-
-## Installation
-
-For a standalone executable, use the [native Rust CLI](#native-rust-cli-on-path).
-For the Python library and bundled native Rust CLI, install [rcsfs from PyPI](https://pypi.org/project/rcsfs/) with Python 3.15 or newer.
-
-This checkout prepares version **3.0.1** and uses its own Python 3.15 `.venv`;
-see [source development](docs/development.md). The pinned installation examples
-below apply once 3.0.1 has been published to PyPI; pushing the source does not
-publish a package.
-The distribution name, Python import name and command-line entry point are all
-`rcsfs`.
-
-### With uv
-
-Use [uv](https://docs.astral.sh/uv/getting-started/installation/) to manage the
-environment and dependencies of your own analysis project. For a new project:
+Create an editable TOML template from the calculation directory.
 
 ```fish
-uv init --python 3.15 csf-analysis
-cd csf-analysis
-uv add rcsfs
-uv run rcsfs --help
+rcsfs csfsgenerate init-config
 ```
 
-For an existing uv project using Python 3.15 or newer, run `uv add rcsfs` in its
-directory. This records the dependency in `pyproject.toml`, updates `uv.lock`,
-and installs it in the project's `.venv`. Run your own script with
-`uv run python analysis.py`; manual environment activation is not required.
-To pin a particular release, use `uv add "rcsfs==3.0.1"`.
-
-You can also add the dependency to an existing `pyproject.toml` manually:
+For example, save this model in `rcsfs.toml`.
 
 ```toml
-[project]
-name = "csf-analysis"
-version = "0.1.0"
-requires-python = ">=3.15"
-dependencies = [
-    "rcsfs==3.0.1",
-]
+conf = "helium"
+
+[csfsgenerate]
+inactive_core = 0
+reference_configuration = ["1s(2,*)"]
+active_space = "2s"
+j_min = 0
+j_max = 0
+excitations = 2
 ```
-
-Then run `uv sync` in that project's directory to resolve dependencies and
-synchronize its environment. Commit `pyproject.toml` and `uv.lock` alongside
-your analysis code to record the dependency choices.
-
-### With pip
-
-To install into an existing Python environment:
 
 ```fish
-python -m pip install rcsfs
+rcsfs -c rcsfs.toml
+rcsfs info helium_descriptors.parquet --json
 ```
 
-For a fixed release, use `python -m pip install "rcsfs==3.0.1"`.
-Both installation methods provide the same Python API and `rcsfs` command.
+This writes `helium_descriptors.parquet` and `helium_header.toml`. Use
+`output` in TOML or `--output` on the CLI to choose the descriptor filename.
+An `as` level with `conf` names the pair `{conf}_as{level}raw_descriptors.parquet`
+and `{conf}_as{level}raw_header.toml`. Use `--transcript` to read a generation
+transcript. Disk generation is the default. Use `--estimate-only` to see the
+planned record count and space requirement.
 
-The release workflow targets CPython 3.15 wheels for Linux x86_64
-(glibc 2.28+), Windows x86_64 and macOS Apple Silicon. This is the build
-matrix, not a claim that all platforms have passed validation; see
-[the release guide](docs/releasing.md).
-A matching wheel installs without a Rust compiler. Other Python/platform
-combinations may fall back to a source build and need a Rust toolchain and
-compatible linker; see [development.md](docs/development.md).
-
-### Check the installation
-
-For a uv-managed project:
+## Import, transform and restore
 
 ```fish
-uv run python -c "import rcsfs; print(rcsfs.__version__)"
-uv run rcsfs --help
+rcsfs convert reference.c reference_descriptors.parquet
+rcsfs zero-first reference_descriptors.parquet helium_descriptors.parquet ordered_descriptors.parquet --json
+rcsfs jsplit ordered_descriptors.parquet --prefix block
+rcsfs restore-csfs --descriptors ordered_descriptors.parquet --header ordered_header.toml --output ordered.c
 ```
 
-In the CLI examples below, use `uv run rcsfs` in place of `rcsfs` when working
-in a uv project. For a pip installation, run `python` and `rcsfs` directly in
-the environment where you installed the package. The wheel installs a native
-`rcsfs` executable, so `uv run rcsfs` executes Rust directly. The Python CLI
-module has been removed; `import rcsfs` continues to provide the library API.
-Source builds and contributor setup are described in
-[development.md](docs/development.md); release maintenance is covered by
-[the release guide](docs/releasing.md).
+`convert` imports GRASP text directly. Keep each descriptor file with its
+companion header. Text recovery uses an explicit restore command. The
+`csfs-split` command filters one dataset into active spaces, each with its own
+descriptor and header. If the source filename already represents the largest
+active space, list the other spaces as split targets. Output paths must differ
+from the input pair. Run `rcsfs COMMAND --help` for flags.
 
-### Native Rust CLI on PATH
+`interacting` takes descriptor datasets of the reference and candidate spaces
+and writes a conservative structural upper bound. Its output can retain false
+positives compared with full angular selection.
 
-The native CLI is a standalone `rcsfs` executable that calls the same Rust core
-as the Python library. It requires no Python environment at runtime. Build and
-install it from the repository root with a Rust toolchain:
-
-```bash
-cargo install --path . --locked --no-default-features --features cli --bin rcsfs
-```
-
-By default, [cargo install](https://doc.rust-lang.org/cargo/commands/cargo-install.html)
-places the executable in `~/.cargo/bin`. On Linux/macOS, add the **directory**
-containing the executable to `PATH`:
-
-```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-command -v rcsfs
-rcsfs --help
-```
-
-The export applies to the current shell. To keep it for new interactive shells,
-add the same line to `~/.bashrc` for Bash or `~/.zshrc` for Zsh. If Cargo uses a
-custom installation root, use its `bin` directory instead. On Windows, add the
-directory containing `rcsfs.exe` (by default `%USERPROFILE%\.cargo\bin`) to the
-user `Path` environment variable and open a new terminal.
-
-Alternatively, build the executable without installing it:
-
-```bash
-cargo build --release --locked --no-default-features --features cli --bin rcsfs
-```
-
-With the default native Cargo output layout, the executable will be
-`target/release/rcsfs` (`rcsfs.exe` on Windows). Copy it into a directory already
-on `PATH`, or add its containing directory using an absolute path. The native
-interface supports commands such as `rcsfs csfsgenerate -c rcsfs.toml`,
-`rcsfs jsplit input.c`, and `rcsfs -c rcsfs.toml`; those inputs must exist.
-
-Both the Python installation and the native installation use the name
-`rcsfs`. The first matching executable on `PATH` runs, and activating a Python
-environment can change that order. On Bash/Zsh, use `type -a rcsfs` to inspect
-the available entries or invoke the native executable by its absolute path.
-
-The native commands are `csfsgenerate`, `csfggenerate`, `gen-descriptors`,
-`zero-first`, `csfs-split`, `jsplit`, `interacting`, and `restore-csfs`, plus
-`convert` (CSF text to Parquet) and `info` (Parquet metadata). Existing split
-aliases are accepted. Use `rcsfs COMMAND --help` for arguments or
-`rcsfs COMMAND init-config` to append a commented TOML example. For example:
-
-```bash
-rcsfs convert input.c input.parquet --num-workers 8
-rcsfs gen-descriptors input.parquet descriptors.parquet --header input_header.toml
-rcsfs restore-csfs --descriptors descriptors.parquet --header input_header.toml --output restored.c
-```
-
-`csfsgenerate` supports the interactive dialog, TOML models, and
-`--transcript FILE`; disk generation, estimates and continuation lists use the
-shared Rust pipeline. CSFG supports numbered models and active-space layers.
-Output filenames must be in the invocation directory. CLI arguments override
-TOML values. The default terminal summary shows key counts with thousands separators,
-J/parity or split results, output paths and elapsed time. File sizes use B, KB, MB,
-GB or larger SI units (1 MB = 1,000,000 bytes). Detailed stages and resource statistics
-go to the run log; warnings and errors remain on stderr. `--json` keeps the full
-result on stdout, with numeric counts and raw byte values unchanged. Exit codes are 0 for success, 2 for argument/configuration errors, and
-1 for processing failures.
-
-When non-JSON `zero-first` output is redirected, its legacy three-column block
-table remains on stderr for existing GRASP input generators. Interactive terminals
-use the concise summary; the full table is always retained in the run log.
-
-`rcsfs -c FILE` runs configured tables in file order and stops on failure.
-All commands, including standalone subcommands, estimates and CSFG batches, append
-JSON Lines to `rcsfs.log` (or `rcsfs_<conf>.log`). These retain the configuration
-snapshot, full command results, detailed diagnostics, timings and failures.
-CSFG batches stage all models before publishing. Logs include the invocation directory,
-Unix-millisecond timestamps, merged configuration/CLI parameters and a terminal
-success/failure record for ordinary command errors. A forcibly terminated process
-may leave an incomplete log without a terminal event. Publication is atomic per file, not a transaction across
-all output files; failures report files already published.
-
-The [cross-platform CI workflow](.github/workflows/ci.yml) builds and tests
-Linux, Windows and macOS executables independently of Python wheels. Local
-validation does not establish that all platform CI jobs have passed. See
-[development.md](docs/development.md#native-rust-cli) for validation commands.
-
-## Quick Start
-
-Set `input_csf` to an existing GRASP CSF file from your calculation. The optional
-interaction example at the end also needs `reference.csf` and `candidates.csf`.
+## Python
 
 ```python
 from pathlib import Path
 
-import polars as pl
 from rcsfs import (
     convert_csfs,
-    generate_descriptors_from_parquet,
-    get_parquet_info,
+    descriptor_header_path,
     read_csfs,
-    read_peel_subshells,
-    select_interacting_csfs,
+    restore_csfs_from_descriptors,
+    select_csfs,
 )
 
-input_csf = Path("input.c")
-csf_parquet = Path("sample.parquet")
-desc_parquet = Path("sample_descriptors.parquet")
-
-# Read header metadata and CSF rows directly (no intermediate Parquet file)
-header, csf_df = read_csfs(input_csf, num_workers=8)
-print(header["block_info"])
-print(csf_df.head())
-
-# Add include_block_id=True when J^P block membership is needed
-blocked_header, blocked_csf_df = read_csfs(
-    input_csf, num_workers=8, include_block_id=True
-)
-
-# 1. Convert CSF text to parquet for persistent workflows
-stats = convert_csfs(input_csf, csf_parquet)
-print(stats)
-
-# 2. Inspect parquet metadata
-info = get_parquet_info(csf_parquet)
-print(info)
-
-# 3. Read peel subshells from the generated header TOML
-peel_subshells = read_peel_subshells(stats["header_file"])
-print(peel_subshells[:6])
-
-# 4. Generate descriptor parquet (descriptor_version=2 by default)
-desc_stats = generate_descriptors_from_parquet(
-    csf_parquet,
-    desc_parquet,
-    peel_subshells=peel_subshells,
-    header_path=stats["header_file"],
-)
-print(desc_stats)
-
-# 5. Load the descriptor table
-df = pl.read_parquet(desc_parquet)
-print(df.head())
-
-# 6. Select a conservative (non-exact) interaction upper bound
-interaction_stats = select_interacting_csfs(
-    "reference.csf", "candidates.csf", "selected.csf", num_workers=8
-)
-assert interaction_stats["exact"] is False
+basis = Path("basis_descriptors.parquet")
+convert_csfs(Path("basis.c"), basis)
+header, rows = read_csfs(basis, include_block_id=True)
+selected = Path("selected_descriptors.parquet")
+select_csfs(basis, selected, [0])
+restore_csfs_from_descriptors(selected, descriptor_header_path(selected), Path("selected.c"))
 ```
 
-## Workflow
-
-### 1. Convert CSF text to Parquet
-
-`convert_csfs(...)` reads a CSF file, skips the 5-line header, skips GRASP block
-separator lines containing only `*`, and writes the CSF data as ordered triples:
-
-- `idx`
-- `line1`
-- `line2`
-- `line3`
-
-It also writes a companion TOML file named:
-
-```text
-<input_stem>_header.toml
-```
-
-That file contains:
-
-- the original 5 header lines
-- `header_info.electron_count`: total electrons, including the fully occupied core
-- block metadata, including `block_info.block_lengths`
-- conversion statistics
-
-Disk and memory generation write the electron count before descriptors are
-bound to the completed header's SHA-256. Text conversion and `read_csfs` infer
-it from the core capacities and the first complete CSF's occupation line,
-before line truncation. Legacy headers remain readable; conversions of empty
-or opaque text omit the count when it cannot be determined. Missing means
-unknown, not zero. Editing the count changes the header hash and requires
-regenerating the associated descriptors.
-
-Example:
-
-```python
-from rcsfs import convert_csfs
-
-stats = convert_csfs(
-    "input.csf",
-    "output.parquet",
-    max_line_len=256,
-    chunk_size=3_000_000,
-    num_workers=None,
-)
-```
-
-Returned stats include:
-
-- `success`
-- `input_file`
-- `output_file`
-- `header_file`
-- `max_line_len`
-- `chunk_size`
-- `csf_count`
-- `total_lines`
-- `truncated_count`
-
-### 2. Read peel subshells
-
-`read_peel_subshells(...)` extracts the peel subshell sequence from the generated header TOML.
-
-```python
-from rcsfs import read_peel_subshells
-
-peel_subshells = read_peel_subshells("output_header.toml")
-```
-
-Typical output:
-
-```python
-["5s", "4d-", "4d", "5p-", "5p", "6s"]
-```
-
-### 3. Generate descriptor Parquet
-
-`generate_descriptors_from_parquet(...)` reads the converted CSF Parquet file and writes a
-descriptor table in the reversible V2 format. `descriptor_version` accepts only `2`:
-
-#### V2
-
-Four integer channels per peel subshell, in named columns:
-
-```text
-sub{i}_n, sub{i}_2j, sub{i}_v, sub{i}_2k   (occupation, printed 2J, physical seniority, printed coupling 2K)
-```
-
-plus two global columns:
-
-```text
-total_two_j, parity   (parity is +1/-1)
-```
-
-Unprinted J/coupling values are `-1` (`MISSING`), distinct from a printed `0`.
-The v channel always stores physical seniority; empty/closed subshells have v=0.
-Files require `seniority_encoding=physical`, `descriptor_dtype=int8` and
-`max_two_j=126`. J/coupling values outside 0..126 are rejected before narrowing.
-Regenerate older printed-v or Int32 descriptors;
-restoration rejects files without this marker. `seniority_to_printed_v(two_j,
-occupation, subshell_two_j, seniority)` returns the canonical text label or -1.
-V2 always writes raw `Int8` columns. Feature scaling belongs to the consuming ML pipeline;
-the former `normalize` parameter has been removed.
-
-When `header_path` is given (or auto-detected next to `input_parquet`), its SHA-256 is recorded
-in the output Parquet's key-value metadata as `source_header_sha256`, binding the descriptor
-file to the exact header it was generated from. `get_parquet_info(...)` returns this and the
-rest of the format contract (`descriptor_version`, `channels_per_subshell`, `peel_subshells`,
-`feature_columns`, `global_columns`, `missing_sentinel`, `seniority_encoding`, `descriptor_dtype`, `max_two_j`, `normalized`) under
-`key_value_metadata`.
-
-V1 generation and its normalization have been removed. Regenerate old descriptors from
-the original CSF data; converting a V1 row cannot recover the missing seniority information.
-Output Parquet uses ZSTD compression by default.
-
-Example:
-
-```python
-from rcsfs import generate_descriptors_from_parquet
-
-# V2 (default)
-stats = generate_descriptors_from_parquet(
-    "output.parquet",
-    "descriptors.parquet",
-    peel_subshells=["5s", "4d-", "4d", "5p-", "5p", "6s"],
-    num_workers=8,
-    header_path="output_header.toml",
-)
-
-```
-
-### 3a. Restore CSFs from a V2 descriptor file
-
-For proposed direct GRASP integration and an alternative that avoids linking Rust,
-see the [3.0.0 descriptor integration discussion (Chinese)](docs/grasp_descriptor_integration_discussion_20261110.md).
-These interfaces are proposals, not implemented APIs.
-
-`restore_csfs_from_descriptors(...)` rebuilds a CSF text file from a V2 descriptor Parquet file
-and its source `{stem}_header.toml`. If the descriptor file recorded a `source_header_sha256`,
-the header is verified against it before anything is written — a mismatch means the header was
-regenerated or edited since the descriptors were produced.
-
-```python
-from rcsfs import restore_csfs_from_descriptors
-
-stats = restore_csfs_from_descriptors(
-    "descriptors.parquet",
-    "output_header.toml",
-    "restored.c",
-)
-# Restore only a subset, in a given order:
-stats = restore_csfs_from_descriptors(
-    "descriptors.parquet", "output_header.toml", "subset.c", indices=[0, 5, 12],
-)
-```
-
-### 4. Inspect Parquet metadata
-
-```python
-from rcsfs import get_parquet_info
-
-info = get_parquet_info("output.parquet")
-```
-
-Returned metadata includes:
-
-- `file_path`
-- `file_size`
-- `num_rows`
-- `num_columns`
-- `compression`
-- `created_by`
-- `key_value_metadata` — a `dict[str, str | None]` of the Parquet file's key-value metadata.
-  For a V2 descriptor file this carries the full format contract: `descriptor_version`,
-  `channels_per_subshell`, `subshell_count`, `peel_subshells`, `missing_sentinel`,
-  `normalized`, `feature_columns`, `global_columns`, `source_header_sha256`,
-  `source_header_filename`. Empty for files that carry no key-value metadata (e.g. plain
-  CSF Parquet or V1 descriptor files).
-
-### 5. Parse and reproduce a CSF with the complete integer representation
-
-The development API in `complete_csf` reads a complete GRASP CSF file into a
-compact in-memory integer representation. Unlike the ML descriptor, it keeps
-subshell occupations, explicitly printed zero states, seniority labels, the
-printed intermediate couplings, total `2J`, parity, block boundaries, and record
-order.
-
-From a source checkout with the development environment activated
-(see [development.md](docs/development.md)), use the Rust round-trip example
-to validate a CSF file:
-
-```bash
-cargo run --release --example roundtrip_csf -- \
-  /path/to/input.c \
-  /path/to/output.c
-```
-
-Example output:
-
-```text
-records=225157 blocks=7 occupied_entries=1974490 coupling_entries=670869 allocated_bytes=27263731 byte_identical=true
-```
-
-The command parses the input, writes it back from the integer representation,
-and compares both files without loading the two text files into memory for the
-comparison. It exits with an error if the output is not byte-identical. The output path must not already exist; existing files (including links to the
-input) are rejected before writing, preserving the original baseline.
-
-The same representation is available from Rust:
-
-```rust
-use _rcsfs::complete_csf::CompleteCsfFile;
-use std::path::Path;
-
-fn main() -> anyhow::Result<()> {
-    let csfs = CompleteCsfFile::parse_path(Path::new("input.c"))?;
-    println!("CSFs: {}", csfs.records.len());
-    println!("J/P blocks: {}", csfs.blocks.len());
-    println!("allocated bytes: {}", csfs.allocated_bytes());
-
-    let first = &csfs.records[0];
-    let occupied = csfs.occupied(first)?;
-    let intermediate_couplings = csfs.couplings(first)?;
-    println!(
-        "occupied={} intermediate_couplings={}",
-        occupied.len(),
-        intermediate_couplings.len()
-    );
-
-    csfs.write_path(Path::new("output.c"))?;
-    Ok(())
-}
-```
-
-`allocated_bytes()` reports the heap capacity owned by the integer structure.
-It excludes allocator bookkeeping and temporary parser/formatter buffers, so
-it is not the process peak RSS.
-
-`couplings()` returns only the intermediate couplings GRASP actually prints, not
-a dense coupling chain. The `first` flag in `kopp2.f90` suppresses leading
-couplings, so the result is sparse and must be indexed through the `boundary`
-field — on `e1_cc1as1.c` only 670,869 of 1,524,176 interior boundaries are
-printed. Consumers that need a value at every boundary, such as the cumulative
-`2J` column of the ML descriptor, have to reconstruct the suppressed prefix
-themselves.
-
-Parsing is strict, and only the spellings the GRASP writers emit are accepted.
-The block separator must be exactly `" *"`, empty symmetry blocks are rejected,
-the three header labels are verified, seniority must occupy field offsets 3 and
-4, and J fields must be bare decimals in reduced form — `"+4"` and `"8/2"` are
-errors rather than fields that would be silently rewritten on output. Every
-record is checked against its canonical formatting, including padding and unused
-columns. Lines must end with LF; CRLF and a missing final LF are rejected. This keeps
-parsing and formatting mutually inverse, so a successful round-trip is
-byte-identical.
-
-This is currently a Rust development API. The serial generator now uses this
-representation to enumerate states and couplings for one explicit relativistic
-occupation configuration. Python bindings for this representation are not
-implemented yet.
-
-### 6. Generate CSFs for a single fixed relativistic configuration (Rust dev API)
-
-```bash
-cargo run --release --example generate_csfs -- \
-  examples/fixed_configuration.toml /path/to/new-output.c
-```
-
-The example produces the two allowed CSFs of `2p_{3/2}^2` with a filled `1s`
-core. It accepts a TOML request with explicit subshell occupations, an inclusive
-`2J` range; output must be a new file. This is a Rust
-development entry point (`csf_generation::generate_csfs(&GenerationRequest)`),
-not the product CLI — see [Command Line Interface](#command-line-interface)
-below for generating a full CSF list from Python.
-
-## Command Line Interface
-
-Installing `rcsfs` also installs the `rcsfs` console script. Run `rcsfs --help`
-to list its subcommands (`csfs-split` also accepts the older `split-active` and
-`rcsfsplit` spellings).
-
-### Shared CLI configuration
-
-The processing commands accept `-c/--config`. For `csfsgenerate`, running without
-that flag always starts the interactive dialog, even when `rcsfs.toml` exists.
-After a successful run, it writes the dialog inputs and CLI options to
-`./rcsfs.toml`, replacing any existing file. Use `rcsfs csfsgenerate -c` or
-`rcsfs csfsgenerate --config` to read `./rcsfs.toml`; add a path after the flag
-to read a different file. Other commands continue to read the selected table
-from `./rcsfs.toml` automatically when the flag is omitted. A command with no
-matching table uses its ordinary CLI arguments. Explicit CLI arguments override
-values in the table. TOML path
-values are resolved relative to the current working directory, just like CLI
-paths; changing to another directory changes which default file is found.
-Run `rcsfs -c rcsfs.toml` to execute every active command table in file order.
-All tables are validated before the first command runs; execution stops on the
-first failure. Each table must name the actual files produced by earlier steps.
-In particular, `[csfs-split]` requires a CSF Parquet file and its header;
-the batch runner generates these automatically from a matching earlier
-`[csfsgenerate]` entry, without requesting descriptor output. For a standalone
-generation, set `generate_parquet = true` or pass `--generate-parquet` to write
-only the CSF Parquet and header alongside the CSF text.
-
-CLI runs (both `rcsfs -c rcsfs.toml` and standalone subcommands) append to `rcsfs_{conf}.log`
-in the invocation directory, for example `rcsfs_e1_vv.log` for
-`conf = "e1_vv"`; without `conf`, the filename is `rcsfs.log`. Each run records
-the original TOML, merged configuration/CLI parameters, native command errors,
-complete returned statistics (CSF/block counts, AS split counts, and available
-generation timing/resource statistics), start/end times, step/total elapsed
-time, and exit status. Detailed native diagnostics are logged instead of printed.
-The console shows a concise result summary, comma-separated counts and automatic
-file-size units; warnings and errors stay visible. JSON/log statistics retain raw
-numbers for scripts. Estimates create a log but no calculation outputs.
-Previous runs are retained. Validation happens before the log is opened; a log
-that aliases an input/output is rejected, and an unwritable log prevents the
-command from starting.
-
-Every CLI command writes final outputs in the directory where it is invoked.
-Output arguments specify filenames; paths to other output directories are
-rejected. Input paths may point to other directories. Processing commands replace
-existing output files on rerun, including files produced by `rcsfs -c`.
-Each completed file is published atomically; a set of files is not a single
-transaction. Input files cannot be used as output paths.
-Private staging and scratch directories are created under the invocation
-directory and removed on success or failure. `output_dir`, `work_dir`,
-`keep_parquet`, and their CLI flags are no longer supported. A split output
-with the same AS number as a generated raw CSF replaces that file.
-Run `rcsfs <command> init-config` to add that command's commented reference
-table to `./rcsfs.toml` without running a processing command. For example,
-`rcsfs csfsgenerate init-config` writes only the `[csfsgenerate]` example.
-Running `rcsfs gen-descriptors init-config` later adds `[gen-descriptors]` while
-preserving existing content. Split aliases write the canonical `[csfs-split]`
-table. Repeating the same init command does not duplicate its table. Uncomment
-and edit a table to use it on later runs.
-`init-config` creates a commented reference file; an interactive
-`csfsgenerate` run replaces it with the completed inputs.
-The `csfsgenerate` command always places its staging and disk scratch
-directories under the directory where it was launched. `scratch_dir` in TOML
-and `--scratch-dir` are no longer accepted.
-Malformed TOML, unknown keys in the selected table, and missing required
-parameters fail before the command starts writing outputs. Generated header
-and descriptor metadata TOML files are separate outputs and are not changed or
-used as CLI configuration.
-
-The shared top-level `conf` stem and the `as` number can derive the raw CSF
-filenames. For example, this complete configuration writes
-`e1_vv1_as6raw.c`, `e1_vv1_as6raw.parquet`, and
-`e1_vv1_as6raw_header.toml`. The split step reads that Parquet/header pair and
-writes `e1_vv1_as1raw.c` and `e1_vv1_as2raw.c`:
-
-```toml
-conf = "e1_vv1"
-
-[csfsgenerate]
-as = 6
-inactive_core = 0
-reference_configuration = ["1s(2,*)"]
-active_space = "1s"
-j_min = 0
-j_max = 0
-excitations = 0
-
-[csfs-split.active_spaces]
-AS1 = "1s"
-AS2 = "1s"
-```
-
-`as` identifies the generated raw space in the filename; `active_space`
-remains the orbital list used for generation. `conf` is a filename stem and
-must be at the top level, before any table. An underscore joins `conf` and `as`:
-`conf = "e1_vv1"` produces `e1_vv1_as6raw.c`. A legacy trailing underscore
-(`conf = "e1_vv1_"`) is reused, so it produces the same raw filenames.
-`as = 0` denotes the unexcited MR space. For split outputs,
-labels must be `AS0`, `AS1`, `AS2`, etc.
-when `conf` supplies the names. Generated and split files go in the invocation
-directory. Explicit `rcsfs_out`, `rcsfs_parquet`, `split_csfs_parquet`, and
-`csfs_header` still take precedence for filenames and inputs.
-With `conf`, split filenames always use `{conf}_asNraw.c`; `prefix` applies only when
-`conf` is absent. With multiple `[[csfsgenerate]]` entries, an implicit split input
-comes from the last entry.
-
-With top-level `conf`, `generate_descriptors = true` also writes the descriptor
-to `{conf}_desc.parquet` by default, with its source header hash. It includes CSF
-Parquet/header output, so `generate_parquet = true` is unnecessary. An explicit
-`descriptor` or `--descriptor` overrides the filename; without `conf`, it remains
-`{csf_stem}_descriptors.parquet`. Multiple generation entries that export
-descriptors need distinct explicit filenames when they share one `conf`.
-
-Active spaces can be written as a subtable, with one orbital range per label:
-
-```toml
-[csfs-split]
-# Optional explicit input filenames go here, before the subtable.
-
-[csfs-split.active_spaces]
-AS0 = "3s,3p,3d,4s"
-AS1 = "4s,4p,4d,4f"
-AS2 = "5s,5p,5d,5f,5g"
-AS3 = "6s,6p,6d,6f,6g,6h"
-```
-
-Entries are processed in the order written. The existing array form, such as
-`active_spaces = ["AS1=4s,4p,4d,4f", "AS2=5s,5p,5d,5f,5g"]`, remains supported;
-use either form once per split table. Explicit `--space` arguments replace the
-configured spaces. `init-config` uses the subtable form.
-Run the complete example with `rcsfs -c rcsfs.toml`. To run generation and
-splitting as separate commands, set `generate_parquet = true` in
-`[csfsgenerate]`, then run `rcsfs csfsgenerate -c` followed by
-`rcsfs csfs-split`.
-
-The explicit-path form also remains supported:
-
-```toml
-[csfsgenerate]
-orbital_order = "*"
-inactive_core = 2
-reference_configuration = ["3s(2,i)3p(6,5)3d(6,5)4s(2,i)"]
-active_space = "4s,4p,3d"
-j_min = 0
-j_max = 12
-excitations = 2
-rcsfs_out = "calculation.c"
-generate_descriptors = true
-rcsfs_parquet = "calculation.parquet"
-descriptor = "calculation_descriptors.parquet"
-threads = 8
-generation_storage = "disk"
-
-[gen-descriptors]
-input_parquet = "calculation.parquet"
-output_parquet = "calculation_descriptors_rebuilt.parquet"
-header = "calculation_header.toml"
-
-[zero-first]
-zero_csf = "zero.c"
-full_csf = "calculation.c"
-output_csf = "calculation_zf.c"
-
-[csfs-split]
-split_csfs_parquet = "calculation.parquet"
-csfs_header = "calculation_header.toml"
-active_spaces = ["as1=5s,4p,3d", "as2=6s,5p,4d"]
-
-[interacting]
-reference = "reference.c"
-candidates = "calculation.c"
-output = "interacting.c"
-
-[restore-csfs]
-descriptors = "calculation_descriptors.parquet"
-header = "calculation_header.toml"
-output = "restored.c"
-```
-
-Then run one table with `rcsfs csfsgenerate -c` or `rcsfs csfs-split`.
-For `rcsfs -c rcsfs.toml`, include only the tables you intend to run and
-ensure every later table names files produced earlier or already present.
-`active_spaces` and `indices` are arrays. The existing
-`[generate]`/`[output]` format, the earlier flat `[csfsgenerate]` keys, and
-the earlier `[split-active]` keys remain readable; do not mix an old and new
-name for the same field in one table.
-
-To run several independent CSF generations, use TOML array tables. Repeating
-`[csfsgenerate]` literally is invalid TOML; each `[[csfsgenerate]]` entry has
-its own output filename and runs in order under `rcsfs -c rcsfs.toml`:
-
-```toml
-[[csfsgenerate]]
-inactive_core = 0
-reference_configuration = ["1s(2,*)"]
-active_space = "1s"
-j_min = 0
-j_max = 0
-excitations = 0
-rcsfs_out = "first.c"
-
-[[csfsgenerate]]
-inactive_core = 0
-reference_configuration = ["1s(2,*)"]
-active_space = "1s"
-j_min = 0
-j_max = 0
-excitations = 0
-rcsfs_out = "second.c"
-
-[csfs-split]
-split_csfs_parquet = "second.parquet"
-csfs_header = "second_header.toml"
-active_spaces = ["AS1=1s"]
-```
-
-Here the split step causes `second.parquet` and its header to be generated;
-`first.c` remains a text-only output. `[[csfsgenerate]]` runs are separate from
-`[[csfsgenerate.lists]]`, which merges multiple reference lists into one output.
-
-### `rcsfs csfsgenerate` — interactively generate a new CSF list
-
-Replicates GRASP2018's `rcsfgenerate` interactive dialog (orbital order, core,
-reference configurations, active orbitals, `2J` range, excitation count) and
-generates the resulting CSF list with the Rust generator described above,
-composed via `csf_generation::enumerate_occupations` +
-`csf_generation::generate_csfs_parallel`. Options with no equivalent question
-in the original dialog — output path, descriptor export, thread
-count — are plain CLI flags instead:
-
-```text
-$ rcsfs csfsgenerate out.c
-Default, reverse, symmetry or user specified ordering? (*/r/s/u) *
-Select core
- 0  No core
- 1  He (2)
- 2  Ne (10)
- 3  Ar (18)
- 4  Kr (36)
- 5  Xe (54)
- 6  Rn (86)
-Core? (0-6) 3
-Enter list of (maximum 100) configurations. End list with a blank line or an asterisk (*)
-Give configuration 1: 3d(10,i)4s(2,*)4p(6,*)4d(6,*)
-Give configuration 2: 3d(10,*)4s(2,i)4p(6,i)4d(6,*)
-Give configuration 3:
-Give set of active orbitals, as defined by the highest principal quantum number per l-symmetry, in a comma delimited list in s,p,d etc order, e.g. 5s,4p,3d: 5s,5p,5d,4f
-Resulting 2*J-number? lower, higher (J=1 -> 2*J=2 etc.): 0,12
-Number of excitations (if negative number e.g. -2, correlation orbitals will always be doubly occupied): 2
-Generate more lists ? (y/n) n
-Generated CSFs: out.c
-record_count: 452373
-block_count: 7
-```
-
-Flags: `--generate-parquet`, `--generate-descriptors`, `--threads N`,
-`--memory-budget-mib MiB`, `--json`.
-
-For reproducible batch runs, use a TOML configuration instead of the interactive
-dialog. The following is the older, still supported `[generate]`/`[output]`
-format; new configurations should use `[csfsgenerate]` as shown above.
-`generate_descriptors` defaults to `false`; when enabled, generation
-writes the CSF text, the CSF Parquet plus its header TOML, and descriptor
-Parquet plus its metadata sidecar:
-
-```toml
-[generate]
-order = "*"
-core = 2
-references = ["3s(2,i)3p(6,5)3d(6,5)4s(2,i)", "3s(2,i)3p(6,5)3d(6,i)4s(2,*)"]
-active_orbitals = "4s,4p,3d"
-j_min = 0
-j_max = 12
-excitations = 2
-continue_lists = false
-
-[output]
-generate_descriptors = true
-csf = "calculation.c"
-parquet = "calculation.parquet"
-descriptor_parquet = "calculation_descriptors.parquet"
-```
-
-Run it with:
-
-```bash
-rcsfs csfsgenerate --config calculation.toml
-```
-
-
-For reproducible scripted runs, use a TOML configuration. The following is
-another older-format example. This avoids
-transcript files and keeps generation settings with the output names:
-
-```toml
-[generate]
-order = "*"
-core = 3
-references = [
-  "3d(10,i)4s(2,*)4p(6,*)4d(6,*)",
-  "3d(10,*)4s(2,i)4p(6,i)4d(6,*)",
-]
-active_orbitals = "5s,5p,5d,4f"
-j_min = 0
-j_max = 12
-excitations = 2
-continue_lists = false
-
-[output]
-generate_descriptors = true
-csf = "out.c"
-parquet = "out.parquet"
-descriptor_parquet = "out_descriptors.parquet"
-```
-
-Run it with `rcsfs csfsgenerate --config generation.toml`. By default
-only the CSF text is written. With `generate_parquet = true`, it also writes
-the CSF Parquet and header TOML without descriptor output. With
-`generate_descriptors = true`, it writes both of those plus descriptor Parquet
-and its TOML sidecar. Descriptor CSV output is not supported. TOML/config
-descriptor runs select the disk backend by default and write reversible **V2**
-descriptors. Add
-`memory_budget_mib = <MiB>` under `[generate]`, or pass
-`--memory-budget-mib`, to enforce the managed-memory budget for disk generation.
-With `--json`, the result also contains per-stage wall/CPU timing and logical
-byte counters in `stage_stats`, together with managed-memory counters in
-`resource_stats`. The memory budget does not cap RSS, allocator overhead, or
-thread stacks.
-Both the interactive memory backend and the disk backend emit reversible V2 descriptors.
-
-### `rcsfs gen-descriptors` — descriptor Parquet from a CSF Parquet file
-
-```bash
-# V2 (default)
-rcsfs gen-descriptors csf.parquet descriptors.parquet --header csf_header.toml
-```
-
-`--descriptor-version 2` is optional; V2 is the only supported generation format.
-The former `--normalize` flag and TOML `normalize` key have been removed.
-This command also writes a `{output_stem}.toml` sidecar mirroring the descriptor version
-and subshell list, for tools that read TOML without opening the Parquet file.
-
-### `rcsfs restore-csfs` — rebuild a CSF text file from V2 descriptors
-
-```bash
-rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
-  --output restored.c
-
-# Restore only a subset, in a given order
-rcsfs restore-csfs --descriptors descriptors.parquet --header csf_header.toml \
-  --output subset.c --indices 0 5 12
-```
-
-`--header` must be the exact `{stem}_header.toml` the descriptors were generated from. If the
-descriptor file recorded `source_header_sha256`, it is verified against this file before
-anything is written.
-
-### `rcsfs zero-first` — reorder a CSF list into zero-order + first-order space
-
-Mirrors GRASP2018's `rcsfzerofirst`: within each symmetry block, the
-zero-order reference CSFs are locked to the head, followed by the
-first-order complement.
-
-```bash
-rcsfs zero-first zero.csf full.csf out.csf
-```
-
-### `rcsfs interacting` — conservative interaction candidates
-
-This first implementation writes each reference block followed by candidate
-CSFs that pass the two-electron occupation bound. It preserves input order and
-parallel results are deterministic, but it does **not** yet implement GRASP's
-recoupling, Coulomb angular-factor, or Breit/SNRC tests. The result is therefore
-a structural upper bound (`exact=False`) that can retain false positives.
-Dirac–Coulomb and Dirac–Coulomb–Breit currently share this same bound.
-
-The CLI writes `rcsf.out` and uses 8 worker threads by default. Use
-`--output PATH` and `--threads N` to override either default.
-
-```bash
-rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc
-
-# Optional overrides
-rcsfs interacting rcsfsmr.inp rcsf.inp --hamiltonian dc \
-  --threads 4 --output selected.csf
-```
-
-#### Input requirements
-
-**Orbital basis — prefix, not equality.** The core header lines must be
-byte-identical, and the reference peel subshell list must be a *prefix* of the
-candidate peel subshell list in the same order. GRASP's own `rcsfinteract`
-requires the two peel lists to be identical; rCSFs deliberately relaxes this to
-a prefix so one reference space can be reused against a candidate space that
-appends further correlation orbitals. Consequences:
-
-- the candidate header, including the appended subshells, becomes the output
-  header, so reference records are re-emitted under the wider peel declaration;
-- the appended subshells participate in the occupation comparison;
-- block counts and each corresponding block's `J/P` must still match exactly.
-
-**The two inputs must be distinct files.** Equal paths, symlinks resolving to a
-common target, and Unix hard links are all rejected. The output path likewise
-must not alias either input, so a run can never overwrite the data it is
-reading. Passing the same file as both reference and candidate is refused
-rather than treated as an identity selection.
-
-## Public Python API
-
-| Function | Description |
-| --- | --- |
-| `read_csfs(input_path, max_line_len=256, num_workers=None, *, include_block_id=False, include_coupling_signature=False, strict=True)` | Return `(header, dataframe)` without a Parquet round trip; optional columns preserve block membership and fixed-width coupling signatures, while strict mode rejects incomplete final CSFs |
-| `convert_csfs(input_path, output_path, max_line_len=256, chunk_size=3000000, num_workers=None)` | Convert CSF text to Parquet |
-| `get_parquet_info(input_path)` | Inspect Parquet metadata |
-| `read_peel_subshells(header_path)` | Read peel subshells from header TOML |
-| `generate_descriptors_from_parquet(input_parquet, output_parquet, peel_subshells, num_workers=None, compression=None, *, descriptor_version=2, header_path=None)` | Generate descriptor Parquet from converted CSFs; `descriptor_version=2` is the only supported format and writes named Int8 columns |
-| `restore_csfs_from_descriptors(descriptor_parquet, header_path, output, indices=None)` | Rebuild a CSF text file from a V2 descriptor Parquet file and its source header TOML |
-| `partition_csfs(zero_parquet, zero_header, full_parquet, full_header, output_csf)` | Reorder a CSF list into zero-order + first-order space per symmetry block |
-| `split_csfs_by_active_spaces(input_parquet, header_path, targets)` | Split one Parquet CSF list into independently selected, possibly overlapping active-space CSF text files; `targets` maps output path to orbital limits |
-| `select_interacting_csfs(reference_csf, candidate_csf, output_csf, *, hamiltonian="dirac_coulomb", method="structural_upper_bound", num_workers=None, overwrite=False)` | Write a conservative, non-exact upper bound of interacting candidates; returned stats always include `exact=False` |
-| `generate_csfs_from_transcript(transcript, output_path, threads=None)` | Generate CSFs from an in-memory `rcsfgenerate.log`-format transcript; backs `rcsfs csfsgenerate` |
-| `generate_disk_outputs_from_transcript(transcript, csf_output, csf_parquet_output, descriptor_output, header_output, scratch_dir, threads=None, *, memory_budget_mib=None)` | Generate staged CSF and reversible V2 outputs with managed-memory accounting |
-
-### Split CSFs by active space
-
-Use the CSF Parquet file and matching `*_header.toml` produced by conversion or
-disk generation. For example, from a large source space, request two nested
-spaces in one pass:
-
-```bash
-rcsfs csfs-split source.parquet --header source_header.toml \
-  --space '_small=5s,4p,3d' \
-  --space '_large=7s,6p,5d,4f'
-```
-
-This writes `source_small.c` and `source_large.c` in the current directory.
-`rcsfs split-active` and `rcsfs rcsfsplit` are older aliases for
-`rcsfs csfs-split`. Each output is filtered
-independently, so a CSF belonging to both spaces appears in both.
-The five-line header is retained with its peel list filtered to the target;
-CSF order and symmetry-block separators are preserved. Occupation lines are
-parsed as exact orbital tokens (`5g` cannot accidentally match `15g`), and
-relativistic partners such as `5g-` and `5g` share the `5g` maximum. Even an
-explicitly zero-occupied orbital is checked, matching GRASP's line-based
-filter and keeping every listed orbital within the output header. Input is
-read in bounded Parquet batches; a 77-million-row source is not loaded into
-RAM. The CLI replaces existing output files. When calling the Python API
-directly, each output needs an existing parent directory and must not already
-exist. A completed output is published atomically, but a group of outputs is
-not an all-or-nothing transaction: on a late publication failure, earlier
-completed outputs remain and are named in the error.
-
-## Input Format
-
-rCSFs expects CSF text files in this layout:
-
-- first 5 lines: header / metadata
-- remaining lines: CSFs in groups of 3
-- line 1: subshell occupations
-- line 2: intermediate coupling values
-- line 3: final coupling and total `J`
-
-## Typical Use Cases
-
-- Preparing CSF datasets for analytics pipelines.
-- Moving large text-based CSF collections into Parquet.
-- Building ML-ready descriptor matrices from CSF data.
-- Creating reversible V2 descriptor datasets for model training.
-
-## Performance Tips
-
-- For dedicated machines, leave `num_workers=None` to use the default rayon worker configuration.
-- For shared servers, set `num_workers` explicitly to avoid CPU contention.
-- Keep the default `chunk_size=3_000_000` unless you have a measured reason to tune it.
-- Increase `max_line_len` if your input has unusually long CSF lines and you want to avoid truncation.
+`read_csfs` returns header data and numerical rows with zero-based indices.
+Selection and partial restoration accept unique increasing source indices.
+Other operations include `merge_csfs`, `match_csfs`, `partition_csfs`,
+`split_csfs_by_active_spaces`, `split_csfs_by_j`, and
+`select_interacting_csfs`. For native generation, call
+`generate_csfs_from_transcript(transcript, output_path)`.
 
 ## Development
 
-Source builds, extension setup and contributor checks are described in
-[development.md](docs/development.md). The Rust examples above require a
-source checkout; they are not part of the installed CLI.
-
-## License
-
-MIT. See [LICENSE](LICENSE). GRASP-derived tables and behavior are attributed
-in [the bundled GRASP notice](licenses/GRASP-MIT.txt). Locked Rust dependency
-notices are included in [RUST-DEPENDENCIES.txt](licenses/RUST-DEPENDENCIES.txt).
-
-`rcsfs csfsgenerate` defaults to `rcsf.out`; the output path is optional.
-
-## Release preparation
-
-See [the release guide](docs/releasing.md) for the build-only platform matrix,
-source archive checks, wheel smoke tests and manual publishing workflow.
+See [the V2 descriptor guide](docs/CSF_DESCRIPTOR_GUIDE.md)
+for the physical channels and [the changelog](docs/CHANGELOG.md) for changes
+since 3.0.1. rCSFs is distributed under the [MIT license](LICENSE).
 
 ## Direct CSFG generation
 
@@ -1038,7 +117,7 @@ source archive checks, wheel smoke tests and manual publishing workflow.
 GRASPG-compatible `rcsfg.out` and `rlabel.out` directly in Rust. The first
 version supports a common continuous S/SD correlation space with an explicit
 labeling space. It does not first write a full CSF list. Existing outputs require
-`--overwrite`; the ordinary `csfsgenerate` command is unchanged.
+`--overwrite`.
 See the [configuration, Python interface and limits](docs/CSFG_GENERATION.md)
 and the [Gd compatibility/performance report](docs/benchmarks/csfg_gd_20261030.md).
 

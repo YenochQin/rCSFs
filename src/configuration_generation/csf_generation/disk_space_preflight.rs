@@ -505,7 +505,7 @@ mod tests {
 
         // Different artifacts of one run are fine, and share a volume.
         let distinct = [
-            published("rcsfs-space-test.c", ArtifactKind::CsfText),
+            published("rcsfs-space-test_header.toml", ArtifactKind::Header),
             published("rcsfs-space-test.parquet", ArtifactKind::Descriptor),
         ];
         let checks = check_space(&estimate, &distinct, SpacePolicy::Report).unwrap();

@@ -84,10 +84,7 @@ def _absolute_paths(value: object, path: str = "") -> list[str]:
     """Every string in a report that looks like an absolute filesystem path."""
     found: list[str] = []
     if isinstance(value, str):
-        if (
-            value.startswith(("/", "\\\\"))
-            or WINDOWS_ABSOLUTE.match(value)
-        ):
+        if value.startswith(("/", "\\\\")) or WINDOWS_ABSOLUTE.match(value):
             found.append(f"{path}={value}")
     elif isinstance(value, dict):
         for key, item in value.items():
@@ -185,7 +182,12 @@ def _identity(**git: object) -> dict[str, object]:
 
 def test_a_dirty_source_must_be_accepted_explicitly() -> None:
     """A registered report claims a source state someone else can rebuild."""
-    dirty = _identity(dirty=True, dirty_paths=["src/configuration_generation/csf_generation/disk_space_preflight.rs"])
+    dirty = _identity(
+        dirty=True,
+        dirty_paths=[
+            "src/configuration_generation/csf_generation/disk_space_preflight.rs"
+        ],
+    )
     with pytest.raises(SystemExit, match="source tree is dirty"):
         support.require_clean_source(dirty, allow_dirty=False)
     support.require_clean_source(dirty, allow_dirty=True)
@@ -206,7 +208,9 @@ def test_a_source_that_moves_during_a_run_is_refused() -> None:
         ("dirty", False, True),
         ("dirty_diff_sha256", None, "f"),
     ]:
-        with pytest.raises(SystemExit, match="source changed while it was being measured"):
+        with pytest.raises(
+            SystemExit, match="source changed while it was being measured"
+        ):
             support.verify_source_unchanged(
                 _identity(**{field: before}), _identity(**{field: after})
             )
@@ -224,7 +228,10 @@ def test_finalize_refuses_a_dirty_source_without_the_override(
     report: dict[str, object] = {"environment": {}, "measurements": []}
     with pytest.raises(SystemExit, match="source tree is dirty"):
         support.finalize_report(
-            report, output, _identity(dirty=True, dirty_paths=["a.rs"]), allow_dirty=False
+            report,
+            output,
+            _identity(dirty=True, dirty_paths=["a.rs"]),
+            allow_dirty=False,
         )
     assert not output.exists()
 
@@ -470,10 +477,12 @@ def test_each_benchmark_measurement_has_an_isolated_rss_scope(tmp_path: Path) ->
     )
     assert result.returncode == 0, result.stderr
     document = json.loads(report.read_text(encoding="utf-8"))
-    assert document["settings"]["measurement_process_model"] == "spawned_process_per_run"
+    assert (
+        document["settings"]["measurement_process_model"] == "spawned_process_per_run"
+    )
     measurement = document["measurements"][0]
     assert measurement["rss_scope"] == "single_measurement_process"
-    for artifact in ("csf_text", "csf_parquet", "descriptor", "header"):
+    for artifact in ("descriptor", "header"):
         assert re.fullmatch(r"[0-9a-f]{64}", measurement[f"{artifact}_sha256"])
 
 
@@ -483,7 +492,10 @@ def test_each_benchmark_measurement_has_an_isolated_rss_scope(tmp_path: Path) ->
         # An ordinary modification.
         (" M src/lib.rs\0", [(" M", "src/lib.rs", None)]),
         # A name with a space and one that merely looks quoted: `-z` never quotes.
-        ('?? a file.rs\0?? "quoted".rs\0', [("??", "a file.rs", None), ("??", '"quoted".rs', None)]),
+        (
+            '?? a file.rs\0?? "quoted".rs\0',
+            [("??", "a file.rs", None), ("??", '"quoted".rs', None)],
+        ),
         # A rename carries its origin in the next field.
         ("R  dst.rs\0src/src.rs\0", [("R ", "dst.rs", "src/src.rs")]),
         # A newline inside a name survives because fields are NUL-separated.
@@ -504,8 +516,8 @@ def test_status_parsing_handles_awkward_paths(
     [
         ('transcript = "invalid"\n', "non-list transcript table"),
         ('transcript = ["invalid"]\n', "non-table transcript entry"),
-        ('[[transcript]]\nfile = 42\n', "without a file name"),
-        ('[[transcript]]\nrecords = 1\n', "without a file name"),
+        ("[[transcript]]\nfile = 42\n", "without a file name"),
+        ("[[transcript]]\nrecords = 1\n", "without a file name"),
     ],
 )
 def test_manifest_rejects_invalid_entry_types(
@@ -576,9 +588,10 @@ def test_a_windows_root_is_matched_case_insensitively(
         "_PATH_PLACEHOLDERS",
         ((r"C:\Users\Alice\AppData\Local\Temp", "<system-temp>"),),
     )
-    assert support.normalize_path(
-        r"c:\users\alice\appdata\local\temp\rcsfs-run"
-    ) == "<system-temp>/rcsfs-run"
+    assert (
+        support.normalize_path(r"c:\users\alice\appdata\local\temp\rcsfs-run")
+        == "<system-temp>/rcsfs-run"
+    )
     assert support.normalize_path(r"C:/Users/Alice/AppData/Local/Temp/rcsfs-run") == (
         "<system-temp>/rcsfs-run"
     )
@@ -672,6 +685,7 @@ def test_parallel_columns_preserve_non_descriptor_artifacts(
             / f"v2_disk_generation_parallel_descriptor_{fixture}_20260923.json"
         ).read_text()
     )
+
     def measured(report: dict[str, object], key: str) -> str:
         measurements = cast(list[dict[str, object]], report["measurements"])
         return next(
@@ -683,7 +697,10 @@ def test_parallel_columns_preserve_non_descriptor_artifacts(
         )
 
     for key in ("csf_text_sha256", "csf_parquet_sha256", "header_sha256"):
-        assert measured(new, key) == measured(old, key), f"{fixture}/{codec} changed {key}"
+        assert measured(new, key) == measured(old, key), (
+            f"{fixture}/{codec} changed {key}"
+        )
+
 
 def test_the_harness_refuses_a_run_whose_stages_do_not_cover_the_call() -> None:
     """A stage claim needs complete timers, so the harness checks for them.

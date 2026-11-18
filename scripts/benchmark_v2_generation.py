@@ -57,7 +57,7 @@ from benchmark_support import (
     verify_registered_transcript,
 )
 
-from rcsfs import generate_disk_outputs_from_transcript
+from rcsfs import generate_csfs_from_transcript
 
 REPORT_SCHEMA = "rcsfs-v2-generation-benchmark/1"
 
@@ -94,7 +94,6 @@ _STAGE_KEYS = (
     "descriptor_count",
     "duplicate_count",
     "block_count",
-    "csf_bytes",
     "descriptor_bytes",
     "stage_stats",
     "resource_stats",
@@ -102,8 +101,6 @@ _STAGE_KEYS = (
 )
 
 _PUBLISHED_DIGEST_KEYS = (
-    "csf_text_sha256",
-    "csf_parquet_sha256",
     "descriptor_sha256",
     "header_sha256",
 )
@@ -117,7 +114,7 @@ def _peak_rss_bytes() -> int | None:
         return None
     try:
         usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return int(usage) if sys.platform == "darwin" else int(usage) * 1024
 
@@ -133,7 +130,7 @@ def _process_io_bytes() -> dict[str, int] | None:
             key, _, value = line.partition(":")
             if key in {"read_bytes", "write_bytes"}:
                 counters[key] = int(value.strip())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return counters or None
 
@@ -160,7 +157,9 @@ class ScratchMonitor(threading.Thread):
     def _sample(self) -> tuple[int, int]:
         total = 0
         files = 0
-        for directory, _subdirectories, names in os.walk(self.root, onerror=lambda _error: None):
+        for directory, _subdirectories, names in os.walk(
+            self.root, onerror=lambda _error: None
+        ):
             for name in names:
                 try:
                     total += os.stat(os.path.join(directory, name)).st_size
@@ -211,13 +210,10 @@ def _run_once_in_process(
 ) -> dict[str, Any]:
     root = Path(tempfile.mkdtemp(prefix="rcsfs-v2-benchmark-", dir=scratch_root))
     paths = {
-        "csf_text": root / "output.c",
-        "csf_parquet": root / "output.parquet",
-        "descriptor": root / "descriptors.parquet",
-        "header": root / "header.toml",
+        "descriptor": root / "output_descriptors.parquet",
+        "header": root / "output_header.toml",
     }
-    scratch = root / "scratch"
-    monitor = ScratchMonitor(scratch)
+    monitor = ScratchMonitor(root)
     io_before = _process_io_bytes()
     result: dict[str, Any] = {
         "threads": threads,
@@ -235,13 +231,9 @@ def _run_once_in_process(
         # is a generation measurement rather than a filesystem measurement.
         started = time.perf_counter()
         try:
-            stats = generate_disk_outputs_from_transcript(
+            stats = generate_csfs_from_transcript(
                 transcript,
-                paths["csf_text"],
-                paths["csf_parquet"],
                 paths["descriptor"],
-                paths["header"],
-                scratch,
                 threads=threads,
                 memory_budget_mib=memory_budget_mib,
             )
@@ -287,9 +279,12 @@ def _run_once_in_process(
         # left out of the timers is how a "stage is 2x faster" claim becomes
         # unverifiable, so the residual is recorded and checked rather than
         # being discovered later by arithmetic on the end-to-end time.
-        stage_seconds = sum(
-            stage.get("elapsed_millis", 0) for stage in stats.get("stage_stats", [])
-        ) / 1000.0
+        stage_seconds = (
+            sum(
+                stage.get("elapsed_millis", 0) for stage in stats.get("stage_stats", [])
+            )
+            / 1000.0
+        )
         result["stage_seconds"] = stage_seconds
         result["unattributed_seconds"] = wall_seconds - stage_seconds
         # This process performs exactly one run, so its lifetime high-water
@@ -369,7 +364,9 @@ def _summarize(
                     "threads": measurement["threads"],
                     "memory_budget_mib": measurement.get("memory_budget_mib"),
                     "segment_codec": measurement.get("segment_codec", "none"),
-                    "deduplication": measurement.get("deduplication", "verified_unique"),
+                    "deduplication": measurement.get(
+                        "deduplication", "verified_unique"
+                    ),
                     "error": measurement.get("error"),
                 }
             )
@@ -441,7 +438,9 @@ def _summarize(
                 "wall_seconds_median": statistics.median(elapsed) / 1000.0,
                 "wall_seconds_min": min(elapsed) / 1000.0,
                 "wall_seconds_max": max(elapsed) / 1000.0,
-                "cpu_seconds_median": None if not cpu else statistics.median(cpu) / 1000.0,
+                "cpu_seconds_median": None
+                if not cpu
+                else statistics.median(cpu) / 1000.0,
             }
         summary.append(entry)
     return summary, rejected
@@ -459,9 +458,7 @@ def _check_strategy_agreement(measurements: list[dict[str, Any]]) -> None:
     for measurement in measurements:
         if measurement.get("outcome") == "rejected":
             continue
-        missing = [
-            name for name in _PUBLISHED_DIGEST_KEYS if not measurement.get(name)
-        ]
+        missing = [name for name in _PUBLISHED_DIGEST_KEYS if not measurement.get(name)]
         if missing:
             raise SystemExit(
                 "cannot verify de-duplication strategy agreement: successful run "
@@ -477,7 +474,6 @@ def _check_strategy_agreement(measurements: list[dict[str, Any]]) -> None:
             measurement.get("record_count"),
             measurement.get("duplicate_count"),
             measurement.get("block_count"),
-            measurement.get("csf_bytes"),
             measurement.get("descriptor_bytes"),
             *(measurement.get(name) for name in _PUBLISHED_DIGEST_KEYS),
         )

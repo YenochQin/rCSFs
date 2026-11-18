@@ -6,8 +6,6 @@ import pytest
 
 from rcsfs import (
     convert_csfs,
-    generate_descriptors_from_parquet,
-    read_peel_subshells,
     restore_csfs_from_descriptors,
     seniority_to_printed_v,
 )
@@ -57,17 +55,8 @@ def _descriptors(tmp_path: Path) -> tuple[Path, Path, Path]:
         encoding="utf-8",
         newline="\n",
     )
-    csf_parquet = tmp_path / "source.parquet"
-    stats = convert_csfs(source, csf_parquet, num_workers=1)
-    header = Path(stats["header_file"])
-    descriptors = tmp_path / "descriptor.parquet"
-    generate_descriptors_from_parquet(
-        csf_parquet,
-        descriptors,
-        read_peel_subshells(header),
-        num_workers=1,
-        header_path=header,
-    )
+    descriptors = tmp_path / "source_descriptors.parquet"
+    header = Path(convert_csfs(source, descriptors)["header_file"])
     return source, header, descriptors
 
 

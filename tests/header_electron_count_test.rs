@@ -1,60 +1,27 @@
-use _rcsfs::csfs_conversion::{
-    HeaderData, convert_csfs_to_parquet, convert_csfs_to_parquet_parallel,
-};
+use _rcsfs::descriptor_dataset::{DescriptorRows, header_path, import_text, read_header};
 use std::fs;
 
 #[test]
-fn conversion_counts_core_and_first_csf_before_truncation() {
-    for core in ["", "  1s   2s   2p-  2p"] {
-        for parallel in [false, true] {
-            for max_line_len in [6, 256] {
-                let directory = tempfile::tempdir().unwrap();
-                let source = directory.path().join("source.c");
-                // Leading separators and batches shorter than a record must not
-                // hide the first occupation line. The two rows have the same N.
-                fs::write(
-                    &source,
-                    format!(
-                        "Core subshells:\n{core}\nPeel subshells:\n  3s   3p-  3p\nCSF(s):\n *\n\
-                         3s ( 2)  3p-( 2)  3p ( 3)\nstate\ncoupling\n *\n\
-                         3s ( 1)  3p-( 2)  3p ( 4)\nstate\ncoupling\n"
-                    ),
-                )
-                .unwrap();
-                let output = directory.path().join("out.parquet");
-                if parallel {
-                    convert_csfs_to_parquet_parallel(&source, &output, max_line_len, 1, Some(2))
-                        .unwrap();
-                } else {
-                    convert_csfs_to_parquet(&source, &output, max_line_len, 1).unwrap();
-                }
-                let text = fs::read_to_string(directory.path().join("source_header.toml")).unwrap();
-                let header: HeaderData = toml::from_str(&text).unwrap();
-                assert_eq!(
-                    header.header_info.electron_count,
-                    Some(if core.is_empty() { 7 } else { 17 })
-                );
-                assert_eq!(header.conversion_stats.csf_count, 2);
-                assert_eq!(header.block_info.block_lengths, [0, 1, 1]);
-            }
-        }
+fn text_import_counts_core_and_peel_electrons_and_binds_header() {
+    for (core, electrons) in [("", 2), ("  1s   2s   2p-  2p", 12)] {
+        let dir = tempfile::tempdir().unwrap();
+        let text = dir.path().join("source.c");
+        let output = dir.path().join("out_descriptors.parquet");
+        let header = header_path(&output).unwrap();
+        fs::write(
+            &text,
+            format!("Core subshells:\n{core}\nPeel subshells:\n  3s   4s\nCSF(s):\n  3s ( 2)\n\n        0+\n *\n  4s ( 2)\n\n        0+\n"),
+        ).unwrap();
+        let stats = import_text(&text, &output, &header).unwrap();
+        assert_eq!(stats.electron_count, electrons);
+        assert_eq!(stats.block_lengths, [1, 1]);
+        let parsed = read_header(&header).unwrap();
+        assert_eq!(parsed.electron_count, Some(electrons));
+        assert_eq!(parsed.block_lengths, [1, 1]);
+        let mut descriptors = DescriptorRows::open(&output, &header).unwrap();
+        assert!(descriptors.next_row().unwrap().is_some());
+        let original = fs::read_to_string(&header).unwrap();
+        fs::write(&header, format!("{original}\n# changed bytes\n")).unwrap();
+        assert!(DescriptorRows::open(&output, &header).is_err());
     }
-}
-
-#[test]
-fn legacy_header_deserializes_without_inventing_an_electron_count() {
-    let text = r#"
-[header_info]
-header_lines = ["Core subshells:", "  1s", "Peel subshells:", "  2s", "CSF(s):"]
-[block_info]
-block_lengths = [1]
-block_count = 1
-[conversion_stats]
-csf_count = 1
-total_lines = 3
-truncated_count = 0
-"#;
-    let header: HeaderData = toml::from_str(text).unwrap();
-    assert_eq!(header.header_info.electron_count, None);
-    assert!(!toml::to_string(&header).unwrap().contains("electron_count"));
 }

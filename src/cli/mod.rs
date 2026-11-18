@@ -90,7 +90,7 @@ fn run_batch(path: &Path, root: &Table) -> Result<()> {
 pub fn main() -> ExitCode {
     let tokens: Vec<_> = std::env::args_os().collect();
     if tokens.len() >= 3 && tokens[2] == "init-config" {
-        let command = arguments::canonical(tokens[1].to_str().unwrap_or(""));
+        let command = tokens[1].to_str().unwrap_or("");
         if arguments::COMMANDS.iter().any(|(name, _)| *name == command) {
             if tokens.len() == 4 && (tokens[3] == "--help" || tokens[3] == "-h") {
                 println!("Append a commented [{command}] template to rcsfs.toml.");
@@ -125,7 +125,6 @@ pub fn main() -> ExitCode {
                 batch.is_none(),
                 "top-level --config cannot be combined with a subcommand"
             );
-            let command = arguments::canonical(command);
             let overrides = arguments::overrides(command, sub)?;
             json_output = overrides
                 .get("json")

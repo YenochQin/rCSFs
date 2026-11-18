@@ -358,7 +358,16 @@ fn generate_csfs_from_transcript(
         let result = if storage == "disk" {
             let options = GenerationOptions::from_api_with_space_policy(threads, memory_budget_mib, Some(work.path().join("scratch")), allow_unchecked_space)?;
             let stats = disk::generate_descriptor_dataset(&texts, &staged, &staged_header, &options)?;
-            json!({"success":true,"output_file":output_path,"header_file":header,"record_count":stats.unique_count,"descriptor_count":stats.unique_count,"block_count":stats.block_count,"blocks":stats.blocks,"unique_occupations":stats.unique_occupations})
+            json!({
+                "success": true, "output_file": output_path, "header_file": header,
+                "record_count": stats.unique_count, "block_count": stats.block_count,
+                "blocks": stats.blocks, "unique_occupations": stats.unique_occupations,
+                "descriptor_count": stats.unique_count, "descriptor_bytes": stats.descriptor_bytes,
+                "generated_count": stats.generated_count, "duplicate_count": stats.duplicate_count,
+                "segment_codec": stats.segment_codec, "deduplication": stats.deduplication,
+                "stage_stats": stats.stage_stats, "resource_stats": stats.resource_stats,
+                "plan_stats": stats.plan_stats,
+            })
         } else {
             anyhow::ensure!(storage == "memory" && texts.len() == 1 && memory_budget_mib.is_none(), "memory generation requires one transcript and no disk memory budget");
             let stats = configuration_generation::generate_csfs_from_transcript(&texts[0], &staged, threads)?;

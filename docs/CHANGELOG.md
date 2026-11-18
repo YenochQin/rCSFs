@@ -4,9 +4,18 @@
 
 ---
 
-## [Unreleased]
+## [3.1.0] — Unreleased
 
-- 移除专供 Fortran 使用的原生描述符 reader、C ABI、`descriptor-ffi` feature 及 `native-reader/` 独立构建入口；该读取库已由 grasp-atomic-suite 内置并独立维护。rCSFs 保留 `descriptor_transport` / `descriptor_schema` 格式契约，以及原有描述符生成、读取、解码和文本恢复功能；V2 文件格式和 Python 导出不变。清理相应 CI、打包清单和文档入口，移除 reader 专用的直接依赖，`serde_json` 恢复为 CLI 可选依赖。
+- Generate a bound V2 descriptor Parquet and header TOML by default. Disk
+  generation writes the descriptor pair directly and estimates its space.
+- Read, select, merge, match, partition and split CSFs through numerical
+  descriptors. Preserve explicit block order and distinguish missing couplings
+  from printed zeros.
+- Use `convert` or `convert_csfs` to import text and `restore-csfs` or
+  `restore_csfs_from_descriptors` to export it. The old three-string Parquet
+  format, `gen-descriptors` and generation output toggles have been removed.
+
+- 移除专供 Fortran 使用的原生描述符 reader、C ABI、`descriptor-ffi` feature 及 `native-reader/` 独立构建入口；该读取库已由 grasp-atomic-suite 内置并独立维护。rCSFs 保留 `descriptor_transport` / `descriptor_schema` 格式契约，以及原有描述符生成、读取、解码和文本恢复功能。清理相应 CI、打包清单和文档入口。
 
 - header 新增可选的 `header_info.electron_count`，表示包含满占据 core 在内的总电子数；磁盘生成直接从占据配置写出，内存生成、文本转换及 `read_csfs` 从原始头部与第一个完整 CSF 提取，保持旧 header 和无法推断电子数的文本输入兼容。描述符继续绑定包含该字段的最终 header 字节哈希；补充 core、分块、截断、CLI 发布、多列表及字段篡改的回归测试。
 

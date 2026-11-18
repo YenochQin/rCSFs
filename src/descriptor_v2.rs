@@ -511,9 +511,6 @@ mod tests {
     /// real state tables (only ever exercised for byte-level text parsing).
     fn merged_multiblock_fixture() -> CompleteCsfFile {
         use crate::configuration_generation::write_generated_csfs;
-        use std::sync::atomic::{AtomicU64, Ordering};
-
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let request_a = GenerationRequest {
             core_subshells: Vec::new(),
@@ -545,23 +542,26 @@ mod tests {
                     subshell: "3s".parse().unwrap(),
                     electrons: 1,
                 },
+                SubshellOccupation {
+                    subshell: "4s".parse().unwrap(),
+                    electrons: 1,
+                },
             ],
-            min_two_j: 1,
-            max_two_j: 1,
+            min_two_j: 0,
+            max_two_j: 0,
         };
         let chunks = vec![
             generate_csfs(&request_a).unwrap(),
             generate_csfs(&request_b).unwrap(),
         ];
 
-        let path = std::env::temp_dir().join(format!(
-            "descriptor_v2_test_{}_{}.csf",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        write_generated_csfs(&[], &chunks, &path).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let descriptors = directory.path().join("generated_descriptors.parquet");
+        let header = directory.path().join("generated_header.toml");
+        let path = directory.path().join("generated.c");
+        write_generated_csfs(&[], &chunks, &descriptors).unwrap();
+        crate::descriptor_dataset::restore_text(&descriptors, &header, &path, None).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
-        let _ = std::fs::remove_file(&path);
         CompleteCsfFile::parse_reader(Cursor::new(text)).unwrap()
     }
 

@@ -248,21 +248,20 @@ def smoke(unpacked: Path) -> None:
     assert Path(_rcsfs.__file__).is_relative_to(unpacked)
     metadata = distribution(NAME)
     assert rcsfs.__version__ == _rcsfs.__version__ == metadata.version
-    fixture = Path(__file__).resolve().parents[1] / "tests/fixtures/sample.csf"
-    stats = rcsfs.convert_csfs(
-        fixture, unpacked / "sample.parquet", chunk_size=90, num_workers=2
+    fixture = (
+        Path(__file__).resolve().parents[1] / "tests/fixtures/descriptor_multiblock.c"
     )
-    assert stats["success"] and stats["csf_count"] > 0
-    peel = rcsfs.read_peel_subshells(stats["header_file"])
-    descriptor = rcsfs.generate_descriptors_from_parquet(
-        unpacked / "sample.parquet",
-        unpacked / "descriptor.parquet",
-        peel,
-        num_workers=2,
-        header_path=stats["header_file"],
+    descriptors = unpacked / "descriptor.parquet"
+    stats = rcsfs.convert_csfs(fixture, descriptors)
+    assert stats["success"] and stats["record_count"] == 2
+    header = Path(stats["header_file"])
+    restored = unpacked / "restored.c"
+    assert (
+        rcsfs.restore_csfs_from_descriptors(descriptors, header, restored)[
+            "record_count"
+        ]
+        == 2
     )
-    assert descriptor["descriptor_version"] == 2
-    assert descriptor["descriptor_count"] == stats["csf_count"]
     assert not any(
         entry.group == "console_scripts" and entry.name == "rcsfs"
         for entry in metadata.entry_points
@@ -291,7 +290,7 @@ def smoke(unpacked: Path) -> None:
         check=True,
     )
     info = json.loads(result.stdout)
-    assert info["num_rows"] == stats["csf_count"]
+    assert info["num_rows"] == stats["record_count"]
     assert info["key_value_metadata"]["descriptor_dtype"] == "int8"
     assert rcsfs.seniority_to_printed_v(7, 4, 12, 2) == -1
     print(

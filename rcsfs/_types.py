@@ -54,22 +54,6 @@ class CsfHeaderData(TypedDict):
     conversion_stats: CsfDataStats
 
 
-class ConversionStats(TypedDict):
-    """Statistics returned from CSF conversion operations."""
-
-    success: bool
-    input_file: NotRequired[str]
-    output_file: NotRequired[str]
-    parquet_file: NotRequired[str]
-    header_file: NotRequired[str]
-    max_line_len: NotRequired[int]
-    chunk_size: NotRequired[int]
-    error: NotRequired[str]
-    total_lines: NotRequired[int]
-    csf_count: NotRequired[int]
-    truncated_count: NotRequired[int]
-
-
 class ParquetInfo(TypedDict):
     """Metadata returned for a Parquet file."""
 
@@ -80,20 +64,6 @@ class ParquetInfo(TypedDict):
     compression: str
     created_by: str
     key_value_metadata: dict[str, str | None]
-
-
-class DescriptorGenerationStats(TypedDict):
-    """Statistics returned from batch descriptor generation."""
-
-    success: bool
-    input_file: str
-    output_file: str
-    csf_count: int
-    descriptor_count: int
-    orbital_count: int
-    descriptor_size: int
-    descriptor_version: int
-    channels_per_subshell: int
 
 
 class CsfRestoreStats(TypedDict):
@@ -120,47 +90,6 @@ class PartitionStats(CsfDatasetStats):
     full_csf_count: int
     first_order_count: int
     blocks: list[PartitionBlockStats]
-
-
-class ActiveSpaceOutputStats(TypedDict):
-    """Selection count and block lengths for one active-space output."""
-
-    output_file: str
-    maximum_orbitals: str
-    csf_count: int
-    block_lengths: list[int]
-
-
-class ActiveSpaceSplitStats(TypedDict):
-    """Statistics from one pass splitting a CSF Parquet stream."""
-
-    success: bool
-    input_csf_count: int
-    block_count: int
-    outputs: list[ActiveSpaceOutputStats]
-
-
-class JBlockOutputStats(TypedDict):
-    """One per-``2J`` output file from splitting a multi-block CSF list."""
-
-    output_file: str
-    #: Published ``.w`` orbital-file copy, when one was made.
-    w_file: str | None
-    block_index: int
-    #: Total ``2J`` of the block, e.g. ``8`` for ``J = 4``.
-    total_two_j: int
-    parity: Literal["even", "odd"]
-    csf_count: int
-
-
-class JBlockSplitStats(TypedDict):
-    """Statistics from splitting a CSF text file into per-block files."""
-
-    success: bool
-    input_file: str
-    input_csf_count: int
-    block_count: int
-    outputs: list[JBlockOutputStats]
 
 
 class CsfGenerationStageStats(TypedDict):
@@ -244,8 +173,6 @@ class CsfGenerationEstimateBytes(TypedDict):
     survivor_bitsets: int
     scratch_peak: int
     descriptor: int
-    csf_text: int
-    csf_parquet: int
     staged_outputs: int
     required_scratch: int
     required_output: int
@@ -296,19 +223,25 @@ class CsfGenerationEstimate(TypedDict):
     failure_recovery: Literal["restart"]
 
 
+class GenerationBlockStats(TypedDict):
+    total_two_j: int
+    parity: str
+    record_count: int
+
+
 class CsfGenerationStats(TypedDict):
     """Statistics returned from transcript-driven CSF generation."""
 
     success: bool
     output_file: NotRequired[str]
-    descriptor_file: NotRequired[str]
+    header_file: NotRequired[str]
+    blocks: NotRequired[list[GenerationBlockStats]]
     record_count: NotRequired[int]
     block_count: NotRequired[int]
     unique_occupations: NotRequired[int]
     descriptor_count: NotRequired[int]
     generated_count: NotRequired[int]
     duplicate_count: NotRequired[int]
-    csf_bytes: NotRequired[int]
     descriptor_bytes: NotRequired[int]
     #: The codec the temporary segments were written with, so a report can be
     #: checked against the run that produced it.

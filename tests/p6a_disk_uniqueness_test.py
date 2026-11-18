@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from rcsfs import generate_disk_outputs_from_transcript, get_parquet_info
+from rcsfs import generate_csfs_from_transcript, get_parquet_info
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -56,26 +56,20 @@ def run_fixture(
         monkeypatch.setenv("RCSFS_DEDUPLICATION", strategy)
     directory.mkdir()
     transcript = (FIXTURES / f"{name}.rcsfgenerate").read_text(encoding="utf-8")
-    csf = directory / "calculation.c"
-    csf_parquet = directory / "calculation.parquet"
     descriptors = directory / "calculation_descriptors.parquet"
     header = directory / "calculation_header.toml"
-    stats = generate_disk_outputs_from_transcript(
-        transcript,
-        csf,
-        csf_parquet,
-        descriptors,
-        header,
-        directory / "scratch",
-    )
-    return stats, csf, descriptors
+    stats = generate_csfs_from_transcript(transcript, descriptors)
+    assert not list(directory.glob("*.c"))
+    return stats, header, descriptors
 
 
 @pytest.mark.parametrize(("name", "records"), REGISTERED)
 def test_a_registered_run_generates_without_duplicates(
     name: str, records: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    stats, csf, descriptors = run_fixture(name, tmp_path / "exact", monkeypatch, "exact")
+    stats, header, descriptors = run_fixture(
+        name, tmp_path / "exact", monkeypatch, "exact"
+    )
 
     assert stats["success"] is True
     assert stats.get("deduplication") == "exact"
@@ -89,7 +83,7 @@ def test_a_registered_run_generates_without_duplicates(
     # An unpublished artifact is not evidence of a duplicate-free run.
     assert get_parquet_info(descriptors)["num_rows"] == records
     assert descriptors.stat().st_size > 0
-    assert csf.stat().st_size > 0
+    assert header.stat().st_size > 0
     # P5a counted the records the run went on to produce, which is what makes
     # the capacity estimate and the schedule trustworthy.
     plan_stats = stats.get("plan_stats")
@@ -106,10 +100,10 @@ def test_the_verified_path_publishes_what_the_exact_path_publishes(
     and B2 in ``docs/benchmarks/v2_disk_generation_dedup_20260922.md``, where it
     also measures what the skipped round trip cost.
     """
-    exact, exact_csf, exact_descriptors = run_fixture(
+    exact, exact_header, exact_descriptors = run_fixture(
         "o1_cc1as1", tmp_path / "exact", monkeypatch, "exact"
     )
-    verified, verified_csf, verified_descriptors = run_fixture(
+    verified, verified_header, verified_descriptors = run_fixture(
         "o1_cc1as1", tmp_path / "verified", monkeypatch
     )
 
@@ -119,5 +113,5 @@ def test_the_verified_path_publishes_what_the_exact_path_publishes(
     # Same counts, same block structure, same published files.
     for key in ("generated_count", "record_count", "descriptor_count", "block_count"):
         assert verified.get(key) == exact.get(key), f"{key} differs between the paths"
-    assert verified_csf.read_bytes() == exact_csf.read_bytes()
+    assert verified_header.read_bytes() == exact_header.read_bytes()
     assert verified_descriptors.read_bytes() == exact_descriptors.read_bytes()

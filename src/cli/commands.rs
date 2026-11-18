@@ -9,7 +9,10 @@ pub(super) fn split_targets(
     settings: &Settings,
 ) -> Result<Vec<crate::descriptor_operations::ActiveSpaceTarget>> {
     let input = settings.path("split_csfs_parquet")?;
-    let prefix = settings.text("prefix", files::stem(&input)?)?;
+    let prefix = settings.text(
+        "prefix",
+        files::stem(&input)?.trim_end_matches("_descriptors"),
+    )?;
     if settings.conf.is_none() {
         files::safe_stem(prefix)?;
     }
@@ -102,6 +105,7 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
                 &[output.clone(), header.clone()],
                 true,
             )?;
+            stats["output_bytes"] = json!(std::fs::metadata(&output)?.len());
             stats["output_file"] = json!(output);
             stats["header_file"] = json!(header);
             Ok(stats)
@@ -254,7 +258,7 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
             }
             files::validate_set(&destinations, &[input, header, wave], s.config.as_deref())?;
             files::publish(&sources, &destinations, s.flag("overwrite", false)?)?;
-            Ok(json!({"success": true, "outputs": results}))
+            Ok(json!({"success": true, "block_count": results.len(), "outputs": results}))
         }
         "interacting" => {
             use crate::{

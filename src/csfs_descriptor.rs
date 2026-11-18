@@ -346,35 +346,6 @@ impl CSFDescriptorGenerator {
             row,
         )
     }
-
-    /// Derive the coupling-family view from V2; it is not a CSF identity key.
-    pub(crate) fn parse_coupling_signature_into(
-        &self,
-        line1: &str,
-        line2: &str,
-        line3: &str,
-        descriptor: &mut [i8],
-        signature: &mut Vec<i32>,
-    ) -> Result<()> {
-        self.parse_csf_into(line1, line2, line3, descriptor)?;
-        signature.clear();
-        for slot in descriptor[..self.layout.feature_len()].as_chunks::<4>().0 {
-            if slot[0] > 0 {
-                let value = if slot[3] != MISSING {
-                    slot[3]
-                } else if slot[1] != MISSING {
-                    slot[1]
-                } else {
-                    0
-                };
-                signature.push(i32::from(value));
-            }
-        }
-        if let Some(last) = signature.last_mut() {
-            *last = i32::from(descriptor[self.layout.total_two_j_index().unwrap()]);
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -431,14 +402,6 @@ mod tests {
                 .contains("row buffer length"),
             "error should explain buffer length mismatch"
         );
-    }
-
-    #[test]
-    fn descriptor_pipeline_channel_capacity_limits_high_worker_memory_pressure() {
-        assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(1), 1);
-        assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(2), 2);
-        assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(8), 8);
-        assert_eq!(parquet_batch::descriptor_pipeline_channel_capacity(48), 8);
     }
 
     ////////////////////////////////////////////////////////////////////////////

@@ -1,9 +1,8 @@
 //! Bounded V2 descriptor generation through ordered on-disk Arrow segments.
 //!
 //! This module owns the storage adapter: range scheduling and the segment
-//! writers, the exact de-duplication chain, and the segment-level merge that
-//! the one-pass final encoding (`super::csf_artifact_encoding`) or the two-pass
-//! reference path consumes. Keeping the range writer here lets the angular
+//! writers, exact deduplication and the ordered descriptor merge.
+//! Keeping the range writer here lets the angular
 //! generator use `GeneratedRecordSink` without learning about Arrow, scratch
 //! paths or final publication.
 
@@ -56,7 +55,7 @@ const PROGRESS_REPORT_INTERVAL: Duration = Duration::from_secs(2);
 /// logical file bytes, not a claim about physical device I/O or page-cache
 /// traffic.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "cli", derive(serde::Serialize))]
+#[cfg_attr(any(feature = "cli", feature = "python"), derive(serde::Serialize))]
 pub(crate) struct StageStats {
     pub(crate) name: &'static str,
     pub(crate) elapsed_millis: u128,
@@ -285,7 +284,7 @@ pub(crate) struct DeduplicatedSegments {
 /// Results from the disk generation pipeline before the caller publishes its
 /// private staging files as one output set.
 #[derive(Debug)]
-#[cfg_attr(feature = "cli", derive(serde::Serialize))]
+#[cfg_attr(any(feature = "cli", feature = "python"), derive(serde::Serialize))]
 pub(crate) struct DiskGenerationStats {
     pub(crate) unique_occupations: usize,
     pub(crate) generated_count: usize,
@@ -293,7 +292,6 @@ pub(crate) struct DiskGenerationStats {
     pub(crate) duplicate_count: usize,
     pub(crate) block_count: usize,
     pub(crate) blocks: Vec<super::GenerationBlockStats>,
-    pub(crate) csf_bytes: u64,
     pub(crate) descriptor_bytes: u64,
     /// The codec the temporary segments were written with. The byte model
     /// above describes uncompressed segments regardless, so a compressed run
@@ -308,82 +306,6 @@ pub(crate) struct DiskGenerationStats {
     pub(crate) plan_stats: PlanStats,
 }
 
-/// Generate, make unique according to the construction-selected strategy, and
-/// restore a V2 descriptor through private staging paths. The caller owns final
-/// publication, which keeps this deep module independent of CLI output naming
-/// and gives it all-or-nothing semantics when multiple products are requested.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn generate_disk_outputs_from_transcript(
-    transcript: &str,
-    csf_output: &Path,
-    csf_parquet_output: &Path,
-    descriptor_output: &Path,
-    header_output: &Path,
-    scratch_dir: &Path,
-    threads: Option<usize>,
-) -> Result<DiskGenerationStats> {
-    let options = GenerationOptions::from_api(threads, None, Some(scratch_dir.to_path_buf()))?;
-    generate_disk_outputs_from_transcript_with_options(
-        transcript,
-        csf_output,
-        csf_parquet_output,
-        descriptor_output,
-        header_output,
-        &options,
-    )
-}
-
-/// Disk generation entry point with the shared execution options.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn generate_disk_outputs_from_transcript_with_options(
-    transcript: &str,
-    csf_output: &Path,
-    csf_parquet_output: &Path,
-    descriptor_output: &Path,
-    header_output: &Path,
-    options: &GenerationOptions,
-) -> Result<DiskGenerationStats> {
-    let request = ExcitationRequest::from_transcript(transcript)?;
-    generate_disk_outputs_from_requests(
-        &[request],
-        Some(csf_output),
-        Some(csf_parquet_output),
-        descriptor_output,
-        header_output,
-        options,
-    )
-}
-
-pub(crate) fn generate_disk_outputs_from_transcripts_with_options(
-    transcripts: &[String],
-    csf_output: &Path,
-    csf_parquet_output: &Path,
-    descriptor_output: &Path,
-    header_output: &Path,
-    options: &GenerationOptions,
-) -> Result<DiskGenerationStats> {
-    ensure!(
-        transcripts.len() >= 2,
-        "multiple lists require at least two transcripts"
-    );
-    let requests = transcripts
-        .iter()
-        .enumerate()
-        .map(|(index, text)| {
-            ExcitationRequest::from_transcript(text)
-                .with_context(|| format!("generation list {}", index + 1))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    generate_disk_outputs_from_requests(
-        &requests,
-        Some(csf_output),
-        Some(csf_parquet_output),
-        descriptor_output,
-        header_output,
-        options,
-    )
-}
-
 /// Generate the primary descriptor/header pair without text intermediates.
 pub(crate) fn generate_descriptor_dataset(
     transcripts: &[String],
@@ -396,20 +318,11 @@ pub(crate) fn generate_descriptor_dataset(
         .iter()
         .map(|text| ExcitationRequest::from_transcript(text))
         .collect::<Result<Vec<_>>>()?;
-    generate_disk_outputs_from_requests(
-        &requests,
-        None,
-        None,
-        descriptor_output,
-        header_output,
-        options,
-    )
+    generate_disk_outputs_from_requests(&requests, descriptor_output, header_output, options)
 }
 
 fn generate_disk_outputs_from_requests(
     requests: &[ExcitationRequest],
-    csf_output: Option<&Path>,
-    csf_parquet_output: Option<&Path>,
     descriptor_output: &Path,
     header_output: &Path,
     supplied_options: &GenerationOptions,
@@ -425,10 +338,7 @@ fn generate_disk_outputs_from_requests(
         .as_deref()
         .context("disk generation requires a scratch directory")?;
     ensure!(
-        csf_output.is_none_or(|p| !p.exists())
-            && csf_parquet_output.is_none_or(|p| !p.exists())
-            && !descriptor_output.exists()
-            && !header_output.exists(),
+        !descriptor_output.exists() && !header_output.exists(),
         "disk generation staging outputs must not already exist"
     );
     ensure!(
@@ -451,16 +361,11 @@ fn generate_disk_outputs_from_requests(
     crate::reporting::detail!("Generating CSFs and V2 descriptors to disk segments...");
     // Refuse a run whose estimate does not fit the scratch or staging volumes,
     // while the scratch directory still holds nothing but the empty root.
-    let outputs = csf_output
-        .into_iter()
-        .chain(csf_parquet_output)
-        .chain([descriptor_output, header_output])
-        .collect::<Vec<_>>();
     let preflight = |estimate: &CapacityEstimate| {
         for check in preflight_run(
             estimate,
             scratch_dir,
-            &outputs,
+            &[descriptor_output, header_output],
             options.allow_unchecked_space,
         )? {
             report_space_check(&check);
@@ -533,7 +438,7 @@ fn generate_disk_outputs_from_requests(
     let header_lines = generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
     write_generation_header(
         header_output,
-        header_lines.clone(),
+        header_lines,
         generated.electron_count,
         &deduplicated,
     )?;
@@ -549,67 +454,18 @@ fn generate_disk_outputs_from_requests(
         ),
     );
 
-    crate::reporting::detail!("Building final descriptor and CSF outputs from segments...");
-    let (descriptor_bytes, csf_bytes) = if csf_output.is_none() && csf_parquet_output.is_none() {
-        let timer = StageTimer::start();
-        let merged =
-            merge_v2_deduplicated_segments(&deduplicated, descriptor_output, Some(header_output))?;
-        let bytes = fs::metadata(descriptor_output)?.len();
-        stage_stats.push(timer.finish(
-            "final_descriptor_merge",
-            deduplicated.unique_count,
-            merged.record_count,
-            dedup_bytes,
-            bytes,
-        ));
-        (bytes, 0)
-    } else {
-        let final_stats = super::csf_artifact_encoding::build_final_outputs_from_segments(
-            &deduplicated,
-            &header_lines,
-            descriptor_output,
-            csf_output.context("missing text output")?,
-            csf_parquet_output.context("missing string Parquet output")?,
-            header_output,
-            options.threads,
-        )?;
-        let descriptor_bytes = final_stats.descriptor_bytes;
-        let csf_bytes = final_stats.csf_bytes;
-        // Seven entries cover segment read/decompression, selection, preparation,
-        // and each artifact family split into encode and write. Their walls sum to
-        // the whole pass, which makes the pass checkable against end-to-end time.
-        for (name, elapsed_millis, cpu_millis) in final_stats.phase_entries() {
-            let is_input_phase = matches!(
-                name,
-                "final_encoding_read" | "final_encoding_select" | "final_encoding_prepare"
-            );
-            let is_descriptor = name.starts_with("final_encoding_descriptor");
-            let output_bytes = if is_input_phase {
-                0
-            } else if is_descriptor {
-                descriptor_bytes
-            } else {
-                final_stats
-                    .csf_bytes
-                    .checked_add(final_stats.csf_parquet_bytes)
-                    .context("final output byte count overflow")?
-            };
-            stage_stats.push(StageStats {
-                name,
-                elapsed_millis,
-                cpu_millis,
-                input_records: deduplicated.unique_count,
-                output_records: final_stats.record_count,
-                input_bytes: if name == "final_encoding_read" {
-                    dedup_bytes
-                } else {
-                    0
-                },
-                output_bytes,
-            });
-        }
-        (descriptor_bytes, csf_bytes)
-    };
+    crate::reporting::detail!("Writing final descriptor Parquet...");
+    let timer = StageTimer::start();
+    let merged =
+        merge_v2_deduplicated_segments(&deduplicated, descriptor_output, Some(header_output))?;
+    let descriptor_bytes = fs::metadata(descriptor_output)?.len();
+    stage_stats.push(timer.finish(
+        "final_descriptor_merge",
+        deduplicated.unique_count,
+        merged.record_count,
+        generated_bytes + dedup_bytes,
+        descriptor_bytes,
+    ));
     crate::reporting::detail!("Generation complete!");
     Ok(DiskGenerationStats {
         unique_occupations: generated.unique_occupations,
@@ -628,7 +484,6 @@ fn generate_disk_outputs_from_requests(
                 },
             )
             .collect(),
-        csf_bytes,
         descriptor_bytes,
         segment_codec: generated.segment_codec.name(),
         deduplication: options.deduplication.name(),
@@ -2981,16 +2836,12 @@ fn copy_surviving_segment_to_parquet(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configuration_generation::csf_generation::csf_artifact_encoding::build_final_outputs_from_segments;
     use crate::configuration_generation::{
         GenerationRequest, enumerate_occupations, generate_csfs,
     };
     use crate::descriptor_v2::write_feature_row;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::sync::atomic::{AtomicU64, Ordering};
-
-    type CsfParquetRow = (u64, String, String, String);
-    type PublishedArtifacts = (Vec<u8>, Vec<Vec<i8>>, Vec<CsfParquetRow>);
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -3407,13 +3258,10 @@ mod tests {
             let directory = root.join(strategy.name());
             fs::create_dir(&directory).unwrap();
             let csf = directory.join("out.c");
-            let csf_parquet = directory.join("out.parquet");
             let descriptors = directory.join("descriptors.parquet");
             let header = directory.join("header.toml");
-            let stats = generate_disk_outputs_from_transcript_with_options(
-                prefix_split_transcript(),
-                &csf,
-                &csf_parquet,
+            let stats = generate_descriptor_dataset(
+                &[prefix_split_transcript().to_owned()],
                 &descriptors,
                 &header,
                 &GenerationOptions {
@@ -3427,6 +3275,7 @@ mod tests {
                 },
             )
             .unwrap();
+            crate::descriptor_dataset::restore_text(&descriptors, &header, &csf, None).unwrap();
             assert_eq!(stats.deduplication, strategy.name());
             // Both paths must agree on the statistics, not only on the bytes:
             // the verified path reports zero duplicates by construction and the
@@ -3597,275 +3446,61 @@ mod tests {
         let root = temporary_directory("disk-pipeline");
         fs::create_dir(&root).unwrap();
         let expected = root.join("expected.c");
-        super::super::generate_csfs_from_transcript(transcript(), &expected, Some(1)).unwrap();
+        let memory = root.join("memory_descriptors.parquet");
+        let memory_header = root.join("memory_header.toml");
+        super::super::generate_csfs_from_transcript(transcript(), &memory, Some(1)).unwrap();
+        crate::descriptor_dataset::restore_text(&memory, &memory_header, &expected, None).unwrap();
         let generated = root.join("generated.c");
-        let csf_parquet = root.join("generated.parquet");
         let descriptors = root.join("generated_descriptors.parquet");
         let header = root.join("generated_header.toml");
-        let stats = generate_disk_outputs_from_transcript(
-            transcript(),
-            &generated,
-            &csf_parquet,
+        let stats = generate_descriptor_dataset(
+            &[transcript().to_owned()],
             &descriptors,
             &header,
-            &root.join("scratch"),
-            Some(1),
+            &GenerationOptions {
+                threads: Some(1),
+                scratch_dir: Some(root.join("scratch")),
+                ..GenerationOptions::default()
+            },
         )
         .unwrap();
+        assert!(!generated.exists());
+        crate::descriptor_dataset::restore_text(&descriptors, &header, &generated, None).unwrap();
         assert_eq!(fs::read(&generated).unwrap(), fs::read(&expected).unwrap());
         assert_eq!(stats.unique_count, read_rows(&descriptors).unwrap().len());
         assert!(stats.duplicate_count <= stats.generated_count);
-        assert!(csf_parquet.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// The combined final-encoding pass must publish exactly what the
-    /// two-pass path (descriptor merge, then descriptor read-back) published.
-    ///
-    /// This is P4's differential: the old tail is kept as the reference
-    /// implementation precisely so the new one-pass tail can be compared
-    /// against it. The descriptor Parquet and the CSF text are compared byte
-    /// for byte — same writers, same order — while the CSF Parquet is compared
-    /// by logical rows, because its row-group boundaries follow the batch
-    /// layout of whichever path produced it and byte equality is not part of
-    /// its contract.
-    ///
-    /// The thread count is a scheduling choice, so the same pass is run at
-    /// 1/2/4/8 threads here: the published CSF text and the descriptor's
-    /// logical V2 rows must be identical for every one of them.
     #[test]
-    fn the_combined_final_pass_publishes_what_merge_and_restore_published() {
-        let root = temporary_directory("final-encoding-differential");
-        fs::create_dir(&root).unwrap();
-        let mut publications = Vec::new();
-        for (label, combined) in [("two-pass", false), ("combined", true)] {
-            let directory = root.join(label);
+    fn final_dataset_preserves_header_and_rows_across_thread_counts() {
+        let root = tempfile::tempdir().unwrap();
+        let mut previous = None;
+        for threads in [1, 2, 4, 8] {
+            let directory = root.path().join(threads.to_string());
             fs::create_dir(&directory).unwrap();
-            let request = ExcitationRequest::from_transcript(prefix_split_transcript()).unwrap();
-            let generated = generate_v2_descriptor_segments(
-                &request,
-                &directory.join("ranges"),
-                &StreamingGenerationOptions {
-                    threads: Some(1),
-                    records_per_task: Some(3),
-                    rows_per_batch: 2,
-                    rows_per_segment: 5,
-                    ..StreamingGenerationOptions::default()
-                },
-            )
-            .unwrap();
-            let deduplicated =
-                verified_unique_deduplication(&generated, &directory.join("dedup")).unwrap();
-            let header_lines =
-                generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
-            write_generation_header(
-                &directory.join("header.toml"),
-                header_lines.clone(),
-                generated.electron_count,
-                &deduplicated,
-            )
-            .unwrap();
-            let csf = directory.join("out.c");
-            let csf_parquet = directory.join("out.parquet");
-            let descriptors = directory.join("descriptors.parquet");
-            if combined {
-                let stats = build_final_outputs_from_segments(
-                    &deduplicated,
-                    &header_lines,
-                    &descriptors,
-                    &csf,
-                    &csf_parquet,
-                    &directory.join("header.toml"),
-                    Some(2),
-                )
-                .unwrap();
-                assert_eq!(stats.record_count, deduplicated.unique_count);
-                // Every phase is reported, and the seven of them together are
-                // the pass: segment reading, selection, parallel preparation,
-                // and each artifact family split into compute and write halves.
-                let entries = stats.phase_entries();
-                assert_eq!(
-                    entries.map(|(name, _, _)| name),
-                    [
-                        "final_encoding_read",
-                        "final_encoding_select",
-                        "final_encoding_prepare",
-                        "final_encoding_descriptor_encode",
-                        "final_encoding_descriptor_write",
-                        "final_encoding_csf_outputs_encode",
-                        "final_encoding_csf_outputs_write",
-                    ]
-                );
-                let pass: u128 = entries.iter().map(|(_, millis, _)| millis).sum();
-                assert!(pass <= stats.record_count as u128 * 1000);
-            } else {
-                merge_v2_deduplicated_segments(
-                    &deduplicated,
-                    &descriptors,
-                    Some(&directory.join("header.toml")),
-                )
-                .unwrap();
-                crate::csfs_descriptor::restore_v2_descriptor_parquet_to_outputs(
-                    &descriptors,
-                    &directory.join("header.toml"),
-                    &csf,
-                    Some(&csf_parquet),
-                )
-                .unwrap();
-            }
-            publications.push((
-                fs::read(&csf).unwrap(),
-                read_rows(&descriptors).unwrap(),
-                ParquetRecordBatchReaderBuilder::try_new(File::open(&descriptors).unwrap())
-                    .unwrap()
-                    .schema()
-                    .clone(),
-                ParquetRecordBatchReaderBuilder::try_new(File::open(&descriptors).unwrap())
-                    .unwrap()
-                    .metadata()
-                    .file_metadata()
-                    .key_value_metadata()
-                    .cloned(),
-                read_csf_parquet_rows(&csf_parquet).unwrap(),
-            ));
-        }
-        let (old_csf, old_descriptors, old_schema, old_metadata, old_parquet_rows) =
-            &publications[0];
-        let (new_csf, new_descriptors, new_schema, new_metadata, new_parquet_rows) =
-            &publications[1];
-        assert_eq!(new_csf, old_csf, "the combined pass changed the CSF text");
-        assert_eq!(
-            new_descriptors, old_descriptors,
-            "the combined pass changed the descriptor V2 rows"
-        );
-        assert_eq!(
-            new_schema, old_schema,
-            "the combined pass changed the V2 schema"
-        );
-        assert_eq!(
-            new_metadata, old_metadata,
-            "the combined pass changed the descriptor metadata"
-        );
-        assert_eq!(
-            new_parquet_rows, old_parquet_rows,
-            "the combined pass changed the CSF Parquet rows"
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    /// The thread count is a scheduling choice: it must not reach the artifacts.
-    ///
-    /// The combined pass parallelizes preparation across `threads`, and the
-    /// ordered publication side is what keeps that invisible. This runs the same
-    /// input at 1/2/4/8 threads and compares the published CSF text byte for
-    /// byte and the descriptor Parquet row for row — the evidence the plan asks
-    /// for before its thread-invariance item can be closed.
-    #[test]
-    fn the_combined_final_pass_is_thread_invariant() {
-        let root = temporary_directory("final-encoding-threads");
-        fs::create_dir(&root).unwrap();
-        let mut publications: Vec<PublishedArtifacts> = Vec::new();
-        for threads in [1usize, 2, 4, 8] {
-            let directory = root.join(format!("threads-{threads}"));
-            fs::create_dir(&directory).unwrap();
-            let request = ExcitationRequest::from_transcript(prefix_split_transcript()).unwrap();
-            let generated = generate_v2_descriptor_segments(
-                &request,
-                &directory.join("ranges"),
-                &StreamingGenerationOptions {
+            let descriptors = directory.join("out_descriptors.parquet");
+            let header = directory.join("out_header.toml");
+            generate_descriptor_dataset(
+                &[prefix_split_transcript().to_owned()],
+                &descriptors,
+                &header,
+                &GenerationOptions {
                     threads: Some(threads),
                     records_per_task: Some(3),
                     rows_per_batch: 2,
-                    rows_per_segment: 5,
-                    ..StreamingGenerationOptions::default()
+                    rows_per_segment: 3,
+                    scratch_dir: Some(directory.join("scratch")),
+                    ..GenerationOptions::default()
                 },
             )
             .unwrap();
-            let deduplicated =
-                verified_unique_deduplication(&generated, &directory.join("dedup")).unwrap();
-            let header_lines =
-                generated_header_lines(&generated.core_subshells, &generated.peel_subshells);
-            write_generation_header(
-                &directory.join("header.toml"),
-                header_lines.clone(),
-                generated.electron_count,
-                &deduplicated,
-            )
-            .unwrap();
-            let csf = directory.join("out.c");
-            let csf_parquet = directory.join("out.parquet");
-            let descriptors = directory.join("descriptors.parquet");
-            let stats = build_final_outputs_from_segments(
-                &deduplicated,
-                &header_lines,
-                &descriptors,
-                &csf,
-                &csf_parquet,
-                &directory.join("header.toml"),
-                Some(threads),
-            )
-            .unwrap();
-            assert_eq!(stats.record_count, deduplicated.unique_count);
-            publications.push((
-                fs::read(&csf).unwrap(),
-                read_rows(&descriptors).unwrap(),
-                read_csf_parquet_rows(&csf_parquet).unwrap(),
-            ));
-        }
-        let (csf, rows, parquet_rows) = &publications[0];
-        for (index, (other_csf, other_rows, other_parquet_rows)) in
-            publications.iter().enumerate().skip(1)
-        {
-            assert_eq!(
-                other_csf, csf,
-                "threads changed the CSF text at run {index}"
-            );
-            assert_eq!(
-                other_rows, rows,
-                "threads changed the descriptor V2 rows at run {index}"
-            );
-            assert_eq!(
-                other_parquet_rows, parquet_rows,
-                "threads changed the CSF Parquet rows at run {index}"
-            );
-        }
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    /// Read the logical rows of a three-line CSF Parquet file.
-    fn read_csf_parquet_rows(path: &Path) -> Result<Vec<CsfParquetRow>> {
-        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-
-        let file = File::open(path)?;
-        let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
-        let mut rows = Vec::new();
-        for batch in reader {
-            let batch = batch?;
-            let index = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .context("CSF Parquet idx column is not UInt64")?;
-            let lines = (1..4)
-                .map(|column| {
-                    Ok(batch
-                        .column(column)
-                        .as_any()
-                        .downcast_ref::<arrow::array::StringArray>()
-                        .context("CSF Parquet line column is not Utf8")?
-                        .to_owned())
-                })
-                .collect::<Result<Vec<_>>>()?;
-            for row in 0..batch.num_rows() {
-                rows.push((
-                    index.value(row),
-                    lines[0].value(row).to_owned(),
-                    lines[1].value(row).to_owned(),
-                    lines[2].value(row).to_owned(),
-                ));
+            let published = (fs::read(header).unwrap(), read_rows(&descriptors).unwrap());
+            if let Some(expected) = &previous {
+                assert_eq!(&published, expected);
             }
+            previous = Some(published);
         }
-        Ok(rows)
     }
 
     /// Every codec must reach the writer, be readable again, and be reported.
@@ -3979,13 +3614,10 @@ mod tests {
             let directory = root.join(label);
             fs::create_dir(&directory).unwrap();
             let csf = directory.join("out.c");
-            let csf_parquet = directory.join("out.parquet");
             let descriptors = directory.join("descriptors.parquet");
             let header = directory.join("header.toml");
-            let stats = generate_disk_outputs_from_transcript_with_options(
-                transcript,
-                &csf,
-                &csf_parquet,
+            let stats = generate_descriptor_dataset(
+                &[transcript.to_owned()],
                 &descriptors,
                 &header,
                 &GenerationOptions {
@@ -3999,6 +3631,7 @@ mod tests {
                 },
             )
             .unwrap();
+            crate::descriptor_dataset::restore_text(&descriptors, &header, &csf, None).unwrap();
             assert_eq!(
                 stats.segment_codec,
                 codec.name(),

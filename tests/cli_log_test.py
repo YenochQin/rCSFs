@@ -27,7 +27,7 @@ def test_batch_log_saves_config_statistics_and_append_history(
 ) -> None:
     config = tmp_path / "batch.toml"
     contents = 'conf = "calc"\n' + _generation(0) + _generation(6)
-    contents += '[csfs-split.active_spaces]\nAS1 = "1s"\nAS6 = "2s"\n'
+    contents += '[csfs-split.active_spaces]\nAS1 = "1s"\nAS5 = "2s"\n'
     config.write_text(contents, encoding="utf-8", newline=newline)
     assert cli.main(["-c", str(config)]) == 0
     log_path = tmp_path / "rcsfs_calc.log"
@@ -66,7 +66,7 @@ def test_batch_log_names_and_json_console(
     contents = (f'conf = "{conf}"\n' if conf else "") + (
         '[csfsgenerate]\ninactive_core = 0\nreference_configuration = ["1s(2,*)"]\n'
         'active_space = "1s"\nj_min = 0\nj_max = 0\nexcitations = 0\n'
-        'rcsfs_out = "generated.c"\njson = true\n'
+        'output = "generated_descriptors.parquet"\njson = true\n'
     )
     (tmp_path / "rcsfs.toml").write_text(contents)
     assert cli.main(["-c", "rcsfs.toml"]) == 0
@@ -79,7 +79,7 @@ def test_runtime_failure_is_logged_and_stops_later_jobs(tmp_path: Path) -> None:
         'conf = "calc"\n'
         + _generation(0)
         + '[info]\ninput_parquet = "missing.parquet"\n'
-        + '[jsplit]\ninput_csf = "calc_as0raw.c"\nprefix = "later"\n'
+        + '[jsplit]\ninput_csf = "calc_as0raw_descriptors.parquet"\nprefix = "later"\n'
     )
     assert cli.main(["-c", "batch.toml"]) == 1
     events = _events(tmp_path / "rcsfs_calc.log")
@@ -90,7 +90,7 @@ def test_runtime_failure_is_logged_and_stops_later_jobs(tmp_path: Path) -> None:
         "info"
     ]
     assert not any(event.get("command") == "jsplit" for event in events)
-    assert (tmp_path / "calc_as0raw.c").is_file()
+    assert (tmp_path / "calc_as0raw_descriptors.parquet").is_file()
     assert not list(tmp_path.glob("later*"))
 
 
@@ -98,12 +98,14 @@ def test_unwritable_log_fails_before_processing(tmp_path: Path) -> None:
     (tmp_path / "batch.toml").write_text('conf = "calc"\n' + _generation(0))
     (tmp_path / "rcsfs_calc.log").mkdir()
     assert cli.main(["-c", "batch.toml"]) == 1
-    assert not (tmp_path / "calc_as0raw.c").exists()
+    assert not (tmp_path / "calc_as0raw_descriptors.parquet").exists()
 
 
 @pytest.mark.parametrize("role", ["config", "input", "output", "hardlink", "symlink"])
 @pytest.mark.parametrize("batch", [True, False])
-def test_log_cannot_modify_input_or_output(tmp_path: Path, role: str, batch: bool) -> None:
+def test_log_cannot_modify_input_or_output(
+    tmp_path: Path, role: str, batch: bool
+) -> None:
     log = tmp_path / "rcsfs_calc.log"
     config = log if role == "config" else tmp_path / "batch.toml"
     source = log if role == "input" else tmp_path / "input.c"

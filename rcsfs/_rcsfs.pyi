@@ -3,8 +3,8 @@
 from typing import Literal, Protocol
 
 from ._types import (
-    CsfDatasetStats,
     CsfDatasetSplitStats,
+    CsfDatasetStats,
     CsfGenerationEstimate,
     CsfGenerationStats,
     CsfgGenerationStats,
@@ -33,23 +33,34 @@ class ArrowRecordBatchReader(Protocol):
 
 # Header metadata includes electron_count (core + peel) when inferable.
 def read_csfs_arrow(
-    input_path: str, header_path: str | None = None,
-    include_block_id: bool = False, include_coupling_signature: bool = False,
+    input_path: str,
+    header_path: str | None = None,
+    include_block_id: bool = False,
+    include_coupling_signature: bool = False,
 ) -> tuple[CsfHeaderData, ArrowRecordBatchReader]: ...
 def convert_csfs(
-    input_path: str, output_path: str, header_path: str | None = None,
+    input_path: str,
+    output_path: str,
+    header_path: str | None = None,
 ) -> CsfDatasetStats: ...
 def select_csfs(
-    input_path: str, output_path: str, indices: list[int],
-    header_path: str | None = None, output_header: str | None = None,
+    input_path: str,
+    output_path: str,
+    indices: list[int],
+    header_path: str | None = None,
+    output_header: str | None = None,
 ) -> CsfDatasetStats: ...
 def merge_csfs(
-    input_paths: list[str], output_path: str,
-    header_paths: list[str] | None = None, output_header: str | None = None,
+    input_paths: list[str],
+    output_path: str,
+    header_paths: list[str] | None = None,
+    output_header: str | None = None,
 ) -> CsfDatasetStats: ...
 def match_csfs(
-    full_path: str, selected_path: str,
-    full_header: str | None = None, selected_header: str | None = None,
+    full_path: str,
+    selected_path: str,
+    full_header: str | None = None,
+    selected_header: str | None = None,
     require_all: bool = True,
 ) -> list[int | None]: ...
 def get_parquet_info(input_path: str) -> ParquetInfo: ...
@@ -66,7 +77,9 @@ def split_csfs_by_active_spaces(
     targets: list[tuple[str, str]],
 ) -> CsfDatasetSplitStats: ...
 def split_csfs_by_j(
-    input_path: str, output_dir: str | None = None, prefix: str | None = None,
+    input_path: str,
+    output_dir: str | None = None,
+    prefix: str | None = None,
     header_path: str | None = None,
 ) -> CsfDatasetSplitStats: ...
 def restore_csfs_from_descriptors(
@@ -77,8 +90,11 @@ def restore_csfs_from_descriptors(
 ) -> CsfRestoreStats: ...
 def read_peel_subshells(header_path: str) -> list[str]: ...
 def generate_csfs_from_transcript(
-    transcript: str | list[str], output_path: str, threads: int | None = None,
-    storage: Literal["disk", "memory"] = "disk", memory_budget_mib: int | None = None,
+    transcript: str | list[str],
+    output_path: str,
+    threads: int | None = None,
+    storage: Literal["disk", "memory"] = "disk",
+    memory_budget_mib: int | None = None,
     allow_unchecked_space: bool = False,
 ) -> CsfGenerationStats: ...
 def estimate_disk_generation(

@@ -4,8 +4,8 @@ use std::{fmt, sync::OnceLock};
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Kind {
     Detail,
+    #[cfg(feature = "cli")]
     Warning,
-    LegacyTable,
 }
 type DiagnosticSink = fn(Kind, fmt::Arguments<'_>);
 static SINK: OnceLock<DiagnosticSink> = OnceLock::new();
@@ -27,10 +27,10 @@ pub(crate) fn emit(kind: Kind, message: fmt::Arguments<'_>) {
 macro_rules! detail {
     ($($arg:tt)*) => { $crate::reporting::emit($crate::reporting::Kind::Detail, format_args!($($arg)*)) };
 }
+#[cfg(feature = "cli")]
 macro_rules! warning {
     ($($arg:tt)*) => { $crate::reporting::emit($crate::reporting::Kind::Warning, format_args!($($arg)*)) };
 }
-macro_rules! legacy_table {
-    ($($arg:tt)*) => { $crate::reporting::emit($crate::reporting::Kind::LegacyTable, format_args!($($arg)*)) };
-}
-pub(crate) use {detail, legacy_table, warning};
+pub(crate) use detail;
+#[cfg(feature = "cli")]
+pub(crate) use warning;

@@ -142,14 +142,10 @@ pub(super) fn settings(
 pub(super) fn batch(root: &Table, path: &Path) -> Result<Vec<Job>> {
     let mut jobs = Vec::new();
     for (name, value) in root {
-        if name == "conf" || name == "output" {
+        if name == "conf" {
             continue;
         }
-        let command = if name == "generate" {
-            "csfsgenerate"
-        } else {
-            arguments::canonical(name)
-        };
+        let command = name.as_str();
         ensure!(
             arguments::COMMANDS.iter().any(|(c, _)| *c == command) && command != "csfggenerate",
             "unsupported config section: {name}"

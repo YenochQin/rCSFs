@@ -42,19 +42,7 @@ const RECURSIVE_REPARTITION_LEVELS: u64 = 1;
 /// values.
 const DESCRIPTOR_HUNDREDTHS_PER_INT_ROW: u64 = 1;
 
-/// Published CSF text bytes per record.
-///
-/// Measured 320.05 (61 columns) and 300.77 (226 columns) bytes per record, so
-/// the constant rounds the larger sample up to the next whole byte.
-const CSF_TEXT_BYTES_PER_RECORD: u64 = 321;
-
-/// Published CSF Parquet bytes per record.
-///
-/// Measured 27.51 (61 columns) and 72.60 (226 columns), so the constant rounds
-/// the larger sample up to the next whole byte.
-const CSF_PARQUET_BYTES_PER_RECORD: u64 = 73;
-
-/// Allowance for one metadata file: the CSF header or the descriptor sidecar.
+/// Allowance for the companion header TOML.
 const METADATA_BYTES: u64 = 64 * 1024;
 
 /// Safety margin applied to every requirement.
@@ -75,8 +63,6 @@ pub(crate) struct CapacityEstimate {
     /// survivor bitsets.
     pub(crate) scratch_peak_bytes: u64,
     pub(crate) descriptor_bytes: u64,
-    pub(crate) csf_text_bytes: u64,
-    pub(crate) csf_parquet_bytes: u64,
     /// The staged output set the CLI publishes from.
     pub(crate) staged_output_bytes: u64,
     /// Scratch peak plus the safety margin, as required of the scratch volume.
@@ -94,40 +80,29 @@ pub(crate) struct CapacityEstimate {
 /// estimate's own numbers.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ArtifactKind {
-    CsfText,
-    CsfParquet,
     Descriptor,
     /// The CSF header TOML. It is its own destination because it can be
-    /// published to a different directory than the descriptor sidecar.
+    /// published to a different directory than the descriptor Parquet.
     Header,
-    /// The descriptor sidecar TOML.
-    DescriptorMetadata,
 }
 
 impl ArtifactKind {
     /// The name a caller uses for this artifact.
     pub(crate) fn name(self) -> &'static str {
         match self {
-            Self::CsfText => "csf_text",
-            Self::CsfParquet => "csf_parquet",
             Self::Descriptor => "descriptor",
             Self::Header => "header",
-            Self::DescriptorMetadata => "descriptor_metadata",
         }
     }
 
     #[cfg(feature = "python")]
     pub(crate) fn from_name(name: &str) -> Result<Self> {
         match name {
-            "csf_text" => Ok(Self::CsfText),
-            "csf_parquet" => Ok(Self::CsfParquet),
             "descriptor" => Ok(Self::Descriptor),
             "header" => Ok(Self::Header),
-            "descriptor_metadata" => Ok(Self::DescriptorMetadata),
-            other => anyhow::bail!(
-                "unknown published artifact {other:?}; expected csf_text, csf_parquet, \
-                 descriptor, header, or descriptor_metadata"
-            ),
+            other => {
+                anyhow::bail!("unknown published artifact {other:?}; expected descriptor or header")
+            }
         }
     }
 }
@@ -140,16 +115,10 @@ impl CapacityEstimate {
 
     /// Published size of one artifact kind.
     ///
-    /// The two metadata files get the whole allowance each. They are a few
-    /// kilobytes against artifacts measured in gigabytes, so charging the
-    /// allowance twice costs nothing and keeps the answer independent of which
-    /// volume each one lands on.
     pub(crate) fn artifact_bytes(&self, kind: ArtifactKind) -> u64 {
         match kind {
-            ArtifactKind::CsfText => self.csf_text_bytes,
-            ArtifactKind::CsfParquet => self.csf_parquet_bytes,
             ArtifactKind::Descriptor => self.descriptor_bytes,
-            ArtifactKind::Header | ArtifactKind::DescriptorMetadata => METADATA_BYTES,
+            ArtifactKind::Header => METADATA_BYTES,
         }
     }
 }
@@ -240,16 +209,8 @@ pub(crate) fn estimate_capacity(
         .and_then(|int_rows| int_rows.checked_mul(DESCRIPTOR_HUNDREDTHS_PER_INT_ROW))
         .and_then(|hundredths| hundredths.checked_div(100))
         .context("descriptor size estimate overflow")?;
-    let csf_text_bytes = pre_deduplication_records
-        .checked_mul(CSF_TEXT_BYTES_PER_RECORD)
-        .context("CSF text size estimate overflow")?;
-    let csf_parquet_bytes = pre_deduplication_records
-        .checked_mul(CSF_PARQUET_BYTES_PER_RECORD)
-        .context("CSF Parquet size estimate overflow")?;
     let staged_output_bytes = descriptor_bytes
-        .checked_add(csf_text_bytes)
-        .and_then(|bytes| bytes.checked_add(csf_parquet_bytes))
-        .and_then(|bytes| bytes.checked_add(METADATA_BYTES.checked_mul(2)?))
+        .checked_add(METADATA_BYTES)
         .context("staged output size estimate overflow")?;
 
     let assumptions = vec![
@@ -287,11 +248,6 @@ pub(crate) fn estimate_capacity(
              earlier Int32 measurements were 0.0098 (61 columns) and 0.0062 (226 columns) \
              bytes; this compression estimate has not been rebenchmarked for Int8"
         ),
-        format!(
-            "CSF text {CSF_TEXT_BYTES_PER_RECORD} bytes/record and CSF Parquet \
-             {CSF_PARQUET_BYTES_PER_RECORD} bytes/record; measured 320.05/27.51 and 300.77/72.60, \
-             rounded up"
-        ),
         "publishing copies the staged set to its destinations, so the staged set and the \
          published files exist at the same time"
             .to_owned(),
@@ -311,8 +267,6 @@ pub(crate) fn estimate_capacity(
         survivor_bitset_bytes,
         scratch_peak_bytes,
         descriptor_bytes,
-        csf_text_bytes,
-        csf_parquet_bytes,
         staged_output_bytes,
         required_scratch_bytes: with_margin(scratch_peak_bytes)?,
         required_output_bytes: with_margin(staged_output_bytes)?,
@@ -331,9 +285,7 @@ mod tests {
         assert!(wide.segment_bytes > narrow.segment_bytes);
         assert!(wide.root_bucket_bytes > narrow.root_bucket_bytes);
         assert!(wide.descriptor_bytes > narrow.descriptor_bytes);
-        // The published CSF text does not depend on the Peel width in the model,
-        // because the two measured samples did not increase with it.
-        assert_eq!(wide.csf_text_bytes, narrow.csf_text_bytes);
+        assert!(wide.staged_output_bytes > narrow.staged_output_bytes);
     }
 
     #[test]
@@ -347,16 +299,12 @@ mod tests {
         assert!(b1.root_bucket_bytes >= 2_695_762 * (98 + 24));
         assert!(b1.scratch_peak_bytes >= b1.segment_bytes + b1.root_bucket_bytes);
         assert!(b1.descriptor_bytes >= 2_594_699);
-        assert!(b1.csf_text_bytes >= 862_789_499);
-        assert!(b1.csf_parquet_bytes >= 74_150_973);
         // B2 shape: 226 Int8 columns over the historical record count.
         let b2 = estimate_capacity(56, 560_351, 1, DeduplicationStrategy::Exact).unwrap();
         assert!(b2.segment_bytes >= 560_351 * (226 + 12));
         assert!(b2.root_bucket_bytes >= 560_351 * (226 + 24));
         assert!(b2.scratch_peak_bytes >= b2.segment_bytes + b2.root_bucket_bytes);
         assert!(b2.descriptor_bytes >= 781_637);
-        assert!(b2.csf_text_bytes >= 168_534_272);
-        assert!(b2.csf_parquet_bytes >= 40_680_076);
     }
 
     /// A volume that is too small stops a run and is only reported by an

@@ -112,7 +112,7 @@ pub(super) fn safe_stem(value: &str) -> Result<()> {
 }
 pub(super) fn raw_name(conf: &str, level: usize) -> String {
     format!(
-        "{conf}{}as{level}raw_descriptors.parquet",
+        "{conf}{}as{level}raw_desc.parquet",
         if conf.ends_with('_') { "" } else { "_" }
     )
 }

@@ -30,7 +30,7 @@ def _assert_binding(descriptors: Path, header: Path) -> str:
 @pytest.mark.parametrize(
     "descriptor_setting, descriptor_args, descriptor_name",
     [
-        ("", [], "calc_descriptors.parquet"),
+        ("", [], "calc_desc.parquet"),
         ('output = "custom.parquet"\n', [], "custom.parquet"),
         (
             'output = "ignored.parquet"\n',

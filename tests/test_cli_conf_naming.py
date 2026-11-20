@@ -15,7 +15,7 @@ def test_batch_generation_and_split_share_conf_as_names(
     explicit_split_sources: bool,
 ) -> None:
     split_sources = (
-        'split_csfs_parquet = "e1_cv1_as6raw_descriptors.parquet"\n'
+        'split_csfs_parquet = "e1_cv1_as6raw_desc.parquet"\n'
         'csfs_header = "e1_cv1_as6raw_header.toml"\n'
         if explicit_split_sources
         else ""
@@ -41,10 +41,16 @@ def test_batch_generation_and_split_share_conf_as_names(
 
     assert cli.main(["-c", "rcsfs.toml"]) == 0
     for level in range(7):
-        assert (tmp_path / f"e1_cv1_as{level}raw_descriptors.parquet").is_file()
-    assert (tmp_path / "e1_cv1_as6raw_descriptors.parquet").is_file()
+        assert (tmp_path / f"e1_cv1_as{level}raw_desc.parquet").is_file()
+    assert (tmp_path / "e1_cv1_as6raw_desc.parquet").is_file()
     assert (tmp_path / "e1_cv1_as6raw_header.toml").is_file()
     assert not list(tmp_path.glob("e1_cv1as*"))
     assert not list(tmp_path.glob("e1_cv1__as*"))
     assert not list(tmp_path.glob("*.c"))
     assert config.read_text(encoding="utf-8") == contents
+
+    if not explicit_split_sources:
+        current = tmp_path / "e1_cv1_as6raw_desc.parquet"
+        current.rename(tmp_path / "e1_cv1_as6raw_descriptors.parquet")
+        assert cli.main(["csfs-split", "-c", "rcsfs.toml"]) == 0
+        assert not current.exists()

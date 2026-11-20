@@ -47,12 +47,12 @@ excitations = 2
 
 ```fish
 rcsfs -c rcsfs.toml
-rcsfs info helium_descriptors.parquet --json
+rcsfs info helium_desc.parquet --json
 ```
 
-This writes `helium_descriptors.parquet` and `helium_header.toml`. Use
+This writes `helium_desc.parquet` and `helium_header.toml`. Use
 `output` in TOML or `--output` on the CLI to choose the descriptor filename.
-An `as` level with `conf` names the pair `{conf}_as{level}raw_descriptors.parquet`
+An `as` level with `conf` names the pair `{conf}_as{level}raw_desc.parquet`
 and `{conf}_as{level}raw_header.toml`. Use `--transcript` to read a generation
 transcript. Disk generation is the default. Use `--estimate-only` to see the
 planned record count and space requirement.
@@ -60,19 +60,21 @@ planned record count and space requirement.
 ## Import, transform and restore
 
 ```fish
-rcsfs convert reference.c reference_descriptors.parquet
-rcsfs zero-first reference_descriptors.parquet helium_descriptors.parquet ordered_descriptors.parquet --json
-rcsfs interacting reference_descriptors.parquet helium_descriptors.parquet -o filtered_descriptors.parquet --json
-rcsfs jsplit ordered_descriptors.parquet --prefix block
-rcsfs restore-csfs --descriptors ordered_descriptors.parquet --header ordered_header.toml --output ordered.c
+rcsfs convert reference.c reference_desc.parquet
+rcsfs zero-first reference_desc.parquet helium_desc.parquet ordered_desc.parquet --json
+rcsfs interacting reference_desc.parquet helium_desc.parquet -o filtered_desc.parquet --json
+rcsfs jsplit ordered_desc.parquet --prefix block
+rcsfs restore-csfs --descriptors ordered_desc.parquet --header ordered_header.toml --output ordered.c
 ```
 
 `convert` imports GRASP text directly. Keep each descriptor file with its
-companion header. Text recovery uses an explicit restore command. The
-`csfs-split` command filters one dataset into active spaces, each with its own
-descriptor and header. If the source filename already represents the largest
-active space, list the other spaces as split targets. Output paths must differ
-from the input pair. Run `rcsfs COMMAND --help` for flags.
+companion header. Both `name_desc.parquet` and the earlier
+`name_descriptors.parquet` resolve to `name_header.toml`. Text recovery uses an
+explicit restore command. The `csfs-split` command filters one dataset into
+active spaces, each with its own descriptor and header. If the source filename
+already represents the largest active space, list the other spaces as split
+targets. Output paths must differ from the input pair. Run `rcsfs COMMAND --help`
+for flags.
 
 `zero-first` and `interacting` read and write V2 descriptor/header pairs directly.
 `zero-first` writes the reference rows first in each explicit symmetry block,
@@ -96,10 +98,10 @@ from rcsfs import (
     select_csfs,
 )
 
-basis = Path("basis_descriptors.parquet")
+basis = Path("basis_desc.parquet")
 convert_csfs(Path("basis.c"), basis)
 header, rows = read_csfs(basis, include_block_id=True)
-selected = Path("selected_descriptors.parquet")
+selected = Path("selected_desc.parquet")
 select_csfs(basis, selected, [0])
 restore_csfs_from_descriptors(selected, descriptor_header_path(selected), Path("selected.c"))
 ```

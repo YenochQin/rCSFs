@@ -11,7 +11,7 @@ pub(super) fn template(command: &str) -> Option<&'static str> {
 # j_min = 0
 # j_max = 0
 # excitations = 0
-# output = "generated_descriptors.parquet"  # With conf/as, inferred automatically.
+# output = "generated_desc.parquet"  # With conf/as, inferred automatically.
 # threads = 8
 # memory_budget_mib = 1024
 # estimate_only = false
@@ -22,15 +22,15 @@ pub(super) fn template(command: &str) -> Option<&'static str> {
         }
         "zero-first" => {
             r###"# [zero-first]
-# zero_csf = "zero_descriptors.parquet"
-# full_csf = "generated_descriptors.parquet"
-# output_csf = "zero_first_descriptors.parquet"
+# zero_csf = "zero_desc.parquet"
+# full_csf = "generated_desc.parquet"
+# output_csf = "zero_first_desc.parquet"
 # json = false
 "###
         }
         "csfs-split" => {
             r###"# [csfs-split]
-# split_csfs_parquet = "generated_descriptors.parquet"
+# split_csfs_parquet = "generated_desc.parquet"
 # csfs_header = "generated_header.toml"
 # json = false
 # [csfs-split.active_spaces]
@@ -41,7 +41,7 @@ pub(super) fn template(command: &str) -> Option<&'static str> {
         }
         "jsplit" => {
             r###"# [jsplit]
-# input_csf = "input_descriptors.parquet"
+# input_csf = "input_desc.parquet"
 # prefix = "split"
 # copy_w = true
 # overwrite = true
@@ -50,9 +50,9 @@ pub(super) fn template(command: &str) -> Option<&'static str> {
         }
         "interacting" => {
             r###"# [interacting]
-# reference = "reference_descriptors.parquet"
-# candidates = "generated_descriptors.parquet"
-# output = "interacting_descriptors.parquet"
+# reference = "reference_desc.parquet"
+# candidates = "generated_desc.parquet"
+# output = "interacting_desc.parquet"
 # hamiltonian = "dc"
 # method = "structural-upper-bound"
 # num_workers = 8
@@ -61,7 +61,7 @@ pub(super) fn template(command: &str) -> Option<&'static str> {
         }
         "restore-csfs" => {
             r###"# [restore-csfs]
-# descriptors = "generated_descriptors.parquet"
+# descriptors = "generated_desc.parquet"
 # header = "generated_header.toml"
 # output = "restored.c"
 # indices = [0, 1]
@@ -71,7 +71,7 @@ pub(super) fn template(command: &str) -> Option<&'static str> {
         "convert" => {
             r###"# [convert]
 # input_csf = "input.c"
-# output_parquet = "output_descriptors.parquet"
+# output_parquet = "output_desc.parquet"
 # json = false
 "###
         }

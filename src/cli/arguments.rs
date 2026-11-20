@@ -79,7 +79,7 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
                 "output",
                 Some("output"),
                 Text,
-                "Output descriptor Parquet (default: rcsf_descriptors.parquet)."
+                "Output descriptor Parquet (default: rcsf_desc.parquet)."
             ),
             field!(
                 "transcript",
@@ -139,7 +139,7 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
                 "output_csf",
                 None,
                 Text,
-                "Output descriptor Parquet (default: zero_first_descriptors.parquet)."
+                "Output descriptor Parquet (default: zero_first_desc.parquet)."
             ),
         ],
         "csfs-split" => vec![
@@ -186,7 +186,7 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
                 "output",
                 Some("output"),
                 Text,
-                "Output descriptor Parquet (default: interacting_descriptors.parquet)."
+                "Output descriptor Parquet (default: interacting_desc.parquet)."
             ),
             field!(
                 "hamiltonian",

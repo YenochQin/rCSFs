@@ -55,7 +55,7 @@ def test_interactive_generation_matches_registered_hash(
             [
                 "restore-csfs",
                 "--descriptors",
-                "rcsf_descriptors.parquet",
+                "rcsf_desc.parquet",
                 "--header",
                 "rcsf_header.toml",
                 "--output",

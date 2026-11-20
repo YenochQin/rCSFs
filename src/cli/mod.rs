@@ -157,6 +157,7 @@ pub fn main() -> ExitCode {
                     None,
                     explicit.is_some(),
                     overrides,
+                    true,
                 )?
             };
             json_output = settings.flag("json", false)?;

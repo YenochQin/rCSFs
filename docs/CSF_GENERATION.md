@@ -148,7 +148,7 @@ that happen to be the same across lists. No list inherits values from another.
 ```toml
 [csfsgenerate]
 inactive_core = 0
-output = "combined_descriptors.parquet"
+output = "combined_desc.parquet"
 
 [[csfsgenerate.lists]]
 reference_configuration = ["1s(2,*)"]
@@ -237,21 +237,21 @@ byte-for-byte serial/parallel comparisons.
 Run `rcsfs csfsgenerate [-o OUTPUT]` for interactive input, or use a
 `[csfsgenerate]` table for repeatable runs. The CLI writes a V2 descriptor
 Parquet and its bound header. The default filenames are
-`rcsf_descriptors.parquet` and `rcsf_header.toml`. A top-level `conf` selects
-`{conf}_descriptors.parquet` by default. With `conf` and an active-space index
-`as`, the default is `{conf}_as{as}raw_descriptors.parquet`. Set `output` to
+`rcsf_desc.parquet` and `rcsf_header.toml`. A top-level `conf` selects
+`{conf}_desc.parquet` by default. With `conf` and an active-space index
+`as`, the default is `{conf}_as{as}raw_desc.parquet`. Set `output` to
 choose a different descriptor path.
 
 ```toml
 [csfsgenerate]
 transcript = "input.rcsfgenerate"
-output = "basis_descriptors.parquet"
+output = "basis_desc.parquet"
 memory_budget_mib = 8192
 ```
 
 ```fish
 rcsfs csfsgenerate --config input.toml
-rcsfs restore-csfs --descriptors basis_descriptors.parquet --header basis_header.toml --output basis.c
+rcsfs restore-csfs --descriptors basis_desc.parquet --header basis_header.toml --output basis.c
 ```
 
 Keep the descriptor and its header together. The CLI can replace an existing

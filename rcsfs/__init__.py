@@ -39,7 +39,12 @@ def descriptor_header_path(path: str | Path) -> Path:
     value = Path(path)
     if value.suffix != ".parquet":
         raise ValueError(f"expected descriptor Parquet: {value}")
-    return value.with_name(value.stem.removesuffix("_descriptors") + "_header.toml")
+    stem = value.stem
+    if stem.endswith("_desc"):
+        stem = stem.removesuffix("_desc")
+    else:
+        stem = stem.removesuffix("_descriptors")
+    return value.with_name(stem + "_header.toml")
 
 
 def convert_csfs(

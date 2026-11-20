@@ -40,6 +40,12 @@ pub fn read_header(path: &Path) -> Result<DatasetHeader> {
     DatasetHeader::parse(toml::from_str(&fs::read_to_string(path)?)?, true)
 }
 
+pub(crate) fn descriptor_stem(stem: &str) -> &str {
+    stem.strip_suffix("_desc")
+        .or_else(|| stem.strip_suffix("_descriptors"))
+        .unwrap_or(stem)
+}
+
 pub fn header_path(descriptors: &Path) -> Result<PathBuf> {
     ensure!(
         descriptors.extension().is_some_and(|s| s == "parquet"),
@@ -50,7 +56,7 @@ pub fn header_path(descriptors: &Path) -> Result<PathBuf> {
         .file_stem()
         .and_then(|s| s.to_str())
         .context("expected UTF-8 descriptor filename")?;
-    let stem = stem.strip_suffix("_descriptors").unwrap_or(stem);
+    let stem = descriptor_stem(stem);
     Ok(descriptors.with_file_name(format!("{stem}_header.toml")))
 }
 

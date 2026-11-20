@@ -328,11 +328,7 @@ fn split_csfs_by_j(
         .map(PathBuf::from)
         .unwrap_or_else(|| input.parent().unwrap_or(Path::new(".")).to_path_buf());
     let prefix = prefix.unwrap_or_else(|| {
-        input
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("csfs")
-            .trim_end_matches("_descriptors")
+        dataset::descriptor_stem(input.file_stem().and_then(|s| s.to_str()).unwrap_or("csfs"))
             .to_owned()
     });
     let outputs = py

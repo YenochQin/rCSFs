@@ -36,7 +36,7 @@ fn invalid_prefix_missing_directory_and_late_existing_output_do_not_publish() {
     import_text(&fixture, &input, &header).unwrap();
     assert!(split_blocks(&input, &header, dir.path(), "../escape").is_err());
     assert!(split_blocks(&input, &header, &dir.path().join("missing"), "split").is_err());
-    let second = dir.path().join("split_b001_2_odd_descriptors.parquet");
+    let second = dir.path().join("split_b001_2_odd_desc.parquet");
     fs::write(&second, b"existing").unwrap();
     assert!(split_blocks(&input, &header, dir.path(), "split").is_err());
     assert_eq!(fs::read(second).unwrap(), b"existing");

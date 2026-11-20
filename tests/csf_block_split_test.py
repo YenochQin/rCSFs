@@ -23,8 +23,8 @@ def test_split_api_keeps_the_explicit_block_rows(dataset: Path, tmp_path: Path) 
     output.mkdir()
     stats = split_csfs_by_j(dataset, output_dir=output, prefix="slice")
     names = [
-        "slice_b000_0_even_descriptors.parquet",
-        "slice_b001_2_odd_descriptors.parquet",
+        "slice_b000_0_even_desc.parquet",
+        "slice_b001_2_odd_desc.parquet",
     ]
     assert [Path(item["output_file"]).name for item in stats["outputs"]] == names
     _, input_rows = read_csfs(dataset)
@@ -33,6 +33,21 @@ def test_split_api_keeps_the_explicit_block_rows(dataset: Path, tmp_path: Path) 
         assert header["block_info"]["block_lengths"] == [1]
         assert frame.drop("idx").equals(input_rows.slice(row, 1).drop("idx"))
     assert not list(output.glob("*.c"))
+
+
+def test_short_name_infers_block_prefix_and_wavefunction(dataset: Path, tmp_path: Path) -> None:
+    short = dataset.with_name("basis_desc.parquet")
+    dataset.rename(short)
+    (tmp_path / "basis.w").write_bytes(b"orbitals")
+    python_dir = tmp_path / "python"
+    python_dir.mkdir()
+    api = split_csfs_by_j(short, output_dir=python_dir)
+    result = cli.run(["jsplit", str(short), "--json"], cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    for rust, python in zip(json.loads(result.stdout)["outputs"], api["outputs"], strict=True):
+        assert Path(rust["output_file"]).name == Path(python["output_file"]).name
+        assert rust["output_file"].startswith("basis_b")
+        assert (tmp_path / rust["w_file"]).read_bytes() == b"orbitals"
 
 
 def test_existing_companion_preserved_without_partial_publication(

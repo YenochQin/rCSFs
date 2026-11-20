@@ -53,8 +53,8 @@ def test_split_active_cli_uses_grasp_style_labels(tmp_path: Path) -> None:
         )
         == 0
     )
-    assert (tmp_path / "source_small_descriptors.parquet").exists()
-    assert (tmp_path / "source_large_descriptors.parquet").exists()
+    assert (tmp_path / "source_small_desc.parquet").exists()
+    assert (tmp_path / "source_large_desc.parquet").exists()
 
 
 def test_split_active_cli_rejects_bad_labels_before_writing(tmp_path: Path) -> None:
@@ -72,7 +72,7 @@ def test_split_active_cli_rejects_bad_labels_before_writing(tmp_path: Path) -> N
         )
         == 2
     )
-    assert not (tmp_path / "sourceoutside_descriptors.parquet").exists()
+    assert not (tmp_path / "sourceoutside_desc.parquet").exists()
 
 
 def test_csfs_split_reads_new_default_toml(
@@ -87,8 +87,8 @@ def test_csfs_split_reads_new_default_toml(
     )
     monkeypatch.chdir(tmp_path)
     assert main(["csfs-split"]) == 0
-    assert (tmp_path / "source_small_descriptors.parquet").exists()
-    assert (tmp_path / "source_large_descriptors.parquet").exists()
+    assert (tmp_path / "source_small_desc.parquet").exists()
+    assert (tmp_path / "source_large_desc.parquet").exists()
 
 
 def test_csfs_split_rejects_removed_output_directory(

@@ -1,6 +1,6 @@
 //! File commands call the same conversion, descriptor and selection algorithms as Python.
 use super::{arguments::Settings, files};
-use crate::parquet_info;
+use crate::{descriptor_dataset::descriptor_stem, parquet_info};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -9,10 +9,7 @@ pub(super) fn split_targets(
     settings: &Settings,
 ) -> Result<Vec<crate::descriptor_operations::ActiveSpaceTarget>> {
     let input = settings.path("split_csfs_parquet")?;
-    let prefix = settings.text(
-        "prefix",
-        files::stem(&input)?.trim_end_matches("_descriptors"),
-    )?;
+    let prefix = settings.text("prefix", descriptor_stem(files::stem(&input)?))?;
     if settings.conf.is_none() {
         files::safe_stem(prefix)?;
     }
@@ -61,7 +58,7 @@ pub(super) fn split_targets(
             );
             files::raw_name(conf, number.parse()?)
         } else {
-            format!("{prefix}{label}_descriptors.parquet")
+            format!("{prefix}{label}_desc.parquet")
         };
         targets.push(crate::descriptor_operations::ActiveSpaceTarget {
             maximum_orbitals,
@@ -146,10 +143,7 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
         "zero-first" => {
             let zero = s.path("zero_csf")?;
             let full = s.path("full_csf")?;
-            let output = s.output(
-                "output_csf",
-                Some(Path::new("zero_first_descriptors.parquet")),
-            )?;
+            let output = s.output("output_csf", Some(Path::new("zero_first_desc.parquet")))?;
             let zh = crate::descriptor_dataset::header_path(&zero)?;
             let fh = crate::descriptor_dataset::header_path(&full)?;
             let header = crate::descriptor_dataset::header_path(&output)?;
@@ -228,7 +222,7 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
         "jsplit" => {
             let input = s.path("input_csf")?;
             let header = crate::descriptor_dataset::header_path(&input)?;
-            let stem = files::stem(&input)?.trim_end_matches("_descriptors");
+            let stem = descriptor_stem(files::stem(&input)?);
             let prefix = s.text("prefix", stem)?;
             let stage = files::stage()?;
             let stats =
@@ -246,10 +240,8 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
                 sources.extend([source, source_header]);
                 destinations.extend([output.clone(), output_header]);
                 if s.flag("copy_w", true)? && wave.exists() {
-                    let wave_output = output.with_file_name(format!(
-                        "{}.w",
-                        files::stem(&output)?.trim_end_matches("_descriptors")
-                    ));
+                    let wave_output = output
+                        .with_file_name(format!("{}.w", descriptor_stem(files::stem(&output)?)));
                     sources.push(wave.clone());
                     destinations.push(wave_output.clone());
                     result["w_file"] = json!(wave_output);
@@ -267,7 +259,7 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
             };
             let reference = s.path("reference")?;
             let candidates = s.path("candidates")?;
-            let output = s.output("output", Some(Path::new("interacting_descriptors.parquet")))?;
+            let output = s.output("output", Some(Path::new("interacting_desc.parquet")))?;
             crate::reporting::warning!(
                 "STRUCTURAL UPPER BOUND ONLY: this is not an exact rcsfinteract90 angular-algebra calculation; false positives may be retained."
             );

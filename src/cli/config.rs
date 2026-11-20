@@ -60,6 +60,7 @@ pub(super) fn settings(
     index: Option<usize>,
     explicit: bool,
     overrides: Table,
+    allow_legacy_split_source: bool,
 ) -> Result<Settings> {
     let mut values = model_values(root, command, index, explicit)?;
     let conf = conf(root)?;
@@ -69,7 +70,7 @@ pub(super) fn settings(
         {
             values
                 .entry("output".to_string())
-                .or_insert_with(|| format!("{conf}_descriptors.parquet").into());
+                .or_insert_with(|| format!("{conf}_desc.parquet").into());
         }
         if let Some(level) = values.remove("as") {
             let level = level
@@ -97,11 +98,23 @@ pub(super) fn settings(
             .as_array()
             .map(|a| a.len().checked_sub(1).context("empty csfsgenerate array"))
             .transpose()?;
-        let source = settings(root, "csfsgenerate", path, index, true, Table::new())?;
+        let source = settings(root, "csfsgenerate", path, index, true, Table::new(), false)?;
         let outputs = generation::Outputs::from_settings(&source)?;
+        let mut descriptor = outputs.descriptor;
+        if allow_legacy_split_source
+            && !values.contains_key("split_csfs_parquet")
+            && !overrides.contains_key("split_csfs_parquet")
+            && !descriptor.exists()
+            && let Some(stem) = files::stem(&descriptor)?.strip_suffix("_desc")
+        {
+            let legacy = descriptor.with_file_name(format!("{stem}_descriptors.parquet"));
+            if legacy.is_file() {
+                descriptor = legacy;
+            }
+        }
         values
             .entry("split_csfs_parquet".to_string())
-            .or_insert_with(|| outputs.descriptor.display().to_string().into());
+            .or_insert_with(|| descriptor.display().to_string().into());
         values
             .entry("csfs_header".to_string())
             .or_insert_with(|| outputs.header.display().to_string().into());
@@ -169,6 +182,7 @@ pub(super) fn batch(root: &Table, path: &Path) -> Result<Vec<Job>> {
                     value.is_array().then_some(i),
                     true,
                     Table::new(),
+                    false,
                 )?,
             });
         }
@@ -232,9 +246,9 @@ pub(super) fn output_paths(job: &Job) -> Result<Vec<PathBuf>> {
         "restore-csfs" => vec![s.output("output", None)?],
         "interacting" | "zero-first" => {
             let (key, default) = if job.command == "zero-first" {
-                ("output_csf", "zero_first_descriptors.parquet")
+                ("output_csf", "zero_first_desc.parquet")
             } else {
-                ("output", "interacting_descriptors.parquet")
+                ("output", "interacting_desc.parquet")
             };
             let output = s.output(key, Some(Path::new(default)))?;
             vec![

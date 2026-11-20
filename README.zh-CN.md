@@ -38,17 +38,18 @@ excitations = 2
 
 ```fish
 rcsfs -c rcsfs.toml
-rcsfs info helium_descriptors.parquet --json
-rcsfs convert reference.c reference_descriptors.parquet
-rcsfs zero-first reference_descriptors.parquet helium_descriptors.parquet ordered_descriptors.parquet --json
-rcsfs interacting reference_descriptors.parquet helium_descriptors.parquet -o filtered_descriptors.parquet --json
-rcsfs jsplit ordered_descriptors.parquet --prefix block
-rcsfs restore-csfs --descriptors ordered_descriptors.parquet --header ordered_header.toml --output ordered.c
+rcsfs info helium_desc.parquet --json
+rcsfs convert reference.c reference_desc.parquet
+rcsfs zero-first reference_desc.parquet helium_desc.parquet ordered_desc.parquet --json
+rcsfs interacting reference_desc.parquet helium_desc.parquet -o filtered_desc.parquet --json
+rcsfs jsplit ordered_desc.parquet --prefix block
+rcsfs restore-csfs --descriptors ordered_desc.parquet --header ordered_header.toml --output ordered.c
 ```
 
 生成默认采用磁盘模式。用 TOML 的 `output` 或命令行的 `--output` 指定文件名，
 可以用 `--estimate-only` 只查看规模和空间估计。设置 `conf` 和 `as` 后，
-生成文件名为 `{conf}_as{level}raw_descriptors.parquet`。
+生成文件名为 `{conf}_as{level}raw_desc.parquet`。
+`name_desc.parquet` 和旧的 `name_descriptors.parquet` 都配对 `name_header.toml`。
 用 `csfs-split` 拆分较小 active spaces，各输出均带自己的 header，文件名需与输入对不同。
 
 `zero-first` 和 `interacting` 直接读写 V2 描述符及配套 header。

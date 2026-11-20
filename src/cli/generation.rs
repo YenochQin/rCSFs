@@ -219,7 +219,7 @@ pub(super) struct Outputs {
 }
 impl Outputs {
     pub fn from_settings(s: &Settings) -> Result<Self> {
-        let descriptor = s.output("output", Some(Path::new("rcsf_descriptors.parquet")))?;
+        let descriptor = s.output("output", Some(Path::new("rcsf_desc.parquet")))?;
         let header = crate::descriptor_dataset::header_path(&descriptor)?;
         Ok(Self { descriptor, header })
     }

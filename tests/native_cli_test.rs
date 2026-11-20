@@ -354,8 +354,8 @@ fn batch_generation_split_uses_conf_naming_and_writes_log() {
     let p = dir.path();
     fs::write(p.join("model.toml"), format!("conf = 'helium'\n[csfsgenerate]\nas = 2\n{MODEL}\n[csfs-split.active_spaces]\nAS1 = '1s'\n")).unwrap();
     success(p, &["-c", "model.toml"]);
-    assert!(p.join("helium_as2raw_descriptors.parquet").exists());
-    assert!(p.join("helium_as1raw_descriptors.parquet").exists());
+    assert!(p.join("helium_as2raw_desc.parquet").exists());
+    assert!(p.join("helium_as1raw_desc.parquet").exists());
     let log = fs::read_to_string(p.join("rcsfs_helium.log")).unwrap();
     let records: Vec<Value> = log
         .lines()
@@ -363,7 +363,7 @@ fn batch_generation_split_uses_conf_naming_and_writes_log() {
         .collect();
     assert_eq!(records.last().unwrap()["event"], "complete");
     assert_eq!(
-        json(p, &["info", "helium_as1raw_descriptors.parquet", "--json"])["num_rows"],
+        json(p, &["info", "helium_as1raw_desc.parquet", "--json"])["num_rows"],
         1
     );
 }

@@ -6,7 +6,7 @@ existing GRASP text file, write a descriptor and its companion header in one ste
 ```python
 from rcsfs import convert_csfs
 
-stats = convert_csfs("calculation.c", "calculation_descriptors.parquet")
+stats = convert_csfs("calculation.c", "calculation_desc.parquet")
 header = stats["header_file"]
 ```
 
@@ -64,7 +64,7 @@ text. Keep the exact source header alongside each descriptor file.
 from rcsfs import read_csfs
 
 header, frame = read_csfs(
-    "calculation_descriptors.parquet",
+    "calculation_desc.parquet",
     include_block_id=True,
     include_coupling_signature=True,
 )

@@ -362,7 +362,7 @@ pub fn split_blocks(
         let first = rows.next().context("empty source block")??;
         let (j, parity) = row_symmetry(&first);
         let p = if parity == 1 { "even" } else { "odd" };
-        let path = directory.join(format!("{prefix}_b{block:03}_{j}_{p}_descriptors.parquet"));
+        let path = directory.join(format!("{prefix}_b{block:03}_{j}_{p}_desc.parquet"));
         let mut writer = DatasetWriter::new(
             header.clone(),
             &path,

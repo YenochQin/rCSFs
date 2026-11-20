@@ -25,7 +25,7 @@ def test_all_processing_outputs_and_scratch_stay_in_invocation_directory(
     inputs.mkdir()
     for path in tmp_path.glob("calc_*"):
         shutil.copy2(path, inputs / path.name)
-    descriptors = inputs / "calc_as0raw_descriptors.parquet"
+    descriptors = inputs / "calc_as0raw_desc.parquet"
     header = inputs / "calc_as0raw_header.toml"
     shutil.copy2(descriptors, inputs / "reference_descriptors.parquet")
     shutil.copy2(header, inputs / "reference_header.toml")
@@ -61,9 +61,9 @@ def test_all_processing_outputs_and_scratch_stay_in_invocation_directory(
 
     for name in (
         "restored.c",
-        "zero_first_descriptors.parquet",
+        "zero_first_desc.parquet",
         "selected_descriptors.parquet",
-        "calc_as1raw_descriptors.parquet",
+        "calc_as1raw_desc.parquet",
     ):
         assert (tmp_path / name).is_file()
     assert {path.name: path.read_bytes() for path in inputs.iterdir()} == original

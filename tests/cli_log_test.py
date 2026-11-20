@@ -79,7 +79,7 @@ def test_runtime_failure_is_logged_and_stops_later_jobs(tmp_path: Path) -> None:
         'conf = "calc"\n'
         + _generation(0)
         + '[info]\ninput_parquet = "missing.parquet"\n'
-        + '[jsplit]\ninput_csf = "calc_as0raw_descriptors.parquet"\nprefix = "later"\n'
+        + '[jsplit]\ninput_csf = "calc_as0raw_desc.parquet"\nprefix = "later"\n'
     )
     assert cli.main(["-c", "batch.toml"]) == 1
     events = _events(tmp_path / "rcsfs_calc.log")
@@ -90,7 +90,7 @@ def test_runtime_failure_is_logged_and_stops_later_jobs(tmp_path: Path) -> None:
         "info"
     ]
     assert not any(event.get("command") == "jsplit" for event in events)
-    assert (tmp_path / "calc_as0raw_descriptors.parquet").is_file()
+    assert (tmp_path / "calc_as0raw_desc.parquet").is_file()
     assert not list(tmp_path.glob("later*"))
 
 
@@ -98,7 +98,7 @@ def test_unwritable_log_fails_before_processing(tmp_path: Path) -> None:
     (tmp_path / "batch.toml").write_text('conf = "calc"\n' + _generation(0))
     (tmp_path / "rcsfs_calc.log").mkdir()
     assert cli.main(["-c", "batch.toml"]) == 1
-    assert not (tmp_path / "calc_as0raw_descriptors.parquet").exists()
+    assert not (tmp_path / "calc_as0raw_desc.parquet").exists()
 
 
 @pytest.mark.parametrize("role", ["config", "input", "output", "hardlink", "symlink"])

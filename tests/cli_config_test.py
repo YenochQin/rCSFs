@@ -194,7 +194,7 @@ def test_top_level_config_runs_generation_then_split(
     assert cli.main(["-c", "rcsfs.toml"]) == 0
     assert (tmp_path / "generated_descriptors.parquet").is_file()
     assert (tmp_path / "generated_header.toml").is_file()
-    assert (tmp_path / "generatedAS1_descriptors.parquet").is_file()
+    assert (tmp_path / "generatedAS1_desc.parquet").is_file()
 
 
 def test_conf_and_as_name_raw_generation_and_split_outputs(
@@ -215,9 +215,9 @@ def test_conf_and_as_name_raw_generation_and_split_outputs(
     outputs = [
         tmp_path / name
         for name in (
-            "e1_vv1_as2raw_descriptors.parquet",
+            "e1_vv1_as2raw_desc.parquet",
             "e1_vv1_as2raw_header.toml",
-            "e1_vv1_as1raw_descriptors.parquet",
+            "e1_vv1_as1raw_desc.parquet",
         )
     ]
     assert all(path.is_file() for path in outputs)
@@ -250,8 +250,8 @@ def test_as_zero_names_mr_generation_and_split_outputs(
 
     assert cli.main(["-c", "rcsfs.toml"]) == 0
     for name in (
-        "mr_as0raw_descriptors.parquet",
-        "mr_as1raw_descriptors.parquet",
+        "mr_as0raw_desc.parquet",
+        "mr_as1raw_desc.parquet",
         "mr_as0raw_header.toml",
     ):
         assert (tmp_path / name).is_file()
@@ -274,9 +274,9 @@ def test_conf_and_as_use_last_generator_for_implicit_split_input(
     monkeypatch.chdir(tmp_path)
 
     assert cli.main(["-c", "rcsfs.toml"]) == 0
-    assert (tmp_path / "calc_as1raw_descriptors.parquet").is_file()
-    assert (tmp_path / "calc_as2raw_descriptors.parquet").is_file()
-    assert (tmp_path / "calc_as1raw_descriptors.parquet").is_file()
+    assert (tmp_path / "calc_as1raw_desc.parquet").is_file()
+    assert (tmp_path / "calc_as2raw_desc.parquet").is_file()
+    assert (tmp_path / "calc_as1raw_desc.parquet").is_file()
 
 
 def test_conf_naming_works_with_separate_commands(
@@ -293,9 +293,9 @@ def test_conf_naming_works_with_separate_commands(
 
     assert cli.main(["csfsgenerate", "-c"]) == 0
     assert cli.main(["csfs-split"]) == 0
-    assert (tmp_path / "calc_as2raw_descriptors.parquet").is_file()
-    assert (tmp_path / "calc_as1raw_descriptors.parquet").is_file()
-    assert (tmp_path / "calc_as2raw_descriptors.parquet").is_file()
+    assert (tmp_path / "calc_as2raw_desc.parquet").is_file()
+    assert (tmp_path / "calc_as1raw_desc.parquet").is_file()
+    assert (tmp_path / "calc_as2raw_desc.parquet").is_file()
 
 
 def test_top_level_config_runs_repeated_generators_in_order(
@@ -317,7 +317,7 @@ def test_top_level_config_runs_repeated_generators_in_order(
     assert cli.main(["-c", "rcsfs.toml"]) == 0
     assert (tmp_path / "first_descriptors.parquet").is_file()
     assert (tmp_path / "second_descriptors.parquet").is_file()
-    assert (tmp_path / "secondAS1_descriptors.parquet").is_file()
+    assert (tmp_path / "secondAS1_desc.parquet").is_file()
 
 
 def test_estimate_only_without_parquet_does_not_generate_csf(

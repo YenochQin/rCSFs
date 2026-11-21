@@ -2,7 +2,6 @@
 mod arguments;
 mod commands;
 mod config;
-mod csfg;
 mod files;
 mod generation;
 mod logging;
@@ -10,14 +9,12 @@ mod output;
 mod templates;
 
 use anyhow::{Context, Result, ensure};
-use arguments::Settings;
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
     process::ExitCode,
     time::Instant,
 };
-use toml::Table;
 
 fn print_result(command: &str, result: &Value, json_output: bool, elapsed: f64) -> Result<()> {
     if json_output {
@@ -28,22 +25,15 @@ fn print_result(command: &str, result: &Value, json_output: bool, elapsed: f64) 
     Ok(())
 }
 
-fn run_logged(jobs: &[config::Job], path: Option<&Path>, root: &Table) -> Result<()> {
-    let log = logging::RunLog::open(jobs, path, root)?;
+fn run_logged(jobs: &[config::Job]) -> Result<()> {
+    let log = logging::RunLog::open(jobs)?;
     let run_start = Instant::now();
     let mut completed = 0;
     let outcome = (|| -> Result<()> {
         for (index, job) in jobs.iter().enumerate() {
             log.step(index + 1, job)?;
-            if job.command == "csfggenerate" {
-                log.event(json!({"event": "models", "configuration": root}))?;
-            }
             let start = Instant::now();
-            let result = if job.command == "csfggenerate" {
-                csfg::run(root, path.context("CSFG requires a config")?, &job.settings)
-            } else {
-                commands::run(&job.command, &job.settings)
-            };
+            let result = commands::run(&job.command, &job.settings);
             let elapsed = start.elapsed().as_secs_f64();
             let record = match &result {
                 Ok(stats) => json!({"event": "result", "command": job.command,
@@ -68,22 +58,6 @@ fn run_logged(jobs: &[config::Job], path: Option<&Path>, root: &Table) -> Result
         "completed_steps": completed, "elapsed_seconds": run_start.elapsed().as_secs_f64(),
         "finished_at_unix_ms": logging::now()?}))?;
     outcome
-}
-
-fn run_batch(path: &Path, root: &Table) -> Result<()> {
-    let jobs = if root.contains_key("csfggenerate") {
-        vec![config::Job {
-            command: "csfggenerate".into(),
-            settings: Settings {
-                values: Table::new(),
-                config: Some(path.to_path_buf()),
-                conf: None,
-            },
-        }]
-    } else {
-        config::batch(root, path)?
-    };
-    run_logged(&jobs, Some(path), root)
 }
 
 /// Parse process arguments and execute a native command. Errors never start Python.
@@ -118,7 +92,7 @@ pub fn main() -> ExitCode {
         }
     };
     let mut json_output = false;
-    let preparation = (|| -> Result<Option<(String, Settings, Table)>> {
+    let preparation = (|| -> Result<Vec<config::Job>> {
         let batch = matches.get_one::<String>("config");
         if let Some((command, sub)) = matches.subcommand() {
             ensure!(
@@ -132,63 +106,43 @@ pub fn main() -> ExitCode {
                 .unwrap_or(false);
             let explicit = sub.get_one::<String>("config").map(PathBuf::from);
             let path = explicit.clone().or_else(|| {
-                (command == "csfggenerate"
-                    || command != "csfsgenerate" && Path::new("rcsfs.toml").is_file())
-                .then(|| PathBuf::from("rcsfs.toml"))
+                (command != "csfsgenerate" && Path::new("rcsfs.toml").is_file())
+                    .then(|| PathBuf::from("rcsfs.toml"))
             });
             let root = path
                 .as_ref()
                 .map(|p| config::read(p))
                 .transpose()?
                 .unwrap_or_default();
-            let settings = if command == "csfggenerate" {
-                let s = Settings {
-                    values: overrides,
-                    config: path,
-                    conf: None,
-                };
-                s.validate(command)?;
-                s
-            } else {
-                config::settings(
-                    &root,
-                    command,
-                    path.as_deref(),
-                    None,
-                    explicit.is_some(),
-                    overrides,
-                    true,
-                )?
-            };
+            let settings = config::settings(
+                &root,
+                command,
+                path.as_deref(),
+                None,
+                explicit.is_some(),
+                overrides,
+                true,
+            )?;
             json_output = settings.flag("json", false)?;
-            Ok(Some((command.to_owned(), settings, root)))
+            Ok(vec![config::Job {
+                command: command.into(),
+                settings,
+            }])
         } else {
             let path = Path::new(batch.context("a subcommand or --config is required")?);
             let root = config::read(path)?;
             // Validate here so malformed batches have the argument-error exit code.
-            if !root.contains_key("csfggenerate") {
-                config::batch(&root, path)?;
-            }
-            Ok(None)
+            config::batch(&root, path)
         }
     })();
-    let prepared = match preparation {
+    let jobs = match preparation {
         Ok(value) => value,
         Err(error) => {
             report_error(&error, json_output);
             return ExitCode::from(2);
         }
     };
-    let execution = (|| -> Result<()> {
-        if let Some((command, settings, root)) = prepared {
-            let path = settings.config.clone();
-            run_logged(&[config::Job { command, settings }], path.as_deref(), &root)
-        } else {
-            let path = Path::new(matches.get_one::<String>("config").unwrap());
-            run_batch(path, &config::read(path)?)
-        }
-    })();
-    match execution {
+    match run_logged(&jobs) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             report_error(&error, json_output);

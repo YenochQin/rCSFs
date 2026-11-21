@@ -160,7 +160,7 @@ pub(super) fn batch(root: &Table, path: &Path) -> Result<Vec<Job>> {
         }
         let command = name.as_str();
         ensure!(
-            arguments::COMMANDS.iter().any(|(c, _)| *c == command) && command != "csfggenerate",
+            arguments::COMMANDS.iter().any(|(c, _)| *c == command),
             "unsupported config section: {name}"
         );
         let count = if let Some(array) = value.as_array() {

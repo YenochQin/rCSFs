@@ -15,13 +15,11 @@ from typing import Literal
 from polars import DataFrame
 
 from . import _rcsfs as _native
-from ._csfg import generate_csfgs
 from ._types import (
     CsfDatasetSplitStats,
     CsfDatasetStats,
     CsfGenerationEstimate,
     CsfGenerationStats,
-    CsfgGenerationStats,
     CsfHeaderData,
     CsfRestoreStats,
     InteractionHamiltonian,
@@ -307,7 +305,6 @@ __all__ = [
     "CsfGenerationStats",
     "CsfHeaderData",
     "CsfRestoreStats",
-    "CsfgGenerationStats",
     "InteractionHamiltonian",
     "InteractionMethod",
     "InteractionStats",
@@ -317,7 +314,6 @@ __all__ = [
     "convert_csfs",
     "descriptor_header_path",
     "estimate_disk_generation",
-    "generate_csfgs",
     "generate_csfs_from_transcript",
     "get_parquet_info",
     "match_csfs",

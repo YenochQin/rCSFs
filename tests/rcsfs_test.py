@@ -2,7 +2,9 @@ from pathlib import Path
 
 import pytest
 
+import rcsfs
 from rcsfs import (
+    _rcsfs,
     convert_csfs,
     descriptor_header_path,
     generate_csfs_from_transcript,
@@ -16,6 +18,12 @@ from rcsfs import (
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 E1_CC1AS1_TRANSCRIPT = FIXTURES_DIR / "e1_cc1as1.rcsfgenerate"
+
+
+def test_retired_csfg_api_is_absent_from_package_and_extension() -> None:
+    assert not hasattr(rcsfs, "CsfgGenerationStats")
+    assert not hasattr(rcsfs, "generate_csfgs")
+    assert not hasattr(_rcsfs, "generate_csfgs")
 
 
 def test_end_to_end_public_python_api_defaults_to_v3(tmp_path: Path) -> None:

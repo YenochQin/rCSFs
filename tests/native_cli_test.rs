@@ -138,7 +138,6 @@ fn help_version_and_each_command_run_without_python() {
         "convert",
         "info",
         "csfsgenerate",
-        "csfggenerate",
         "zero-first",
         "csfs-split",
         "jsplit",
@@ -478,53 +477,30 @@ fn malformed_import_reports_error_and_preserves_complete_output() {
 }
 
 #[test]
-fn csfg_matches_independent_fixture_and_protects_existing_files() {
+fn retired_csfg_command_and_batch_are_rejected_before_execution() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
-    fs::write(p.join("model.toml"), "[csfggenerate]\ninactive_core = 0\nreference_configuration = ['1s(2,*)']\nlabeling_space = '1s'\nactive_space = '3s,3p'\nj_min = 0\nj_max = 4\nexcitations = 2\nthreads = 1\n").unwrap();
-    let stats = json(p, &["csfggenerate", "-c", "model.toml", "--json"]);
-    assert_eq!(stats["record_count"], 16);
+    let help = success(p, &["--help"]);
+    assert!(!String::from_utf8_lossy(&help.stdout).contains("csfggenerate"));
     assert_eq!(
-        fs::read(p.join("rcsfg.out")).unwrap(),
-        fs::read(fixture("csfg/rcsfg.txt")).unwrap()
+        invoke(p, &["csfggenerate", "--help"]).status.code(),
+        Some(2)
     );
-    assert_eq!(
-        fs::read(p.join("rlabel.out")).unwrap(),
-        fs::read(fixture("csfg/rlabel.txt")).unwrap()
-    );
+
+    fs::write(
+        p.join("old.toml"),
+        format!("[csfsgenerate]\n{MODEL}[csfggenerate]\n"),
+    )
+    .unwrap();
+    let result = invoke(p, &["-c", "old.toml"]);
+    assert_eq!(result.status.code(), Some(2));
     assert!(
-        !invoke(p, &["csfggenerate", "-c", "model.toml"])
-            .status
-            .success()
+        String::from_utf8_lossy(&result.stderr)
+            .contains("unsupported config section: csfggenerate")
     );
-    success(p, &["csfggenerate", "-c", "model.toml", "--overwrite"]);
+    assert_eq!(fs::read_dir(p).unwrap().count(), 1);
 }
-#[test]
-fn csfg_numbered_layers_are_published_only_after_all_models_succeed() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path();
-    let model = "conf = 'he'\n[[csfggenerate]]\nas = 2\ninactive_core = 0\nreference_configuration = ['1s(2,*)']\nlabeling_space = '1s'\nactive_space = '3s,3p'\nj_min = 0\nj_max = 4\nexcitations = 2\nthreads = 1\n[csfg-split.active_spaces]\nAS1 = '2s,2p'\n";
-    fs::write(p.join("model.toml"), model).unwrap();
-    success(p, &["-c", "model.toml"]);
-    for name in ["he_as2raw.g", "he_as2raw.l", "he_as1raw.g", "he_as1raw.l"] {
-        assert!(p.join(name).exists());
-    }
-    let log = fs::read_to_string(p.join("rcsfs_he.log")).unwrap();
-    let events: Vec<Value> = log
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    let result = events
-        .iter()
-        .find(|event| event["event"] == "result")
-        .unwrap();
-    assert_eq!(result["stats"]["results"].as_array().unwrap().len(), 2);
-    assert_eq!(events.last().unwrap()["success"], true);
-    let failing = model.replace("'he'", "'bad'").replace("'2s,2p'", "'2p'");
-    fs::write(p.join("bad.toml"), failing).unwrap();
-    assert!(!invoke(p, &["-c", "bad.toml"]).status.success());
-    assert!(!p.join("bad_as2raw.g").exists());
-}
+
 #[test]
 
 fn jsplit_copies_orbitals_and_accepts_config() {

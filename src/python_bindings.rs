@@ -16,10 +16,6 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(select_interacting_csfs, m)?)?;
     m.add_function(wrap_pyfunction!(seniority_to_printed_v, m)?)?;
     m.add_function(wrap_pyfunction!(
-        configuration_generation::csfg_generation::python_csfg_bindings::generate_csfgs,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
         configuration_generation::csf_generation::python_csf_bindings::estimate_disk_generation,
         m
     )?)?;

@@ -118,9 +118,11 @@ def check_archive(path: Path) -> tuple[str, bool]:
                     "rcsfs/cli.py",
                     "rcsfs/_cli_config.py",
                     "rcsfs/_cli_log.py",
+                    "rcsfs/_csfg.py",
                     "rcsfs/_csfg_cli.py",
+                    "rcsfs/_publication.py",
                 ]
-            ), "Retired Python CLI modules are packaged"
+            ), "Retired Python modules are packaged"
             assert archive.read(native_path).startswith(
                 (
                     b"\x7fELF",

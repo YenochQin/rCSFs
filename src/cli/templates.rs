@@ -82,21 +82,6 @@ pub(super) fn template(command: &str) -> Option<&'static str> {
 # json = false
 "###
         }
-        "csfggenerate" => {
-            r###"# [csfggenerate]
-# inactive_core = 0
-# reference_configuration = ["1s(2,*)"]
-# labeling_space = "1s"
-# active_space = "2s"
-# j_min = 0
-# j_max = 0
-# excitations = 2
-# rcsfg_out = "rcsfg.out"
-# rlabel_out = "rlabel.out"
-# threads = 8
-# overwrite = false
-"###
-        }
         _ => return None,
     })
 }

@@ -9,6 +9,8 @@
 - Rust 按源行号恢复 V3 记录时保留已提供的块边界。修改内存 CSF 的中间耦合后，
   描述符编码使用更新后的值。逐行解析支持空占据行、空态行和 `0+` 表示的闭核记录。
 - 唯一性回归测试逐项核对需要额外 `w` 标签的歧义态，并继续检查同一组态中的所有可编码态。
+- 移除直接生成 CSFG 的 Rust 模块、Python 接口 `generate_csfgs`、CLI 命令 `csfggenerate` 和配套 TOML 配置。
+  旧实现保存在 Git 标签 `v3.2.0`。
 
 ## [3.2.0]
 
@@ -108,7 +110,7 @@
 
 - 将有关联的 CSF/CSFG 实现统一放入 `src/configuration_generation/`，以 `shared_generation/`、`csf_generation/`、`csfg_generation/` 区分共享算法及两套生成流程。
 - 将 `pipeline.rs`、`plan.rs`、`writer.rs`、`states.rs` 等文件改为具体职责名称；将生成用 PyO3 绑定归入对应子目录，`mod.rs` 仅保留声明与导出。
-- 保留 Rust `csf_generation`/`csf_generation::csfg` 兼容导出，Python 函数、命令和 TOML 契约不变；结构与路径映射见 [源码布局](GENERATION_SOURCE_LAYOUT.md)。
+- 保留 Rust `csf_generation`/`csf_generation::csfg` 兼容导出，Python 函数、命令和 TOML 契约不变；结构与路径映射见 [当时的源码布局](https://github.com/YenochQin/rCSFs/blob/v3.2.0/docs/GENERATION_SOURCE_LAYOUT.md)。
 
 ### 直接生成 GRASPG CSFG（2026-10-30）
 

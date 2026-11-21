@@ -1,5 +1,5 @@
 //! Append full run records and library diagnostics without flooding the console.
-use super::{config, csfg, files};
+use super::{config, files};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -10,7 +10,6 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use toml::Table;
 
 struct State {
     file: File,
@@ -30,11 +29,10 @@ pub(super) fn now() -> Result<u128> {
 }
 
 impl RunLog {
-    pub fn open(jobs: &[config::Job], path: Option<&Path>, root: &Table) -> Result<Self> {
-        let conf = jobs
-            .first()
-            .and_then(|job| job.settings.conf.as_deref())
-            .or_else(|| root.get("conf").and_then(toml::Value::as_str));
+    pub fn open(jobs: &[config::Job]) -> Result<Self> {
+        let settings = &jobs.first().context("no commands to log")?.settings;
+        let conf = settings.conf.as_deref();
+        let path = settings.config.as_deref();
         if let Some(conf) = conf {
             files::safe_stem(conf)?;
         }
@@ -50,11 +48,7 @@ impl RunLog {
             files::distinct(&log_path, path).context("run log conflicts with configuration")?;
         }
         for job in jobs {
-            let outputs = if job.command == "csfggenerate" {
-                csfg::output_paths(root)?
-            } else {
-                config::output_paths(job)?
-            };
+            let outputs = config::output_paths(job)?;
             // Check output aliases before creating the run log, just as batches do.
             files::validate_set(&outputs, &[], path)?;
             for output in outputs {

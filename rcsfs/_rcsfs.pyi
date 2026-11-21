@@ -7,7 +7,6 @@ from ._types import (
     CsfDatasetStats,
     CsfGenerationEstimate,
     CsfGenerationStats,
-    CsfgGenerationStats,
     CsfHeaderData,
     CsfRestoreStats,
     InteractionHamiltonian,
@@ -65,7 +64,9 @@ def match_csfs(
     require_all: bool = True,
 ) -> list[int | None]: ...
 def get_parquet_info(input_path: str) -> ParquetInfo: ...
-def read_zero_order_counts(input_path: str, header_path: str | None = None) -> list[int] | None: ...
+def read_zero_order_counts(
+    input_path: str, header_path: str | None = None
+) -> list[int] | None: ...
 def partition_csfs(
     zero_parquet: str,
     zero_header: str,
@@ -119,15 +120,3 @@ def select_interacting_csfs(
     num_workers: int | None = None,
     overwrite: bool = False,
 ) -> InteractionStats: ...
-def generate_csfgs(
-    inactive_core: int,
-    reference_configuration: list[str],
-    labeling_space: str,
-    active_space: str,
-    j_min: int,
-    j_max: int,
-    excitations: int,
-    csfg_output: str,
-    label_output: str,
-    threads: int | None = None,
-) -> CsfgGenerationStats: ...

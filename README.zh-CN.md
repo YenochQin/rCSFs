@@ -63,12 +63,4 @@ Python 中用 `convert_csfs` 显式导入文本，`read_csfs` 读取 header 和�
 文本。直接生成用 `generate_csfs_from_transcript(transcript, output_path)`。
 完整示例见[英文说明](README.md)，变更见[更新日志](docs/CHANGELOG.md)。
 
-## 直接生成 CSFG
-
-`rcsfs csfggenerate --config csfg.toml --threads 8 --json` 可直接用 Rust 生成
-GRASPG 兼容的 `rcsfg.out` 和 `rlabel.out`。首版支持显式标记空间、共同连续相关范围的
-S/SD 模型，不先写出完整 CSF 列表。覆盖已有文件需要显式 `--overwrite`。
-配置示例、Python 接口和限制见 [CSFG 使用说明](docs/CSFG_GENERATION.md)，
-文件兼容性与计时见 [Gd 基准](docs/benchmarks/csfg_gd_20261030.md)。
-
-源码组织见[共享内核与 CSF/CSFG 分层布局](docs/GENERATION_SOURCE_LAYOUT.md)。
+[CSF 生成源码布局](docs/GENERATION_SOURCE_LAYOUT.md)

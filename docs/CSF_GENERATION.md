@@ -1,12 +1,7 @@
 # Fixed-configuration CSF generation
 
-The related full-CSF and CSFG implementations now share
-[`src/configuration_generation/`](GENERATION_SOURCE_LAYOUT.md), with separate
-`csf_generation/`, `csfg_generation/`, and `shared_generation/` directories.
-
-For direct GRASPG-compatible CSFG output, see the
-[CSFG generation guide](CSFG_GENERATION.md). The interfaces below continue to
-generate complete CSFs; the new `csfggenerate` command is separate.
+The [source layout](GENERATION_SOURCE_LAYOUT.md) describes the occupation and
+angular-coupling algorithms used by the memory and disk generation paths.
 
 The current disk path reports its managed memory budget alongside the stage
 timings. Operating-system RSS is measured separately.

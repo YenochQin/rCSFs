@@ -4,7 +4,7 @@
 并与原版 GRASPG 对 AS4 的拆分保持文件一致。判据为逐字节一致，
 不是仅比较数量；不涉及 SCF/RCI 或物理收敛结论。
 
-输入见 [完整 TOML](../../examples/gd_csfg_batch.toml)，线程数 8。
+输入见 [完整 TOML](https://github.com/YenochQin/rCSFs/blob/v3.2.0/examples/gd_csfg_batch.toml)，线程数 8。
 运行当前源码 CLI；全部五层生成墙钟时间 4.070 秒（单次测量，包含启动和写盘）。
 
 | 层 | CSF(G) 记录 | 展开 CSF 数 |

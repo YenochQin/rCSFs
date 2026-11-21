@@ -119,14 +119,4 @@ See [the V3 descriptor guide](docs/CSF_DESCRIPTOR_GUIDE.md)
 for the physical channels and [the changelog](docs/CHANGELOG.md) for changes
 since 3.0.1. rCSFs is distributed under the [MIT license](LICENSE).
 
-## Direct CSFG generation
-
-`rcsfs csfggenerate --config csfg.toml --threads 8 --json` generates
-GRASPG-compatible `rcsfg.out` and `rlabel.out` directly in Rust. The first
-version supports a common continuous S/SD correlation space with an explicit
-labeling space. It does not first write a full CSF list. Existing outputs require
-`--overwrite`.
-See the [configuration, Python interface and limits](docs/CSFG_GENERATION.md)
-and the [Gd compatibility/performance report](docs/benchmarks/csfg_gd_20261030.md).
-
-Source organization: [shared kernel and separate CSF/CSFG workflows](docs/GENERATION_SOURCE_LAYOUT.md).
+[CSF generation source layout](docs/GENERATION_SOURCE_LAYOUT.md)

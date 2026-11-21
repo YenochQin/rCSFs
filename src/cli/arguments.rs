@@ -41,10 +41,6 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
         "Generate CSFs interactively, from TOML, or from a transcript.",
     ),
     (
-        "csfggenerate",
-        "Generate GRASPG-compatible CSFG and label files from TOML.",
-    ),
-    (
         "zero-first",
         "Partition each symmetry block into zero-order and first-order CSFs.",
     ),
@@ -122,15 +118,6 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
                 Some("generation-storage"),
                 Text,
                 "Generation backend: memory or disk."
-            ),
-        ],
-        "csfggenerate" => vec![
-            field!("threads", Some("threads"), Number, "Worker threads."),
-            field!(
-                "overwrite",
-                Some("overwrite"),
-                Flag,
-                "Replace existing CSFG outputs."
             ),
         ],
         "zero-first" => vec![

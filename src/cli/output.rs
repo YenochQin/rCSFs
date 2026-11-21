@@ -77,28 +77,12 @@ pub(super) fn summary(command: &str, stats: &Value, elapsed: f64) -> String {
     writeln!(out, "\n{}", "=".repeat(REPORT_WIDTH)).unwrap();
     writeln!(out, "{command}: {status} ({elapsed:.2} s)").unwrap();
     writeln!(out, "{}", "-".repeat(REPORT_WIDTH)).unwrap();
-    if let Some(results) = stats["results"].as_array() {
-        for (index, result) in results.iter().enumerate() {
-            section(&mut out, &format!("Model {}", count(index as u64 + 1)));
-            details(&mut out, command, result);
-        }
-    } else {
-        details(&mut out, command, stats);
-    }
+    details(&mut out, stats);
     out
 }
 
-fn details(out: &mut String, command: &str, stats: &Value) {
-    number(
-        out,
-        stats,
-        "record_count",
-        if command == "csfggenerate" {
-            "CSFG records"
-        } else {
-            "CSFs"
-        },
-    );
+fn details(out: &mut String, stats: &Value) {
+    number(out, stats, "record_count", "CSFs");
     for (key, label) in [
         ("csf_count", "CSFs"),
         ("input_csf_count", "Input CSFs"),
@@ -107,9 +91,6 @@ fn details(out: &mut String, command: &str, stats: &Value) {
         ("block_count", "Symmetry blocks"),
         ("descriptor_count", "Descriptors"),
         ("duplicate_count", "Duplicates removed"),
-        ("label_csf_count", "Label CSFs"),
-        ("generator_count", "Generators"),
-        ("expanded_csf_count", "Expanded CSFs"),
         ("zero_csf_count", "Zero-order CSFs"),
         ("full_csf_count", "Complete-space CSFs"),
         ("first_order_count", "First-order CSFs"),
@@ -160,17 +141,7 @@ fn details(out: &mut String, command: &str, stats: &Value) {
         .as_array()
         .filter(|blocks| !blocks.is_empty())
     {
-        writeln!(
-            out,
-            "\n  {:<16} {:>18}",
-            "J / parity",
-            if command == "csfggenerate" {
-                "CSFG records"
-            } else {
-                "CSFs"
-            }
-        )
-        .unwrap();
+        writeln!(out, "\n  {:<16} {:>18}", "J / parity", "CSFs").unwrap();
         writeln!(out, "  {}+{}", "-".repeat(16), "-".repeat(18)).unwrap();
         for block in blocks {
             let count_value = block["record_count"]
@@ -187,8 +158,6 @@ fn details(out: &mut String, command: &str, stats: &Value) {
         ("header_file", "Header"),
         ("descriptor_parquet_file", "Descriptors"),
         ("descriptor_metadata_file", "Descriptor metadata"),
-        ("rcsfg_out", "CSFG file"),
-        ("rlabel_out", "Label file"),
     ];
     if artifacts.iter().any(|(key, _)| stats[key].is_string()) {
         section(out, "Output files");

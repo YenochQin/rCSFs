@@ -13,14 +13,10 @@
   生成及拆分遇到发布冲突时回滚本次文件。校准 Int8 输出容量估算，修正最终合并的
   输入字节数及基准的 scratch 和清理耗时统计。源码包包含发布自检使用的多块 CSF 夹具。
 
-- Generate a bound V2 descriptor Parquet and header TOML by default. Disk
-  generation writes the descriptor pair directly and estimates its space.
-- Read, select, merge, match, partition and split CSFs through numerical
-  descriptors. Preserve explicit block order and distinguish missing couplings
-  from printed zeros.
-- `interacting` streams candidate V2 rows against each reference block.
-  `interacting` and `zero-first` validate and compare numeric channels directly,
-  preserving physical seniority and the distinction between missing and zero.
+- 生成、读取和转换统一使用 V3 描述符。每个轨道保存占据、物理 seniority、`2J+1`
+  和累计 `2K+1`，全局列保存总 `2J+1` 和宇称。V1/V2 文件须从原始 CSF 文本或生成输入重建。
+- 文本转换按完整耦合链解析留白，文本恢复按规范打印。Python 分组签名继续使用物理 `2J`，
+  精确匹配和去重使用对齐到同一有序轨道表后的完整 V3 整数行。
 - `zero-first` writes the ordered zero-order counts to the bound header's
   `block_info.zero_order_counts` field for use by suite MPI programs.
   `read_zero_order_counts` checks the descriptor schema and header binding and
@@ -31,7 +27,7 @@
 
 - 移除专供 Fortran 使用的原生描述符 reader、C ABI、`descriptor-ffi` feature 及 `native-reader/` 独立构建入口；该读取库已由 grasp-atomic-suite 内置并独立维护。rCSFs 保留 `descriptor_transport` / `descriptor_schema` 格式契约，以及原有描述符生成、读取、解码和文本恢复功能。清理相应 CI、打包清单和文档入口。
 
-- header 新增可选的 `header_info.electron_count`，表示包含满占据 core 在内的总电子数；磁盘生成直接从占据配置写出，内存生成、文本转换及 `read_csfs` 从原始头部与第一个完整 CSF 提取，保持旧 header 和无法推断电子数的文本输入兼容。描述符继续绑定包含该字段的最终 header 字节哈希；补充 core、分块、截断、CLI 发布、多列表及字段篡改的回归测试。
+- V3 header 要求 `header_info.electron_count`，表示包含满占据 core 在内的总电子数；磁盘生成直接从占据配置写出，内存生成、文本转换及 `read_csfs` 从原始头部与第一个完整 CSF 提取。描述符继续绑定包含该字段的最终 header 字节哈希；补充 core、分块、截断、CLI 发布、多列表及字段篡改的回归测试。
 
 - 取消 `ci.yml` 的 push 自动触发，保留 pull request 检查和手动运行；`publish.yml` 继续仅由手动操作触发。
 

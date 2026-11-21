@@ -1,14 +1,14 @@
 //! Ordered numerical CSF transformations over descriptor/header datasets.
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::configuration_generation::Subshell;
 use crate::descriptor_dataset::{
     DatasetHeader, DatasetStats, DatasetWriter, DescriptorRows, header_path, output_identity,
 };
-use crate::descriptor_schema::{UNOCCUPIED_V2, row_symmetry};
+use crate::descriptor_schema::{empty_slot, row_symmetry};
 
 #[derive(Debug, Clone)]
 pub struct ActiveSpaceTarget {
@@ -17,7 +17,7 @@ pub struct ActiveSpaceTarget {
 }
 
 /// Merge orbital sequences without changing any input's relative coupling order.
-fn common_header(headers: &[DatasetHeader]) -> Result<DatasetHeader> {
+pub(crate) fn common_header(headers: &[DatasetHeader]) -> Result<DatasetHeader> {
     let mut header = headers.first().context("no input datasets")?.clone();
     for other in &headers[1..] {
         header.add_truncations_from(other)?;
@@ -57,26 +57,43 @@ fn common_header(headers: &[DatasetHeader]) -> Result<DatasetHeader> {
     Ok(header)
 }
 
-fn mapping(source: &DatasetHeader, target: &DatasetHeader) -> Result<Vec<usize>> {
-    source
-        .peel
+pub(crate) fn mapping(source: &[String], target: &[String]) -> Result<Vec<usize>> {
+    let indices = source
         .iter()
         .map(|label| {
             target
-                .peel
                 .iter()
                 .position(|value| value == label)
                 .context("output orbital table omits an input orbital")
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        indices.windows(2).all(|pair| pair[0] < pair[1]),
+        "incompatible orbital ordering; recoupling is not supported"
+    );
+    Ok(indices)
 }
 
-fn remap(row: &[i8], indices: &[usize], width: usize) -> Vec<i8> {
-    let mut mapped = UNOCCUPIED_V2.repeat((width - 2) / 4);
-    mapped.extend_from_slice(&row[row.len() - 2..]);
-    for (source, target) in indices.iter().enumerate() {
-        mapped[4 * target..4 * target + 4].copy_from_slice(&row[4 * source..4 * source + 4]);
+pub(crate) fn remap(row: &[i8], indices: &[usize], width: usize) -> Vec<i8> {
+    let mut mapped = Vec::with_capacity(width);
+    let mut source = row[..row.len() - 2]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(indices)
+        .peekable();
+    let mut cumulative = 1;
+    for index in 0..(width - 2) / 4 {
+        if source.peek().is_some_and(|(_, target)| **target == index) {
+            let (slot, _) = source.next().expect("source slot is present");
+            mapped.extend_from_slice(slot);
+            cumulative = slot[3];
+        } else {
+            mapped.extend_from_slice(&empty_slot(cumulative));
+        }
     }
+    debug_assert!(source.next().is_none());
+    mapped.extend_from_slice(&row[row.len() - 2..]);
     mapped
 }
 
@@ -97,16 +114,23 @@ pub fn merge(
         .flat_map(|(a, b)| [a.as_path(), b.as_path()])
         .collect::<Vec<_>>();
     let mut writer = DatasetWriter::new(common.clone(), output, output_header, &input_paths)?;
+    let counts = headers
+        .iter()
+        .map(DatasetHeader::zero_order_counts)
+        .collect::<Result<Option<Vec<_>>>>()?
+        .map(|blocks| blocks.into_iter().flatten().collect::<Vec<_>>());
     let mut block_offset = 0;
     for ((input, header_path), header) in inputs.iter().zip(&headers) {
-        let indices = mapping(header, &common)?;
+        let indices = mapping(&header.peel, &common.peel)?;
         let mut rows = DescriptorRows::open(input, header_path)?;
         while let Some((_, block, row)) = rows.next_row()? {
             writer.push(&remap(&row, &indices, width), block_offset + block)?;
         }
         block_offset += header.block_lengths.len();
     }
-    writer.finish()
+    writer
+        .prepare_with_zero_order_counts(counts.as_deref())?
+        .publish()
 }
 
 #[derive(Debug, Serialize)]
@@ -144,9 +168,13 @@ pub fn zero_first(
         zero.header.block_lengths.len() == all.header.block_lengths.len(),
         "reference/full block counts differ"
     );
+    ensure!(
+        zero.header.electron_count == all.header.electron_count,
+        "reference/full electron counts differ"
+    );
     let common = common_header(&[zero.header.clone(), all.header.clone()])?;
-    let zero_map = mapping(&zero.header, &common)?;
-    let full_map = mapping(&all.header, &common)?;
+    let zero_map = mapping(&zero.header.peel, &common.peel)?;
+    let full_map = mapping(&all.header.peel, &common.peel)?;
     let width = common.layout().row_len();
     let mut writer = DatasetWriter::new(
         common,
@@ -207,7 +235,7 @@ pub fn zero_first(
 }
 
 /// Resolve a selected basis against a full basis without decoding CSF strings.
-/// Exact descriptor channels (including omitted versus printed zero) are retained.
+/// Exact occupation, state, cumulative coupling and symmetry identify each CSF.
 pub fn match_indices(
     full: &Path,
     full_header: &Path,
@@ -218,8 +246,8 @@ pub fn match_indices(
     let mut pool = DescriptorRows::open(full, full_header)?;
     let mut seed = DescriptorRows::open(selected, selected_header)?;
     let common = common_header(&[pool.header.clone(), seed.header.clone()])?;
-    let full_map = mapping(&pool.header, &common)?;
-    let seed_map = mapping(&seed.header, &common)?;
+    let full_map = mapping(&pool.header.peel, &common.peel)?;
+    let seed_map = mapping(&seed.header.peel, &common.peel)?;
     let width = common.layout().row_len();
     let mut requested = HashMap::<Vec<i8>, usize>::new();
     let mut matched = Vec::new();
@@ -273,6 +301,7 @@ pub fn split_active_spaces(
 ) -> Result<Vec<DatasetStats>> {
     ensure!(!targets.is_empty(), "no active-space targets");
     let mut source = DescriptorRows::open(input, input_header)?;
+    let prefix_ends = source.header.zero_order_ends()?;
     let mut outputs = HashSet::new();
     let mut prepared = Vec::new();
     for (output, output_header, active_space) in targets {
@@ -314,10 +343,10 @@ pub fn split_active_spaces(
         header.lines[3] = header.peel.join("  ");
         let writer = DatasetWriter::new(header, output, output_header, &[input, input_header])?
             .with_batch_rows(8192 / targets.len());
-        prepared.push((retained, writer));
+        prepared.push((retained, writer, BTreeMap::<usize, usize>::new()));
     }
-    while let Some((_, block, row)) = source.next_row()? {
-        for (retained, writer) in &mut prepared {
+    while let Some((ordinal, block, row)) = source.next_row()? {
+        for (retained, writer, counts) in &mut prepared {
             if retained
                 .iter()
                 .enumerate()
@@ -333,11 +362,19 @@ pub fn split_active_spaces(
             }
             filtered.extend_from_slice(&row[row.len() - 2..]);
             writer.push(&filtered, block)?;
+            if let Some(ends) = &prefix_ends {
+                *counts.entry(block).or_default() += usize::from(ordinal < ends[block]);
+            }
         }
     }
     let ready = prepared
         .into_iter()
-        .map(|(_, w)| w.prepare())
+        .map(|(_, writer, counts)| {
+            let counts = prefix_ends
+                .as_ref()
+                .map(|_| counts.into_values().collect::<Vec<_>>());
+            writer.prepare_with_zero_order_counts(counts.as_deref())
+        })
         .collect::<Result<Vec<_>>>()?;
     crate::descriptor_dataset::PreparedDataset::publish_all(ready)
 }

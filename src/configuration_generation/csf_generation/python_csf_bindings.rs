@@ -113,7 +113,7 @@ pub(crate) fn estimate_disk_generation(
         estimate.capacity.pre_deduplication_records,
     )?;
     output.set_item("peel_subshells", estimate.capacity.peel_subshells)?;
-    output.set_item("v2_columns", estimate.capacity.v2_columns)?;
+    output.set_item("descriptor_columns", estimate.capacity.descriptor_columns)?;
     output.set_item("segment_codec", estimate.segment_codec)?;
     output.set_item("deduplication", estimate.deduplication)?;
     output.set_item("enumeration_millis", estimate.enumeration_millis)?;

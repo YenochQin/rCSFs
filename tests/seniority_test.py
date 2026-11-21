@@ -64,7 +64,7 @@ def test_physical_seniority_values_and_exact_text_restoration(tmp_path: Path) ->
     source, header, descriptors = _descriptors(tmp_path)
     table = pq.read_table(descriptors)
     assert pq.read_metadata(descriptors).metadata[b"seniority_encoding"] == b"physical"
-    assert [table[f"sub{i}_v"].to_pylist() for i in range(4)] == [
+    assert [table[f"sub{i}_seniority"].to_pylist() for i in range(4)] == [
         [1, 0, 0, 0, 0],
         [0, 0, 0, 0, 0],
         [1, 0, 0, 0, 0],
@@ -101,7 +101,7 @@ def test_restore_rejects_legacy_encoding_before_output(
 def test_restore_rejects_negative_physical_seniority(tmp_path: Path) -> None:
     _, header, descriptors = _descriptors(tmp_path)
     table = pq.read_table(descriptors)
-    column = table.schema.get_field_index("sub0_v")
+    column = table.schema.get_field_index("sub0_seniority")
     table = table.set_column(
         column, table.schema.field(column), pa.array([-1, 0, 0, 0, 0], type=pa.int8())
     )

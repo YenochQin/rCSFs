@@ -1,17 +1,25 @@
 //! Descriptor transport contract plus producer-side record validation.
 use crate::complete_csf::{IntermediateCoupling, OccupiedSubshell};
-use crate::configuration_generation::shared_generation::{Subshell, subshell_states};
+use crate::configuration_generation::Subshell;
 pub use crate::descriptor_transport::*;
-use crate::seniority::validate_physical_seniority;
+use crate::seniority::{physical_states, validate_physical_seniority};
 use anyhow::{Context, Result, ensure};
 
-pub(crate) const UNOCCUPIED_V2: [i8; 4] = [0, MISSING, 0, MISSING];
-
-pub(crate) fn row_symmetry(row: &[i8]) -> (i8, i8) {
-    (row[row.len() - 2], row[row.len() - 1])
+pub(crate) const fn empty_slot(cumulative_code: i8) -> [i8; 4] {
+    [0, 0, 1, cumulative_code]
 }
 
-/// Validate V2 channels directly, with orbital labels resolved once per dataset.
+/// Return physical total 2J and parity from an already validated row.
+pub(crate) fn row_symmetry(row: &[i8]) -> (i8, i8) {
+    (row[row.len() - 2] - 1, row[row.len() - 1])
+}
+
+pub(crate) fn valid_coupling(previous: u16, subshell: u16, cumulative: u16) -> bool {
+    let lower = previous.abs_diff(subshell);
+    (lower..=previous + subshell).contains(&cumulative) && (cumulative - lower).is_multiple_of(2)
+}
+
+/// Validate raw V3 channels with orbital labels resolved once per dataset.
 pub(crate) struct DescriptorRowValidator {
     peel: Vec<Subshell>,
     core_electrons: usize,
@@ -32,81 +40,49 @@ impl DescriptorRowValidator {
     }
 
     pub(crate) fn validate(&self, row: &[i8], electron_count: &mut Option<usize>) -> Result<()> {
-        let layout = DescriptorLayout::new(DescriptorVersion::V2, self.peel.len());
+        let layout = DescriptorLayout::new(DescriptorVersion::V3, self.peel.len());
         ensure!(row.len() == layout.row_len(), "descriptor width mismatch");
-        let (total_j, parity) = row_symmetry(row);
-        let total_j = u16::try_from(total_j).context("invalid total 2J")?;
-        checked_angular_value(total_j, "total 2J")?;
-        let (slots, _) = row[..row.len() - 2].as_chunks::<4>();
+        let total_j = decode_angular(row[row.len() - 2], "total 2J+1")?;
+        let parity = row[row.len() - 1];
         let mut electrons = self.core_electrons;
         let mut parity_exponent = 0usize;
-        let mut first_occupied = None;
-        let mut last_occupied = None;
-        let mut last_nonzero_j = None;
-        for (index, (&slot, orbital)) in slots.iter().zip(&self.peel).enumerate() {
-            let [occupation, two_j, seniority, _] = slot;
+        let mut previous = 0;
+        for (&slot, orbital) in row[..layout.feature_len()]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(&self.peel)
+        {
+            let [occupation, seniority, j_code, k_code] = slot;
             if occupation == 0 {
-                ensure!(slot == UNOCCUPIED_V2, "invalid unoccupied subshell {index}");
+                ensure!(
+                    slot == empty_slot(encode_angular(previous, "cumulative 2K")?),
+                    "invalid empty subshell {orbital}: expected (0, 0, 1, previous cumulative code)"
+                );
                 continue;
             }
-            let occupation = u8::try_from(occupation).context("negative occupation")?;
-            ensure!(
-                occupation <= orbital.capacity(),
-                "occupation exceeds capacity"
-            );
-            let seniority = u8::try_from(seniority).context("negative physical seniority")?;
-            let printed_j = if two_j == MISSING {
-                None
-            } else {
-                let two_j = u16::try_from(two_j).context("negative subshell 2J")?;
-                checked_angular_value(two_j, "subshell 2J")?;
-                Some(two_j)
+            let validate_slot = || -> Result<(u8, u16)> {
+                let occupation = u8::try_from(occupation).context("negative occupation")?;
+                let seniority = u8::try_from(seniority).context("negative physical seniority")?;
+                let j = decode_angular(j_code, "subshell 2J+1")?;
+                let k = decode_angular(k_code, "cumulative 2K+1")?;
+                validate_physical_seniority(
+                    u16::from(orbital.capacity() - 1),
+                    occupation,
+                    j,
+                    seniority,
+                )?;
+                ensure!(
+                    valid_coupling(previous, j, k),
+                    "invalid angular momentum coupling from 2K={previous} through 2J={j} to 2K={k}"
+                );
+                Ok((occupation, k))
             };
-            validate_physical_seniority(
-                u16::from(orbital.capacity() - 1),
-                occupation,
-                printed_j,
-                seniority,
-            )?;
+            let (occupation, k) = validate_slot()
+                .with_context(|| format!("invalid descriptor subshell {orbital}"))?;
             electrons += usize::from(occupation);
             parity_exponent += usize::from(occupation) * usize::from(orbital.l());
-            first_occupied.get_or_insert(index);
-            last_occupied = Some(index);
-            if two_j > 0 {
-                last_nonzero_j = Some(index);
-            }
-        }
-
-        let mut previous = 0u16;
-        for (index, &[occupation, two_j, _, two_k]) in slots.iter().enumerate() {
-            if occupation == 0 {
-                continue;
-            }
-            let j = u16::try_from(two_j.max(0))?;
-            let coupled = if two_k != MISSING {
-                ensure!(
-                    Some(index) != first_occupied && Some(index) != last_occupied,
-                    "coupling boundary is outside the intermediate occupied subshells"
-                );
-                let k = u16::try_from(two_k).context("negative intermediate 2K")?;
-                checked_angular_value(k, "intermediate 2K")?;
-                k
-            } else if last_nonzero_j.is_none_or(|last| index >= last) {
-                total_j
-            } else if j == 0 {
-                previous
-            } else if previous == 0 {
-                j
-            } else {
-                anyhow::bail!("missing nontrivial intermediate coupling")
-            };
-            ensure!(
-                coupled >= previous.abs_diff(j)
-                    && coupled <= previous + j
-                    && (previous + j - coupled).is_multiple_of(2),
-                "invalid angular momentum coupling"
-            );
-            previous = coupled;
+            previous = k;
         }
         ensure!(previous == total_j, "incorrect final angular momentum");
         ensure!(electrons > 0, "empty electron basis");
@@ -127,20 +103,8 @@ impl DescriptorRowValidator {
     }
 }
 
-/// Validate that `occupied`/`couplings` are a legal CSF record over `subshells`.
-///
-/// This checks legality against GRASP's physical state tables, not
-/// generator reachability: an imported file may legally print a state the
-/// generator's own visibility rule (`mod.rs`'s `FIRST`-flag suppression)
-/// would never emit, and that must still validate. Checks performed:
-///
-/// - every occupied subshell index resolves into `subshells`;
-/// - occupied subshells appear in ascending (Peel) order with no duplicates;
-/// - `1 <= occupation <= capacity`;
-/// - a printed `(2J, seniority)` state is a member of the subshell's legal
-///   state table for that occupation;
-/// - each coupling boundary satisfies `2 <= boundary < occupied.len()`;
-/// - coupling boundaries are strictly increasing with no duplicates.
+/// Validate occupied indices, printed subshell state constraints and the
+/// ordering of explicit coupling boundaries before resolving the chain.
 pub fn validate_record(
     subshells: &[String],
     occupied: &[OccupiedSubshell],
@@ -172,16 +136,15 @@ pub fn validate_record(
             "occupation {} for {label:?} is outside 1..={capacity}",
             shell.occupation
         );
-
         if let Some(state) = shell.state {
-            let max_two_j = u16::from(capacity - 1);
-            let legal_states = subshell_states(max_two_j, shell.occupation).with_context(|| {
-                format!("no legal state table for {label:?}({})", shell.occupation)
-            })?;
+            encode_angular(state.two_j, "subshell 2J")
+                .with_context(|| format!("subshell {label}"))?;
+            let allowed = physical_states(u16::from(capacity - 1), shell.occupation)?;
             ensure!(
-                legal_states.contains(&state),
-                "printed state {state:?} for {label:?}({}) is not a legal subshell state",
-                shell.occupation
+                allowed
+                    .iter()
+                    .any(|candidate| candidate.matches_printed(state)),
+                "invalid printed state {state:?} at subshell {label}"
             );
         }
     }
@@ -212,18 +175,18 @@ mod tests {
     use crate::complete_csf::SubshellState;
 
     #[test]
-    fn validates_coupling_and_seniority_in_raw_v2_rows() {
+    fn validates_coupling_and_seniority_in_raw_v3_rows() {
         let peel = ["2s", "3s", "4s", "5s"].map(str::to_owned);
         let validator = DescriptorRowValidator::new(&[], &peel).unwrap();
-        let row = [2, -1, 0, -1, 2, 0, 0, 0, 1, 1, 1, -1, 1, 1, 1, -1, 0, 1];
+        let row = [2, 0, 1, 1, 2, 0, 1, 1, 1, 1, 2, 2, 1, 1, 2, 1, 1, 1];
         let mut electron_count = None;
         validator.validate(&row, &mut electron_count).unwrap();
         assert_eq!(electron_count, Some(6));
         for (index, value, message) in [
-            (2, 1, "physical seniority"),
-            (3, 0, "coupling boundary"),
+            (1, 1, "physical seniority"),
+            (3, 0, "code must be in 1..=127"),
             (7, 2, "invalid angular momentum coupling"),
-            (9, 127, "descriptor angular bound"),
+            (10, 127, "illegal physical seniority"),
             (17, -1, "incorrect parity"),
         ] {
             let mut modified = row;
@@ -231,13 +194,13 @@ mod tests {
             let error = validator
                 .validate(&modified, &mut electron_count)
                 .unwrap_err();
-            assert!(error.to_string().contains(message), "{error:#}");
+            assert!(format!("{error:#}").contains(message), "{error:#}");
         }
     }
 
     #[test]
-    fn v2_layout_adds_two_global_columns() {
-        let layout = DescriptorLayout::new(DescriptorVersion::V2, 3);
+    fn v3_layout_adds_two_global_columns() {
+        let layout = DescriptorLayout::new(DescriptorVersion::V3, 3);
         assert_eq!(layout.feature_len(), 12);
         assert_eq!(layout.row_len(), 14);
         assert_eq!(layout.total_two_j_index(), Some(12));
@@ -245,11 +208,24 @@ mod tests {
         assert_eq!(
             layout.feature_column_names(),
             [
-                "sub0_n", "sub0_2j", "sub0_v", "sub0_2k", "sub1_n", "sub1_2j", "sub1_v", "sub1_2k",
-                "sub2_n", "sub2_2j", "sub2_v", "sub2_2k",
+                "sub0_occupation",
+                "sub0_seniority",
+                "sub0_two_j_plus_one",
+                "sub0_cumulative_two_k_plus_one",
+                "sub1_occupation",
+                "sub1_seniority",
+                "sub1_two_j_plus_one",
+                "sub1_cumulative_two_k_plus_one",
+                "sub2_occupation",
+                "sub2_seniority",
+                "sub2_two_j_plus_one",
+                "sub2_cumulative_two_k_plus_one",
             ]
         );
-        assert_eq!(layout.global_column_names(), ["total_two_j", "parity"]);
+        assert_eq!(
+            layout.global_column_names(),
+            ["total_two_j_plus_one", "parity"]
+        );
     }
 
     #[test]
@@ -264,22 +240,6 @@ mod tests {
             }),
         }];
         validate_record(&subshells, &occupied, &[]).unwrap();
-    }
-
-    #[test]
-    fn validate_record_rejects_illegal_seniority_for_state() {
-        let subshells = vec!["4f".to_owned()];
-        // 4f(4) 2J=4 is only legal with seniority 2 or 4; seniority 9 does not exist.
-        let occupied = [OccupiedSubshell {
-            subshell_index: 0,
-            occupation: 4,
-            state: Some(SubshellState {
-                two_j: 4,
-                seniority: Some(9),
-            }),
-        }];
-        let error = validate_record(&subshells, &occupied, &[]).unwrap_err();
-        assert!(error.to_string().contains("not a legal subshell state"));
     }
 
     #[test]
@@ -390,7 +350,7 @@ mod tests {
 
     #[test]
     fn kv_metadata_round_trips_expected_keys() {
-        let layout = DescriptorLayout::new(DescriptorVersion::V2, 2);
+        let layout = DescriptorLayout::new(DescriptorVersion::V3, 2);
         let peel_subshells = vec!["4f-".to_owned(), "4f".to_owned()];
         let entries = output_kv_metadata(
             layout,
@@ -404,12 +364,12 @@ mod tests {
                 .find(|entry| entry.key == key)
                 .and_then(|entry| entry.value.clone())
         };
-        assert_eq!(get("descriptor_version"), Some("2".to_owned()));
+        assert_eq!(get("descriptor_version"), Some("3".to_owned()));
         assert_eq!(get("seniority_encoding"), Some("physical".to_owned()));
         assert_eq!(get("channels_per_subshell"), Some("4".to_owned()));
         assert_eq!(get("subshell_count"), Some("2".to_owned()));
         assert_eq!(get("peel_subshells"), Some("[\"4f-\",\"4f\"]".to_owned()));
-        assert_eq!(get("missing_sentinel"), Some("-1".to_owned()));
+        assert_eq!(get("missing_sentinel"), None);
         assert_eq!(get("normalized"), Some("false".to_owned()));
         assert_eq!(get("source_header_sha256"), Some("abc123".to_owned()));
         assert_eq!(

@@ -1,4 +1,4 @@
-//! Pre-flight capacity model for the V2 disk generation path.
+//! Pre-flight capacity model for the V3 disk generation path.
 //!
 //! The disk pipeline writes several times the size of its final output before it
 //! publishes anything: uncompressed Arrow segments, de-duplication buckets, the
@@ -20,7 +20,7 @@ use super::DeduplicationStrategy;
 const SEGMENT_OVERHEAD_NUMERATOR: u64 = 11;
 const SEGMENT_OVERHEAD_DENOMINATOR: u64 = 10;
 
-/// Bytes added to a root-bucket row beyond the V2 payload: a 16-byte digest and
+/// Bytes added to a root-bucket row beyond the V3 payload: a 16-byte digest and
 /// an 8-byte stable ordinal, plus room for bucket framing.
 const BUCKET_ROW_OVERHEAD_BYTES: u64 = 24;
 const BUCKET_ROW_FRAMING_BYTES: u64 = 32;
@@ -50,7 +50,7 @@ const MARGIN_DENOMINATOR: u64 = 4;
 #[derive(Clone, Debug)]
 pub(crate) struct CapacityEstimate {
     pub(crate) peel_subshells: usize,
-    pub(crate) v2_columns: u64,
+    pub(crate) descriptor_columns: u64,
     pub(crate) pre_deduplication_records: u64,
     pub(crate) segment_bytes: u64,
     pub(crate) root_bucket_bytes: u64,
@@ -155,12 +155,12 @@ pub(crate) fn estimate_capacity(
     strategy: DeduplicationStrategy,
 ) -> Result<CapacityEstimate> {
     let peel = u64::try_from(peel_subshells).context("peel subshell count exceeds u64")?;
-    let v2_columns = peel
+    let descriptor_columns = peel
         .checked_mul(4)
         .and_then(|columns| columns.checked_add(2))
-        .context("V2 column count overflow")?;
+        .context("V3 column count overflow")?;
     // Each descriptor value occupies exactly one byte in Arrow/scratch.
-    let row_bytes = v2_columns;
+    let row_bytes = descriptor_columns;
     let segment_row_bytes = scaled(
         row_bytes
             .checked_add(12)
@@ -207,7 +207,7 @@ pub(crate) fn estimate_capacity(
         .map(|hundredths| hundredths.div_ceil(100))
         .and_then(|bytes| bytes.checked_add(row_groups.checked_mul(BYTES_PER_COLUMN_CHUNK)?))
         .and_then(|bytes| bytes.checked_add(SCHEMA_BYTES_PER_COLUMN))
-        .and_then(|bytes| bytes.checked_mul(v2_columns))
+        .and_then(|bytes| bytes.checked_mul(descriptor_columns))
         .and_then(|bytes| bytes.checked_add(4096))
         .context("descriptor size estimate overflow")?;
     let staged_output_bytes = descriptor_bytes
@@ -232,13 +232,13 @@ pub(crate) fn estimate_capacity(
             }
         },
         format!(
-            "segments {segment_row_bytes} bytes/row = 1.1x the {row_bytes}-byte V2 row plus \
+            "segments {segment_row_bytes} bytes/row = 1.1x the {row_bytes}-byte V3 row plus \
              two ordinals; 10% overhead is retained from the earlier Int32 measurements \
              and has not been rebenchmarked for Int8; segments are modeled uncompressed"
         ),
         format!(
-            "root buckets {bucket_row_bytes} bytes/row = V2 row + 16-byte digest + 8-byte \
-             ordinal + framing; measured exactly V2 row + 24"
+            "root buckets {bucket_row_bytes} bytes/row = V3 row + 16-byte digest + 8-byte \
+             ordinal + framing; measured exactly V3 row + 24"
         ),
         format!(
             "recursive bucketing assumes {RECURSIVE_REPARTITION_LEVELS} additional full \
@@ -261,7 +261,7 @@ pub(crate) fn estimate_capacity(
 
     Ok(CapacityEstimate {
         peel_subshells,
-        v2_columns,
+        descriptor_columns,
         pre_deduplication_records,
         segment_bytes,
         root_bucket_bytes,

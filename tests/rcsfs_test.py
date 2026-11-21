@@ -18,7 +18,7 @@ FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 E1_CC1AS1_TRANSCRIPT = FIXTURES_DIR / "e1_cc1as1.rcsfgenerate"
 
 
-def test_end_to_end_public_python_api_defaults_to_v2(tmp_path: Path) -> None:
+def test_end_to_end_public_python_api_defaults_to_v3(tmp_path: Path) -> None:
     source = FIXTURES_DIR / "descriptor_multiblock.c"
     output = tmp_path / "basis_descriptors.parquet"
     stats = convert_csfs(source, output)
@@ -28,7 +28,7 @@ def test_end_to_end_public_python_api_defaults_to_v2(tmp_path: Path) -> None:
     assert info["num_rows"] == 2
     assert info["num_columns"] == 4 * len(read_peel_subshells(header)) + 2
     assert "ZSTD" in info["compression"]
-    assert info["key_value_metadata"]["descriptor_version"] == "2"
+    assert info["key_value_metadata"]["descriptor_version"] == "3"
     assert info["key_value_metadata"]["channels_per_subshell"] == "4"
     selected = tmp_path / "selected_descriptors.parquet"
     select_csfs(output, selected, [1])
@@ -70,7 +70,7 @@ def test_interaction_keeps_closed_core_with_unoccupied_peel(
     stats = select_interacting_csfs(reference, candidates, output)
     assert stats["output_count"] == 1
     _, rows = read_csfs(output)
-    assert rows.drop("idx").row(0) == (0, -1, 0, -1, 0, 1)
+    assert rows.drop("idx").row(0) == (0, 0, 1, 1, 1, 1)
     restored = tmp_path / "restored.c"
     restore_csfs_from_descriptors(output, descriptor_header_path(output), restored)
     assert restored.read_bytes() == source.read_bytes()

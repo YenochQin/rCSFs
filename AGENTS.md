@@ -6,12 +6,12 @@ All shell commands shown to the user, including replies, documentation, and copy
 
 ## Ownership and interfaces
 
-`rCSFs` owns CSF conversion, generation, V2 descriptors, restoration, and splitting. Rust code is in `src/`, the Python API in `rcsfs/`, and maintained tests in `tests/`. The public package is `rcsfs`; the compiled extension is `rcsfs._rcsfs`. The product CLI is the native Rust executable in `src/cli/`; keep Python library APIs independent of command parsing.
+`rCSFs` owns CSF conversion, generation, V3 descriptors, restoration, and splitting. Rust code is in `src/`, the Python API in `rcsfs/`, and maintained tests in `tests/`. The public package is `rcsfs`; the compiled extension is `rcsfs._rcsfs`. The product CLI is the native Rust executable in `src/cli/`; keep Python library APIs independent of command parsing.
 
 - Keep PyO3 bindings in `src/lib.rs` thin and put algorithms in Rust modules.
 - Public Python functions and types are defined by `rcsfs/__init__.py` and `rcsfs/_rcsfs.pyi`; update them together. Internal Rust types are not automatically Python exports.
 - Preserve `pathlib.Path` support and validate external inputs at the Python boundary.
-- Use `src/descriptor_schema.rs` for the V2 contract and `src/descriptor_v2.rs` for encoding, decoding, and restoration. Consult these files when changing formats rather than reproducing their schema elsewhere.
+- Use `src/descriptor_schema.rs` for the V3 contract and `src/descriptor_v3.rs` for encoding, decoding, and restoration. Consult these files when changing formats rather than reproducing their schema elsewhere.
 
 ## Environment and build routing
 
@@ -34,9 +34,9 @@ For in-tree tests and distributable wheels, read [development.md](docs/developme
 
 ## Format invariants
 
-V2 descriptors store raw `Int8` channels and source-header metadata. The `v` channel is physical seniority, including zero for empty/closed subshells; files require `seniority_encoding=physical`, `descriptor_dtype=int8`, and `max_two_j=126`. Validate 2J/2K in 0..=126 before narrowing; preserve wide indices/counts and arithmetic temporaries. Preserve row order, header association, parity, and the distinction between missing printed J/coupling values (`-1`) and printed zero. Restore seniority labels through the shared `src/seniority.rs` state table; reject old printed-v descriptor files rather than silently interpreting them as physical values. V1 generation and the Python/CLI `normalize` option are removed; ML feature scaling belongs to the consuming pipeline.
+V3 descriptors store complete Int8 occupation, physical seniority, 2J+1, cumulative 2K+1 and parity. Read [the descriptor guide](docs/CSF_DESCRIPTOR_GUIDE.md) when changing a descriptor producer, reader or transformation. Preserve row order, ordered peel coupling, explicit block identity and the bound header. Use the shared `src/seniority.rs` state table for text import and restoration.
 
-J is encoded as integer **2J**: text `3/2` becomes `3`, while `4` or `4-` becomes `8`; parity is stored separately. CSF records have three lines after the five-line header. Test changes to parsing, conversion, restoration, or splitting against realistic fixtures.
+Text and generation limits use physical **2J**. The V3 row stores **2J+1** with separate parity. CSF records have three lines after the five-line header. Test changes to parsing, conversion, restoration, or splitting against realistic fixtures.
 
 ## Validation and temporary work
 

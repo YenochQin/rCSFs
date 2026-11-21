@@ -3,7 +3,7 @@ use _rcsfs::configuration_generation::{
     GenerationRequest, Subshell, SubshellOccupation, generate_csfs,
 };
 use _rcsfs::descriptor_schema::{DescriptorLayout, DescriptorVersion};
-use _rcsfs::descriptor_v2::encode_v2;
+use _rcsfs::descriptor_v3::encode_v3;
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::fs::{self, OpenOptions};
@@ -81,7 +81,7 @@ fn main() -> Result<()> {
             .open(&path)
             .with_context(|| format!("descriptor output must be a new file: {}", path.display()))?;
         let mut writer = BufWriter::new(file);
-        let layout = DescriptorLayout::new(DescriptorVersion::V2, generated.subshells.len());
+        let layout = DescriptorLayout::new(DescriptorVersion::V3, generated.subshells.len());
         let columns = layout
             .feature_column_names()
             .into_iter()
@@ -90,7 +90,7 @@ fn main() -> Result<()> {
         writeln!(writer, "{}", columns.join(","))?;
         let mut descriptor = vec![0; layout.row_len()];
         for record in &generated.records {
-            encode_v2(&generated, record, &mut descriptor)?;
+            encode_v3(&generated, record, &mut descriptor)?;
             let values = &descriptor;
             for (index, value) in values.iter().enumerate() {
                 if index > 0 {

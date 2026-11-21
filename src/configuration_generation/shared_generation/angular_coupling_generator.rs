@@ -5,6 +5,7 @@
 //! splitting, multiple references and existing-list expansion are separate stages
 //! and are not inferred by this interface.
 
+use crate::descriptor_transport::{MAX_TWO_J, encode_angular};
 use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -133,6 +134,7 @@ pub struct GenerationRequest {
 pub(crate) struct GeneratedRecordRef<'a> {
     pub(crate) occupied: &'a [OccupiedSubshell],
     pub(crate) couplings: &'a [IntermediateCoupling],
+    pub(crate) cumulative: &'a [u16],
     pub(crate) total_two_j: u16,
     pub(crate) parity: Parity,
 }
@@ -164,6 +166,7 @@ impl GeneratedRecordSink for CompleteCsfSink<'_> {
             record.couplings,
             record.total_two_j,
             record.parity,
+            record.cumulative,
         )
     }
 }
@@ -172,6 +175,7 @@ impl GeneratedRecordSink for CompleteCsfSink<'_> {
 struct BufferedGeneratedRecord {
     occupied: Vec<OccupiedSubshell>,
     couplings: Vec<IntermediateCoupling>,
+    cumulative: Vec<u16>,
     total_two_j: u16,
     parity: Parity,
 }
@@ -184,9 +188,13 @@ impl BufferedGeneratedRecord {
         let mut couplings = Vec::new();
         couplings.try_reserve(record.couplings.len())?;
         couplings.extend_from_slice(record.couplings);
+        let mut cumulative = Vec::new();
+        cumulative.try_reserve(record.cumulative.len())?;
+        cumulative.extend_from_slice(record.cumulative);
         Ok(Self {
             occupied,
             couplings,
+            cumulative,
             total_two_j: record.total_two_j,
             parity: record.parity,
         })
@@ -196,6 +204,7 @@ impl BufferedGeneratedRecord {
         GeneratedRecordRef {
             occupied: &self.occupied,
             couplings: &self.couplings,
+            cumulative: &self.cumulative,
             total_two_j: self.total_two_j,
             parity: self.parity,
         }
@@ -225,15 +234,12 @@ pub(crate) struct PreparedGeneration {
 }
 
 impl PreparedGeneration {
+    pub(crate) fn is_closed_core(&self) -> bool {
+        self.occupied.is_empty() && !self.header_lines[1].is_empty()
+    }
+
     fn empty_file(&self) -> CompleteCsfFile {
-        CompleteCsfFile {
-            header_lines: self.header_lines.clone(),
-            subshells: self.subshells.clone(),
-            records: Vec::new(),
-            occupied_subshells: Vec::new(),
-            intermediate_couplings: Vec::new(),
-            blocks: Vec::new(),
-        }
+        CompleteCsfFile::new_for_restore(self.header_lines.clone(), self.subshells.clone())
     }
 }
 
@@ -249,9 +255,6 @@ pub fn generate_csfs(request: &GenerationRequest) -> Result<CompleteCsfFile> {
 fn generate_csfs_impl(request: &GenerationRequest, branch_count: usize) -> Result<CompleteCsfFile> {
     let prepared = prepare_generation(request)?;
     let mut output = prepared.empty_file();
-    if prepared.occupied.is_empty() {
-        return Ok(output);
-    }
     {
         let mut sink = CompleteCsfSink::new(&mut output);
         generate_prepared_records(
@@ -324,9 +327,6 @@ pub(crate) fn generate_configuration_records(
     sink: &mut impl GeneratedRecordSink,
 ) -> Result<()> {
     let prepared = prepare_configuration(core_subshells, configuration, min_two_j, max_two_j)?;
-    if prepared.occupied.is_empty() {
-        return Ok(());
-    }
     generate_prepared_records(
         &prepared,
         min_two_j,
@@ -353,10 +353,7 @@ pub(crate) fn prepare_configuration(
     max_two_j: u16,
 ) -> Result<PreparedGeneration> {
     ensure!(min_two_j <= max_two_j, "minimum 2J exceeds maximum 2J");
-    ensure!(
-        printable_j(max_two_j),
-        "target J exceeds GRASP's output field range"
-    );
+    encode_angular(max_two_j, "target 2J")?;
     let mut seen = HashSet::new();
     for &subshell in core_subshells {
         ensure!(seen.insert(subshell), "duplicate core subshell {subshell}");
@@ -437,6 +434,25 @@ pub(crate) fn generate_prepared_records(
     branch_count: usize,
     sink: &mut impl GeneratedRecordSink,
 ) -> Result<()> {
+    if prepared.occupied.is_empty() {
+        let includes_zero = match selection {
+            RecordSelection::All => min_two_j == 0,
+            RecordSelection::Targets(targets) => targets.contains(&0),
+            RecordSelection::StatePrefixes {
+                target, branches, ..
+            } => target == 0 && branches.contains(&0),
+        };
+        if prepared.is_closed_core() && includes_zero {
+            sink.push(GeneratedRecordRef {
+                occupied: &[],
+                couplings: &[],
+                cumulative: &[],
+                total_two_j: 0,
+                parity: Parity::Even,
+            })?;
+        }
+        return Ok(());
+    }
     match selection {
         RecordSelection::All => {
             // Prefixes follow the serial state-table traversal. Each subtree is
@@ -600,14 +616,6 @@ fn header_orbitals(labels: &[String]) -> String {
         .to_owned()
 }
 
-fn printable_j(two_j: u16) -> bool {
-    if two_j.is_multiple_of(2) {
-        two_j <= 198
-    } else {
-        two_j <= 99
-    }
-}
-
 struct Generator<'a, S: GeneratedRecordSink> {
     choices: &'a [Vec<SubshellState>],
     selected: Vec<SubshellState>,
@@ -698,28 +706,26 @@ impl<'a, S: GeneratedRecordSink> Generator<'a, S> {
             };
         }
         self.printed_couplings.clear();
-        // Port of kopp2's FIRST flag. A visible J=0 state clears FIRST but
-        // does not itself print an interior coupling once FIRST is cleared.
-        let mut first = self.selected[0].two_j == 0 && self.choices[0].len() == 1;
-        for index in 1..self.selected.len().saturating_sub(1) {
-            let state_j = self.selected[index].two_j;
-            if first && (state_j != 0 || self.choices[index].len() != 1) {
-                first = false;
-            } else if !first && state_j != 0 {
-                let value = self.cumulative[index];
-                ensure!(
-                    printable_j(value),
-                    "intermediate J exceeds GRASP's output field range"
-                );
+        let mut seen_visible = false;
+        for (index, shell) in self.occupied.iter().enumerate() {
+            ensure!(
+                self.cumulative[index] <= MAX_TWO_J,
+                "cumulative 2K={} exceeds descriptor angular bound {MAX_TWO_J}",
+                self.cumulative[index]
+            );
+            if crate::complete_csf::prints_intermediate_coupling(&mut seen_visible, shell.state)
+                && index + 1 < self.occupied.len()
+            {
                 self.printed_couplings.push(IntermediateCoupling {
                     boundary: u16::try_from(index + 1)?,
-                    two_j: value,
+                    two_j: self.cumulative[index],
                 });
             }
         }
         self.sink.push(GeneratedRecordRef {
             occupied: &self.occupied,
             couplings: &self.printed_couplings,
+            cumulative: &self.cumulative,
             total_two_j: target,
             parity: self.parity,
         })
@@ -758,6 +764,7 @@ mod tests {
                 Ok(BufferedGeneratedRecord {
                     occupied: file.occupied(record)?.to_vec(),
                     couplings: file.couplings(record)?.to_vec(),
+                    cumulative: file.generated_cumulative(record)?.unwrap().to_vec(),
                     total_two_j: record.total_two_j,
                     parity: record.parity,
                 })

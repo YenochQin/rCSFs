@@ -13,9 +13,9 @@ The current Python API is function-based and centered around streaming, parallel
 
 ## Descriptor CSF datasets
 
-rCSFs 3.1.0 generates and processes CSFs as V2 descriptor Parquet with a
+This checkout generates and processes CSFs as V3 descriptor Parquet with a
 companion TOML header. The compact Int8 columns preserve occupations, physical
-seniority, intermediate coupling, total 2J and parity. The header records the
+seniority, subshell 2J+1, cumulative 2K+1, total 2J+1 and parity. The header records the
 orbital tables, electron count and explicit block lengths. Parquet metadata binds
 the dataset to the exact header bytes by SHA-256.
 
@@ -76,7 +76,7 @@ already represents the largest active space, list the other spaces as split
 targets. Output paths must differ from the input pair. Run `rcsfs COMMAND --help`
 for flags.
 
-`zero-first` and `interacting` read and write V2 descriptor/header pairs directly.
+`zero-first` and `interacting` read and write V3 descriptor/header pairs directly.
 `zero-first` writes the reference rows first in each explicit symmetry block,
 followed by the full-basis rows absent from that reference block.
 The output header records the number of leading reference rows in
@@ -115,7 +115,7 @@ Other operations include `merge_csfs`, `match_csfs`, `partition_csfs`,
 
 ## Development
 
-See [the V2 descriptor guide](docs/CSF_DESCRIPTOR_GUIDE.md)
+See [the V3 descriptor guide](docs/CSF_DESCRIPTOR_GUIDE.md)
 for the physical channels and [the changelog](docs/CHANGELOG.md) for changes
 since 3.0.1. rCSFs is distributed under the [MIT license](LICENSE).
 

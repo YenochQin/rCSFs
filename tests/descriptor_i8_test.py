@@ -62,21 +62,21 @@ def test_restore_rejects_int32_columns_even_with_int8_metadata(
 
 
 @pytest.mark.parametrize("indices", [None, [0]])
-def test_restore_rejects_int8_127_as_angular_value(
+def test_restore_rejects_zero_as_angular_code(
     tmp_path: Path, indices: list[int] | None
 ) -> None:
     _, header, descriptors = _inputs(tmp_path)
     table = pq.read_table(descriptors)
-    column = table.schema.get_field_index("total_two_j")
+    column = table.schema.get_field_index("total_two_j_plus_one")
     table = table.set_column(
-        column, table.schema.field(column), pa.array([127, 2], type=pa.int8())
+        column, table.schema.field(column), pa.array([0, 3], type=pa.int8())
     )
     metadata = dict(pq.read_metadata(descriptors).metadata)
     metadata.pop(b"ARROW:schema", None)
     invalid = tmp_path / "invalid.parquet"
     pq.write_table(table.replace_schema_metadata(metadata), invalid)
     output = tmp_path / "rejected.c"
-    with pytest.raises((ValueError, RuntimeError, OSError), match="angular bound"):
+    with pytest.raises((ValueError, RuntimeError, OSError), match="code must be in 1..=127"):
         restore_csfs_from_descriptors(invalid, header, output, indices=indices)
     assert not output.exists()
 

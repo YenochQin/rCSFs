@@ -12,6 +12,7 @@ use parquet::arrow::{
     ArrowWriter, arrow_reader::ParquetRecordBatchReader,
     arrow_reader::ParquetRecordBatchReaderBuilder,
 };
+use parquet::basic::{LogicalType, Type as ParquetType};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -29,10 +30,11 @@ use crate::complete_csf::CompleteCsfFile;
 use crate::configuration_generation::Subshell;
 use crate::csfs_descriptor::CSFDescriptorGenerator;
 use crate::descriptor_schema::{
-    DescriptorLayout, DescriptorRowValidator, DescriptorVersion, output_kv_metadata, output_schema,
-    row_symmetry, validate_descriptor_storage, validate_output_schema, validate_seniority_encoding,
+    DescriptorLayout, DescriptorRowValidator, DescriptorVersion, empty_slot, output_kv_metadata,
+    output_schema, row_symmetry, validate_descriptor_storage, validate_output_schema,
+    validate_seniority_encoding,
 };
-use crate::descriptor_v2::decode_v2_into;
+use crate::descriptor_v3::decode_v3_into;
 
 const BATCH_ROWS: usize = 8192;
 
@@ -253,10 +255,10 @@ impl DatasetHeader {
                 count
                     .as_integer()
                     .and_then(|count| usize::try_from(count).ok())
-                    .filter(|count| (1..=length).contains(count))
+                    .filter(|count| *count <= length)
                     .with_context(|| {
                         format!(
-                            "invalid zero_order_counts entry for block {} (expected 1..={length})",
+                            "invalid zero_order_counts entry for block {} (expected 0..={length})",
                             index + 1
                         )
                     })
@@ -265,8 +267,19 @@ impl DatasetHeader {
         Ok(Some(counts))
     }
 
+    pub(crate) fn zero_order_ends(&self) -> Result<Option<Vec<usize>>> {
+        Ok(self.zero_order_counts()?.map(|mut counts| {
+            let mut offset = 0;
+            for (count, length) in counts.iter_mut().zip(&self.block_lengths) {
+                *count += offset;
+                offset += length;
+            }
+            counts
+        }))
+    }
+
     pub fn layout(&self) -> DescriptorLayout {
-        DescriptorLayout::new(DescriptorVersion::V2, self.peel.len())
+        DescriptorLayout::new(DescriptorVersion::V3, self.peel.len())
     }
 
     pub fn row_count(&self) -> usize {
@@ -381,14 +394,21 @@ impl DescriptorRows {
                 .as_deref()
                 .with_context(|| format!("missing {key} value"))
         };
-        for (key, expected) in [
-            ("descriptor_version", "2"),
-            ("channels_per_subshell", "4"),
-            ("missing_sentinel", "-1"),
-            ("normalized", "false"),
-        ] {
-            ensure!(get(key)? == expected, "invalid {key}");
-        }
+        let version = DescriptorVersion::from_tag(get("descriptor_version")?.parse()?)?;
+        let layout = DescriptorLayout::new(version, header.peel.len());
+        ensure!(
+            get("channels_per_subshell")?.parse::<usize>()? == layout.channels_per_subshell(),
+            "invalid channels_per_subshell"
+        );
+        ensure!(get("normalized")? == "false", "invalid normalized flag");
+        ensure!(
+            !kv.iter().any(|entry| entry.key == "missing_sentinel"),
+            "V3 forbids missing_sentinel metadata"
+        );
+        ensure!(
+            header.electron_count.is_some(),
+            "missing electron_count in descriptor header"
+        );
         ensure!(
             get("source_header_sha256")? == hash,
             "descriptor source_header_sha256 does not match the hash of the supplied header"
@@ -399,7 +419,17 @@ impl DescriptorRows {
         );
         validate_seniority_encoding(kv)?;
         validate_descriptor_storage(kv)?;
-        validate_output_schema(builder.schema(), header.layout())?;
+        let int8 = LogicalType::integer(8, true);
+        ensure!(
+            metadata.schema_descr().columns().iter().all(|column| {
+                column.physical_type() == ParquetType::INT32
+                    && column.logical_type_ref() == Some(&int8)
+                    && column.max_def_level() == 0
+                    && column.max_rep_level() == 0
+            }),
+            "descriptor Parquet columns must have non-null signed Int8 logical types"
+        );
+        validate_output_schema(builder.schema(), layout)?;
         for (key, expected) in [
             ("peel_subshells", header.peel.clone()),
             ("feature_columns", header.layout().feature_column_names()),
@@ -468,7 +498,14 @@ impl DescriptorRows {
             self.symmetry = None;
         }
         self.validator
-            .validate(&row, &mut self.header.electron_count)?;
+            .validate(&row, &mut self.header.electron_count)
+            .with_context(|| {
+                format!(
+                    "invalid descriptor block {}, row {}",
+                    self.block + 1,
+                    self.block_rows + 1
+                )
+            })?;
         let symmetry = row_symmetry(&row);
         ensure!(
             self.symmetry.is_none_or(|s| s == symmetry),
@@ -685,7 +722,7 @@ impl DatasetWriter {
                     && counts
                         .iter()
                         .zip(&self.lengths)
-                        .all(|(&count, &length)| (1..=length).contains(&count)),
+                        .all(|(&count, &length)| count <= length),
                 "invalid zero-order block counts"
             );
             let counts = counts
@@ -760,6 +797,7 @@ pub fn import_text(input: &Path, output: &Path, header_output: &Path) -> Result<
     let mut writer = DatasetWriter::new(header, output, header_output, &[input])?;
     let mut block = 0;
     let mut count_in_block = 0;
+    let mut row = vec![0; width];
     while let Some(line) = lines.next() {
         let first = line?;
         if first.trim() == "*" {
@@ -770,27 +808,31 @@ pub fn import_text(input: &Path, output: &Path, header_output: &Path) -> Result<
         }
         let second = lines.next().context("truncated CSF state line")??;
         let third = lines.next().context("truncated CSF coupling line")??;
-        let row = if closed_core
-            || (has_core
+        let mut import = || -> Result<()> {
+            if has_core
                 && first.trim().is_empty()
                 && second.trim().is_empty()
-                && third.trim() == "0+")
-        {
-            ensure!(
-                first.trim().is_empty() && second.trim().is_empty() && third.trim() == "0+",
-                "invalid closed-core text CSF"
-            );
-            let mut row = [0, -1, 0, -1].repeat((width - 2) / 4);
-            row.extend([0, 1]);
-            row
-        } else {
-            parser.parse_csf(&first, &second, &third)?
+                && third.trim() == "0+"
+            {
+                let (features, globals) = row.split_at_mut(width - 2);
+                features.as_chunks_mut::<4>().0.fill(empty_slot(1));
+                globals.copy_from_slice(&[1, 1]);
+            } else {
+                parser.parse_row_into(&first, &second, &third, &mut row)?;
+            }
+            writer.push(&row, block)
         };
-        writer.push(&row, block)?;
+        import().with_context(|| {
+            format!(
+                "invalid CSF block {}, row {}",
+                block + 1,
+                count_in_block + 1
+            )
+        })?;
         count_in_block += 1;
     }
     if count_in_block == 0 && block == 0 && closed_core {
-        writer.push(&[0, 1], 0)?;
+        writer.push(&[1, 1], 0)?;
     } else {
         ensure!(count_in_block > 0, "empty or trailing CSF block");
     }
@@ -821,14 +863,22 @@ pub fn select(
         output_header,
         &[input, header],
     )?;
+    let prefix_ends = source.header.zero_order_ends()?;
+    let mut retained_counts = std::collections::BTreeMap::<usize, usize>::new();
     let mut selected = indices.iter().copied().peekable();
     while let Some((ordinal, block, row)) = source.next_row()? {
         if selected.peek() == Some(&(ordinal as u64)) {
             output.push(&row, block)?;
+            if let Some(ends) = &prefix_ends {
+                *retained_counts.entry(block).or_default() += usize::from(ordinal < ends[block]);
+            }
             selected.next();
         }
     }
-    output.finish()
+    let counts = prefix_ends.map(|_| retained_counts.into_values().collect::<Vec<_>>());
+    output
+        .prepare_with_zero_order_counts(counts.as_deref())?
+        .publish()
 }
 
 pub fn restore_text(
@@ -859,6 +909,7 @@ pub fn restore_text(
     let mut selected = indices.map(|v| v.iter().copied().peekable());
     let mut prior_block = None;
     let mut count = 0;
+    let (mut occupied, mut couplings) = (Vec::new(), Vec::new());
     while let Some((ordinal, block, row)) = source.next_row()? {
         if let Some(selection) = &mut selected {
             if selection.peek() != Some(&(ordinal as u64)) {
@@ -870,31 +921,21 @@ pub fn restore_text(
             writeln!(writer, " *")?;
         }
         prior_block = Some(block);
-        if row[..row.len() - 2]
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .all(|slot| slot[0] == 0)
-        {
-            writeln!(writer, "\n\n0+")?;
-        } else {
-            let (mut occupied, mut couplings) = (Vec::new(), Vec::new());
-            let (j, parity) = decode_v2_into(
-                &row,
-                source.header.layout(),
-                &source.header.peel,
-                &mut occupied,
-                &mut couplings,
-            )?;
-            let (a, b, c) = CompleteCsfFile::format_record_parts(
-                &source.header.peel,
-                &occupied,
-                &couplings,
-                j,
-                parity,
-            )?;
-            writeln!(writer, "{a}\n{b}\n{c}")?;
-        }
+        let (j, parity) = decode_v3_into(
+            &row,
+            source.header.layout(),
+            &source.header.peel,
+            &mut occupied,
+            &mut couplings,
+        )?;
+        let (a, b, c) = CompleteCsfFile::format_record_parts(
+            &source.header.peel,
+            &occupied,
+            &couplings,
+            j,
+            parity,
+        )?;
+        writeln!(writer, "{a}\n{b}\n{c}")?;
         count += 1;
     }
     writer.flush()?;

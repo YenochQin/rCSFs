@@ -25,7 +25,7 @@ excitation rules, splitting an `nl` occupation between its two relativistic
 subshells, and multiple-reference merging — is `enumerate_occupations`.
 Expansion of an existing list remains to be implemented. This fixed-configuration
 Rust API remains separate from the transcript CLI's disk pipeline, which now
-provides parallel range generation, V2 descriptor derivation, stage statistics,
+provides parallel range generation, direct V3 row encoding, stage statistics,
 and an optional managed-memory budget as described below.
 
 ## Run the development example
@@ -168,7 +168,7 @@ excitations = -2
 Run `rcsfs csfsgenerate --config input.toml`. Multi-list runs write the
 descriptor/header pair through the disk pipeline. They generate lists in TOML
 order, use one union Peel table, and remove duplicate complete CSF records by
-exact V2-row comparison. Publication starts only after every list succeeds.
+exact V3-row comparison. Publication starts only after every list succeeds.
 Lists must have the same closed core
 and electron count. The old flat `[csfsgenerate]` format remains supported;
 mixing its list-specific keys with `[[csfsgenerate.lists]]` is an error.
@@ -235,7 +235,7 @@ byte-for-byte serial/parallel comparisons.
 ## Transcript CLI
 
 Run `rcsfs csfsgenerate [-o OUTPUT]` for interactive input, or use a
-`[csfsgenerate]` table for repeatable runs. The CLI writes a V2 descriptor
+`[csfsgenerate]` table for repeatable runs. The CLI writes a V3 descriptor
 Parquet and its bound header. The default filenames are
 `rcsf_desc.parquet` and `rcsf_header.toml`. A top-level `conf` selects
 `{conf}_desc.parquet` by default. With `conf` and an active-space index
@@ -324,12 +324,11 @@ compressed run.
 
 ### De-duplication
 
-The enumeration emits pairwise distinct occupations, a row's occupation columns
-identify its configuration, and one traversal of the state table produces at
-most one record whose row identifies that traversal, so this generation path
-cannot emit the same V2 row twice. [V2_GENERATION_UNIQUENESS.md](V2_GENERATION_UNIQUENESS.md)
-proves that; `tests/p6a_uniqueness_test.rs` searches for a counterexample by
-exhaustive differential over bounded systems.
+The enumeration visits distinct occupation vectors. For each vector, the allowed
+subshell states are distinct by J and seniority and the recursion visits each
+cumulative K chain once per target J. Each of those choices is recorded in the
+V3 row, so the internal traversal produces distinct rows. The bounded
+exhaustive comparison in `tests/p6a_uniqueness_test.rs` checks this property.
 
 The disk path therefore defaults to the strategy that proof licenses
 (`deduplication: "verified_unique"`): every generated row survives, the survivor
@@ -413,9 +412,6 @@ concurrent overshoot produces one clear failure rather than a stall whose timing
 depends on which worker finishes first.
 
 
-Descriptor columns and sidecar subshells follow the final CSF header. The
-standalone `gen-descriptors` command and both generation backends support only V2.
-V1 generation and the `normalize` option have been removed.
-Raw V2 values are checked against the existing text-to-Parquet descriptor
-pipeline and can be restored to CSF text with the exact source header. See
-[local parallel measurements](benchmarks/rcsfgenerate_parallel_20260912.md).
+Both generation backends write ordered V3 descriptor rows and their bound TOML
+header. The [descriptor guide](CSF_DESCRIPTOR_GUIDE.md) defines the columns,
+angular codes and text conversion commands.

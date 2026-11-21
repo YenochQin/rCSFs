@@ -1,7 +1,7 @@
-//! P6a: exhaustive counterexample search for V2 record uniqueness.
+//! P6a: exhaustive counterexample search for V3 record uniqueness.
 //!
 //! The P6a phase asks one question with an architectural consequence: can the
-//! internal generation path emit the same V2 record twice? The exact
+//! internal generation path emit the same V3 record twice? The exact
 //! de-duplication chain (root buckets, recursive splits, survivor bitsets) only
 //! earns its cost if it can fire; if the internal path is globally unique, that
 //! chain is provably dead work for it and must not be optimized (P2) or
@@ -11,7 +11,7 @@
 //! production generator and encoder over a bounded system and, when it finds a
 //! duplicate, reports both records that produced it — so a later change that
 //! reintroduces one leaves a counterexample behind instead of a bare assertion
-//! failure. The companion argument is `docs/V2_GENERATION_UNIQUENESS.md`; a test
+//! failure. The companion argument is `docs/CSF_GENERATION.md#de-duplication`; a test
 //! that passes is not a proof, and this file is only the exhaustive part.
 //!
 //! What is compared, for one family of configurations that shares a run-level
@@ -33,8 +33,8 @@ use _rcsfs::csf_generation::{
     EnumeratedOccupations, ExcitationRequest, GenerationRequest, Subshell, SubshellOccupation,
     enumerate_occupations, generate_csfs,
 };
-use _rcsfs::descriptor_schema::{DescriptorLayout, DescriptorVersion, MISSING};
-use _rcsfs::descriptor_v2::{decode_v2_into, encode_v2};
+use _rcsfs::descriptor_schema::{DescriptorLayout, DescriptorVersion};
+use _rcsfs::descriptor_v3::{decode_v3_into, encode_v3};
 use anyhow::{Context, Result, ensure};
 
 const ORBITAL_LETTERS: [char; 7] = ['s', 'p', 'd', 'f', 'g', 'h', 'i'];
@@ -106,7 +106,7 @@ fn full_range(entries: &[(Subshell, u8)]) -> (u16, u16) {
 }
 
 /// The run-level Peel table: the union of the subshells the family occupies,
-/// ordered exactly as `precompute_peel_subshells` orders a production run.
+/// ordered exactly as `enumerated_descriptor_basis` orders a production run.
 fn peel_table(files: &[CompleteCsfFile]) -> Vec<Subshell> {
     let mut used: Vec<Subshell> = Vec::new();
     for file in files {
@@ -154,8 +154,8 @@ impl PeelFrame {
                     .with_context(|| format!("{label} is absent from the run-level Peel table"))
             })
             .collect::<Result<Vec<_>>>()?;
-        let layout = DescriptorLayout::new(DescriptorVersion::V2, peel.len());
-        let local_layout = DescriptorLayout::new(DescriptorVersion::V2, file.subshells.len());
+        let layout = DescriptorLayout::new(DescriptorVersion::V3, peel.len());
+        let local_layout = DescriptorLayout::new(DescriptorVersion::V3, file.subshells.len());
         Ok(Self {
             row: vec![0i8; layout.row_len()],
             local_row: vec![0i8; local_layout.row_len()],
@@ -167,17 +167,29 @@ impl PeelFrame {
 
     /// Encode one record into the run's Peel coordinates.
     fn encode(&mut self, file: &CompleteCsfFile, record: &CsfRecord) -> Result<&[i8]> {
-        encode_v2(file, record, &mut self.local_row)?;
-        self.row.fill(MISSING);
-        for index in 0..self.layout.subshell_count() {
-            self.row[self.layout.slot(index) + self.layout.n_offset()] = 0;
-            self.row[self.layout.slot(index) + self.layout.seniority_offset()] = 0;
-        }
-        let channels = self.local_layout.channels_per_subshell();
-        for (local_index, &global_index) in self.mapping.iter().enumerate() {
-            for channel in 0..channels {
-                self.row[self.layout.slot(global_index) + channel] =
-                    self.local_row[self.local_layout.slot(local_index) + channel];
+        encode_v3(file, record, &mut self.local_row)?;
+        let mut local_slots = self.local_row[..self.local_layout.feature_len()]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(&self.mapping)
+            .peekable();
+        let mut cumulative = 1;
+        for (index, slot) in self.row[..self.layout.feature_len()]
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
+            if local_slots
+                .peek()
+                .is_some_and(|(_, target)| **target == index)
+            {
+                let (local, _) = local_slots.next().unwrap();
+                *slot = *local;
+                cumulative = slot[3];
+            } else {
+                *slot = [0, 0, 1, cumulative];
             }
         }
         for (local_column, global_column) in [
@@ -187,8 +199,8 @@ impl PeelFrame {
             ),
             (self.local_layout.parity_index(), self.layout.parity_index()),
         ] {
-            self.row[global_column.expect("V2 has global columns")] =
-                self.local_row[local_column.expect("V2 has global columns")];
+            self.row[global_column.expect("V3 has global columns")] =
+                self.local_row[local_column.expect("V3 has global columns")];
         }
         Ok(&self.row)
     }
@@ -348,7 +360,7 @@ fn audit(requests: &[GenerationRequest]) -> Result<Audit> {
 
             let mut occupied = Vec::new();
             let mut couplings = Vec::new();
-            let (total_two_j, parity) = decode_v2_into(
+            let (total_two_j, parity) = decode_v3_into(
                 &row,
                 frame.layout,
                 &peel_labels,

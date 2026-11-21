@@ -11,8 +11,8 @@ use crate::atomic_output::{
 };
 use crate::complete_csf::Parity;
 use crate::descriptor_dataset::{DatasetWriter, DescriptorRows, header_path};
-use crate::descriptor_schema::UNOCCUPIED_V2;
-use crate::descriptor_v2::parity_from_sign;
+use crate::descriptor_operations::remap;
+use crate::descriptor_v3::parity_from_sign;
 use anyhow::{Context, Result, ensure};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
@@ -213,7 +213,8 @@ pub fn select_interacting_csfs(
         candidates.header.block_lengths.len()
     );
 
-    let padding = UNOCCUPIED_V2.repeat(candidates.header.peel.len() - reference.header.peel.len());
+    let indices = (0..reference.header.peel.len()).collect::<Vec<_>>();
+    let width = candidates.header.layout().row_len();
     let mut header = candidates.header.clone();
     header.add_truncations_from(&reference.header)?;
     header.electron_count = reference.header.electron_count;
@@ -241,9 +242,7 @@ pub fn select_interacting_csfs(
         let candidate_count = candidates.header.block_lengths[block_index];
         let mut exact_references = HashSet::new();
         for row in reference.read_rows(reference_count) {
-            let mut row = row?;
-            let orbital_end = row.len() - 2;
-            row.splice(orbital_end..orbital_end, padding.iter().copied());
+            let row = remap(&row?, &indices, width);
             writer.push(&row, block_index)?;
             ensure!(
                 exact_references.insert(row),

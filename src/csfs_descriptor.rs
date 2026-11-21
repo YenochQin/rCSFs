@@ -1,17 +1,9 @@
-//! Explicit CSF text import primitives and the V2 record encoder.
+//! Explicit CSF text import primitives and the V3 record encoder.
 use crate::complete_csf::{IntermediateCoupling, OccupiedSubshell, Parity, SubshellState};
-use crate::descriptor_schema::{DescriptorLayout, DescriptorVersion, MISSING, validate_record};
-use crate::descriptor_v2::write_feature_row;
+use crate::descriptor_schema::{DescriptorLayout, DescriptorVersion};
+use crate::descriptor_v3::write_text_row;
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::HashMap;
-
-pub(crate) fn parse_peel_subshells_from_header_lines(lines: &[String]) -> Result<Vec<String>> {
-    let lines: [String; 5] = lines
-        .to_vec()
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("expected five header lines"))?;
-    Ok(crate::descriptor_dataset::DatasetHeader::from_lines(lines)?.peel)
-}
 
 pub(crate) mod parquet_batch {
     use anyhow::Result;
@@ -93,7 +85,7 @@ fn fixed_width_trimmed_field(line: &str, start: usize, width: usize) -> &str {
 }
 
 /// Parse a line2 state field, keeping the printed seniority label.
-fn parse_v2_state_field(field: &str) -> Result<Option<SubshellState>> {
+fn parse_v3_state_field(field: &str) -> Result<Option<SubshellState>> {
     let trimmed = field.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -135,7 +127,7 @@ pub struct CSFDescriptorGenerator {
 }
 
 impl CSFDescriptorGenerator {
-    /// Create a V2 CSF descriptor generator
+    /// Create a V3 CSF descriptor generator
     ///
     /// # Arguments
     /// * `peel_subshells` - List of subshell names (e.g., ["5s", "4d-", "4d"])
@@ -143,7 +135,7 @@ impl CSFDescriptorGenerator {
     /// # Returns
     /// A new generator instance
     pub fn new(peel_subshells: Vec<String>) -> Self {
-        Self::new_with_version(peel_subshells, DescriptorVersion::V2)
+        Self::new_with_version(peel_subshells, DescriptorVersion::V3)
     }
 
     /// Create a new CSF descriptor generator for a specific descriptor version.
@@ -178,7 +170,7 @@ impl CSFDescriptorGenerator {
         self.layout
     }
 
-    /// Parse one CSF's three lines into a reusable V2 row buffer.
+    /// Parse one CSF's three lines into a reusable V3 row buffer.
     ///
     /// `row.len()` must equal `self.layout().row_len()`. This is the single
     /// entry point used by descriptor export code.
@@ -209,12 +201,12 @@ impl CSFDescriptorGenerator {
     /// line3: "     3/2-"
     /// ```
     pub fn parse_csf(&self, line1: &str, line2: &str, line3: &str) -> Result<Vec<i8>> {
-        let mut descriptor = vec![MISSING; self.layout.row_len()];
+        let mut descriptor = vec![0; self.layout.row_len()];
         self.parse_csf_into(line1, line2, line3, &mut descriptor)?;
         Ok(descriptor)
     }
 
-    /// Parse a CSF into a reversible V2 row, preserving printed zeros and missing fields.
+    /// Resolve the text constraints into a complete V3 coupling chain.
     pub fn parse_csf_into(
         &self,
         line1: &str,
@@ -222,10 +214,6 @@ impl CSFDescriptorGenerator {
         line3: &str,
         row: &mut [i8],
     ) -> Result<()> {
-        ensure!(
-            self.layout.version() == DescriptorVersion::V2,
-            "parse_csf_into requires a V2-configured generator"
-        );
         ensure!(
             row.len() == self.layout.row_len(),
             "row buffer length {} does not match expected {}",
@@ -247,19 +235,13 @@ impl CSFDescriptorGenerator {
 
         let coupling_line_raw = line3.trim_end();
         ensure!(
-            coupling_line_raw.len() > 5,
+            coupling_line_raw.len() >= 9,
             "coupling line {coupling_line_raw:?} is too short to hold a total J and parity"
         );
-        let coupling_line = coupling_line_raw
-            .get(4..coupling_line_raw.len() - 5)
-            .with_context(|| {
-                format!(
-                    "coupling line {coupling_line_raw:?} is too short for {field_count} subshells"
-                )
-            })?;
-
-        let final_j_str =
-            &coupling_line_raw[coupling_line_raw.len() - 5..coupling_line_raw.len() - 1];
+        let (intermediate_fields, total_field) =
+            coupling_line_raw.split_at(coupling_line_raw.len() - 6);
+        let coupling_line = intermediate_fields.get(4..).unwrap_or("");
+        let final_j_str = &total_field[..total_field.len() - 1];
         let final_two_j =
             u16::try_from(j_to_double_j(final_j_str)?).context("total 2J is negative")?;
 
@@ -276,6 +258,14 @@ impl CSFDescriptorGenerator {
         let mut occupied = Vec::with_capacity(field_count);
         let mut couplings = Vec::new();
         let trimmed_line2 = line2.trim_end();
+        ensure!(
+            trimmed_line2.len() <= line_length,
+            "state line exceeds the occupation fields"
+        );
+        ensure!(
+            coupling_line_raw.len() <= line_length + 2,
+            "coupling line exceeds the occupation fields"
+        );
 
         for i in 0..field_count {
             let start = i * 9;
@@ -302,7 +292,7 @@ impl CSFDescriptorGenerator {
             })?;
 
             let middle_field = fixed_width_field(trimmed_line2, start, 9);
-            let state = parse_v2_state_field(middle_field)
+            let state = parse_v3_state_field(middle_field)
                 .with_context(|| format!("invalid state field {middle_field:?} at position {i}"))?;
 
             occupied.push(OccupiedSubshell {
@@ -321,14 +311,12 @@ impl CSFDescriptorGenerator {
             }
         }
 
-        validate_record(&self.peel_subshells, &occupied, &couplings)?;
-        write_feature_row(
+        write_text_row(
             self.layout,
             &self.peel_subshells,
             &occupied,
             &couplings,
-            final_two_j,
-            parity,
+            (final_two_j, parity),
             row,
         )
     }
@@ -391,15 +379,15 @@ mod tests {
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    // V2 text-path parser tests
+    // V3 text-path parser tests
     ////////////////////////////////////////////////////////////////////////////
 
-    fn v2_generator(subshells: Vec<String>) -> CSFDescriptorGenerator {
-        CSFDescriptorGenerator::new_with_version(subshells, DescriptorVersion::V2)
+    fn v3_generator(subshells: Vec<String>) -> CSFDescriptorGenerator {
+        CSFDescriptorGenerator::new_with_version(subshells, DescriptorVersion::V3)
     }
 
     /// Generate one physically legal CSF record and return its three
-    /// canonical text lines, so V2 text-parser tests never rely on
+    /// canonical text lines, so V3 text-parser tests never rely on
     /// hand-typed field literals that might not satisfy the real subshell
     /// state tables (as `tests/fixtures/complete.csf` predates
     /// `validate_record` and does not).
@@ -450,7 +438,7 @@ mod tests {
             ],
             3,
         );
-        let generator = v2_generator(subshells.clone());
+        let generator = v3_generator(subshells.clone());
 
         let mut row = vec![0i8; generator.layout().row_len()];
         generator
@@ -461,31 +449,17 @@ mod tests {
         assert_eq!(row.len(), 14);
         assert_eq!(subshells.len(), 3);
 
-        // 4d- (index 1, base 4): closed subshell (occupation == capacity),
-        // so the generator never prints its state — MISSING rather than a
-        // line2 back-fill of the neighboring coupling.
-        assert_eq!(row[4], 4); // occupation
-        assert_eq!(row[5], MISSING); // no printed 2J
-        assert_eq!(row[6], 0); // closed subshell has physical seniority zero
-
-        // 4d (index 2, base 8, last occupied position): total 2J is a
-        // separate global column, never folded into this subshell's slot.
-        assert_eq!(row[8], 3); // occupation
-        assert_eq!(row[10], 3); // 4d(3), J=3/2 is a seniority-three state
-        assert_eq!(row[11], MISSING); // last position: 2K boundary never printed
-
-        let total_index = generator.layout().total_two_j_index().unwrap();
-        assert_eq!(row[total_index], 3);
+        assert_eq!(row, [2, 0, 1, 1, 4, 0, 1, 1, 3, 3, 4, 4, 4, 1]);
     }
 
     #[test]
     fn parse_csf_into_reads_parity_byte() {
         let subshells = vec!["5s".to_string()];
-        let generator = v2_generator(subshells);
+        let generator = v3_generator(subshells);
         let mut row = vec![0i8; generator.layout().row_len()];
 
         generator
-            .parse_csf_into("  5s ( 1)", "", "        3+", &mut row)
+            .parse_csf_into("  5s ( 1)", "", "      1/2+", &mut row)
             .unwrap();
         assert_eq!(row[row.len() - 1], 1);
 
@@ -497,12 +471,12 @@ mod tests {
 
     #[test]
     fn parse_csf_into_keeps_printed_seniority() {
-        // 4f(4) at 2J=4 (doubled: 8) is only reachable with seniority 2 or 4
-        // (the design doc §2.2 collision sample); seniority occupies the
+        // 4f(4) at J=4 (doubled: 8) is only reachable with seniority 2 or 4
+        // (4f^4 collision); seniority occupies the
         // fixed field offsets 3-4 (`kopp1`'s "s;"), J right-aligned in the
         // remaining 9-wide field.
         let subshells = vec!["4f".to_string()];
-        let generator = v2_generator(subshells);
+        let generator = v3_generator(subshells);
         let mut row = vec![0i8; generator.layout().row_len()];
 
         generator
@@ -510,14 +484,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(row[0], 4); // occupation
-        assert_eq!(row[1], 8); // 2J = 4 -> 8
-        assert_eq!(row[2], 2); // printed seniority retained
+        assert_eq!(row[1], 2); // physical seniority
+        assert_eq!(row[2], 9); // J=4 -> 2J+1=9
     }
 
     #[test]
     fn parse_csf_into_rejects_invalid_fields() {
         let subshells = vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()];
-        let generator = v2_generator(subshells);
+        let generator = v3_generator(subshells);
         let mut row = vec![0i8; generator.layout().row_len()];
 
         // (a) Coupling line too short to slice with the fixed 4/5 offsets.
@@ -552,7 +526,7 @@ mod tests {
         );
 
         // (d) Orbital missing from the peel map must error, not warn-and-skip.
-        let missing_generator = v2_generator(vec!["5s".to_string()]);
+        let missing_generator = v3_generator(vec!["5s".to_string()]);
         let mut missing_row = vec![0i8; missing_generator.layout().row_len()];
         assert!(
             missing_generator
@@ -568,7 +542,7 @@ mod tests {
         );
 
         // (f) Out-of-Peel-order occupied subshells must error via validate_record.
-        let reordered_generator = v2_generator(vec!["4d-".to_string(), "5s".to_string()]);
+        let reordered_generator = v3_generator(vec!["4d-".to_string(), "5s".to_string()]);
         let mut reordered_row = vec![0i8; reordered_generator.layout().row_len()];
         assert!(
             reordered_generator
@@ -584,8 +558,8 @@ mod tests {
 
     #[test]
     fn parse_csf_into_rejects_zero_electron_count() {
-        // V2 requires validate_record's occupation >= 1 instead.
-        let generator = v2_generator(vec!["5s".to_string()]);
+        // V3 requires validate_record's occupation >= 1 instead.
+        let generator = v3_generator(vec!["5s".to_string()]);
         let mut row = vec![0i8; generator.layout().row_len()];
         let error = generator
             .parse_csf_into("  5s ( 0)", "", "        0+", &mut row)
@@ -594,15 +568,15 @@ mod tests {
     }
 
     #[test]
-    fn text_and_complete_producers_agree_on_v2() {
+    fn text_and_complete_producers_agree_on_v3() {
         use crate::complete_csf::CompleteCsfFile;
-        use crate::descriptor_v2::encode_v2;
+        use crate::descriptor_v3::encode_v3;
         use std::io::Cursor;
 
         // The shared fixture (`tests/fixtures/complete.csf`) prints a state
-        // outside GRASP's real state tables (see descriptor_v2.rs test
+        // outside GRASP's real state tables (see descriptor_v3.rs test
         // comments), so build a physically legal multi-record file with the
-        // generator instead, then compare the two V2 producers row for row.
+        // generator instead, then compare the two V3 producers row for row.
         use crate::configuration_generation::{
             GenerationRequest, SubshellOccupation, generate_csfs,
         };
@@ -626,7 +600,7 @@ mod tests {
         generated.write_to(&mut text).unwrap();
         let parsed = CompleteCsfFile::parse_reader(Cursor::new(text)).unwrap();
 
-        let generator = v2_generator(parsed.subshells.clone());
+        let generator = v3_generator(parsed.subshells.clone());
         for record in &parsed.records {
             let (line1, line2, line3) = format_record_for_test(&parsed, record);
             let mut text_row = vec![0i8; generator.layout().row_len()];
@@ -635,7 +609,7 @@ mod tests {
                 .unwrap();
 
             let mut complete_row = vec![0i8; generator.layout().row_len()];
-            encode_v2(&parsed, record, &mut complete_row).unwrap();
+            encode_v3(&parsed, record, &mut complete_row).unwrap();
 
             assert_eq!(text_row, complete_row);
         }

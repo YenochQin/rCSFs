@@ -1,6 +1,6 @@
 """Descriptor-native CSF generation and processing.
 
-The primary artifact is an Int8 V2 Parquet plus its byte-bound header TOML.
+The primary artifact is an Int8 V3 Parquet plus its byte-bound header TOML.
 Use convert_csfs for explicit text import and restore_csfs_from_descriptors
 for explicit text export. String-Parquet inputs and implicit conversion are
 not supported.
@@ -32,6 +32,7 @@ from ._types import (
 )
 
 __version__ = _native.__version__
+DESCRIPTOR_VERSION = _native.DESCRIPTOR_VERSION
 
 
 def descriptor_header_path(path: str | Path) -> Path:
@@ -70,8 +71,9 @@ def read_csfs(
 ) -> tuple[CsfHeaderData, DataFrame]:
     """Read numeric CSFs with a zero-based UInt64 idx column.
 
-    Header binding, raw Int8 channels, electron counts and explicit blocks are
-    validated. Optional coupling_signature is List(Int32), ending in total 2J.
+    Raw V3 columns store occupation, physical seniority, subshell 2J+1,
+    cumulative 2K+1, total 2J+1 and parity. Optional coupling_signature is
+    List(Int32), ending in physical total 2J.
     Text input must first be imported with convert_csfs.
     """
     header, stream = _native.read_csfs_arrow(
@@ -298,6 +300,7 @@ def select_interacting_csfs(
 
 
 __all__ = [
+    "DESCRIPTOR_VERSION",
     "CsfDatasetSplitStats",
     "CsfDatasetStats",
     "CsfGenerationEstimate",

@@ -234,7 +234,7 @@ fn estimate_json(
     let c = &estimate.capacity;
     json!({"success": true, "estimate_only": true, "unique_occupations": estimate.plan_stats.unique_occupations,
         "pre_deduplication_records": c.pre_deduplication_records, "peel_subshells": c.peel_subshells,
-        "v2_columns": c.v2_columns, "segment_codec": estimate.segment_codec, "deduplication": estimate.deduplication,
+        "descriptor_columns": c.descriptor_columns, "segment_codec": estimate.segment_codec, "deduplication": estimate.deduplication,
         "enumeration_millis": estimate.enumeration_millis, "planning_millis": estimate.planning_millis,
         "plan_stats": estimate.plan_stats, "space_checks": checks, "failure_recovery": "restart",
         "assumptions": c.assumption_lines(), "bytes": {"segments": c.segment_bytes, "root_buckets": c.root_bucket_bytes,

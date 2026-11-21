@@ -32,8 +32,8 @@ def test_public_api_selects_independent_overlapping_spaces(tmp_path: Path) -> No
         [1],
         [1, 1],
     ]
-    assert read_csfs(small)[1]["sub0_n"].to_list() == [2]
-    assert read_csfs(large)[1]["sub1_n"].to_list() == [0, 2]
+    assert read_csfs(small)[1]["sub0_occupation"].to_list() == [2]
+    assert read_csfs(large)[1]["sub1_occupation"].to_list() == [0, 2]
 
 
 def test_split_active_cli_uses_grasp_style_labels(tmp_path: Path) -> None:

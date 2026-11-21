@@ -1,89 +1,113 @@
-# V2 CSF descriptor guide
+# V3 CSF descriptor guide
 
-Generate V2 descriptors directly with `rcsfs csfsgenerate`. To import an
-existing GRASP text file, write a descriptor and its companion header in one step.
+Generate the descriptor and its companion TOML with `rcsfs csfsgenerate`, or
+convert an existing GRASP text file with `rcsfs convert`. V3 requires an rCSFs
+build with `DESCRIPTOR_VERSION == 3`. Regenerate V1 and V2 data from the original
+CSF text or generation inputs.
 
 ```python
-from rcsfs import convert_csfs
+from rcsfs import DESCRIPTOR_VERSION, convert_csfs
 
+assert DESCRIPTOR_VERSION == 3
 stats = convert_csfs("calculation.c", "calculation_desc.parquet")
-header = stats["header_file"]
 ```
 
-For M peel subshells, a row contains 4M+2 Int8 values:
+## Disk layout
 
-| Columns | Meaning |
+Each row stores one ordered jj-CSF as `4M+2` non-null, unscaled Int8 values,
+where `M` is the size of the ordered peel table. The four columns for each
+zero-based orbital index `i` are followed by the two global columns.
+
+| Column | Meaning |
 | --- | --- |
-| `sub{i}_n` | Occupation of peel subshell i |
-| `sub{i}_2j` | Printed doubled subshell J |
-| `sub{i}_v` | Physical seniority, including 0 for empty/closed subshells |
-| `sub{i}_2k` | Printed doubled intermediate coupling K |
-| `total_two_j` | Total doubled J |
-| `parity` | +1 or -1 |
+| `sub{i}_occupation` | Subshell occupation, from zero to its capacity |
+| `sub{i}_seniority` | Physical seniority, zero in empty and full subshells |
+| `sub{i}_two_j_plus_one` | Subshell `2Jᵢ+1`, one in empty and full subshells |
+| `sub{i}_cumulative_two_k_plus_one` | `2Kᵢ+1` after coupling through this orbital |
+| `total_two_j_plus_one` | Total `2J+1` |
+| `parity` | +1 for even, −1 for odd |
 
-Unoccupied slots are `[0, -1, 0, -1]`. Only unprinted J/coupling fields
-use `-1`; physical seniority is always nonnegative. Restoration recovers the
-canonical printed seniority from `(single-electron 2j, occupation, subshell 2J, v)`.
-Parquet metadata requires `seniority_encoding=physical`, `descriptor_dtype=int8`,
-and `max_two_j=126` in addition to version 2. Every J/coupling value must be
-0..126 or the permitted -1 missing marker; out-of-range input is rejected before
-narrowing. The in-memory row and Arrow columns are signed 8-bit integers.
-Regenerate older printed-v or Int32 descriptors from the original text or a generation transcript.
+The chain begins at `K=0`. Empty and full subshells preserve the preceding K.
+The final K equals total J. All angular codes are 1 through 127, corresponding
+to physical `2J` or `2K` of 0 through 126. Configuration limits `j_min` and
+`j_max` and CLI block summaries still use physical `2J`. A pure closed core with
+an empty peel table has one row `[1, 1]`.
 
-Rust descriptor row APIs use `i8` slices/vectors. Counts, offsets and numerical
-work variables retain their wider types. Parquet stores the signed 8-bit logical
-type using its INT32 physical type; this does not promise a fourfold reduction
-in compressed file size. Arrow/scratch numeric payloads use one byte per value,
-while Parquet encoder memory allowances still account for physical INT32 buffers.
+Parquet uses the signed 8-bit logical type over its INT32 physical type. The
+exact ordered column names are recorded in `feature_columns` and `global_columns`.
+Required metadata also includes `descriptor_version=3`,
+`channels_per_subshell=4`, `descriptor_dtype=int8`, `seniority_encoding=physical`,
+`max_two_j=126`, `normalized=false`, `subshell_count`, and `peel_subshells`.
+`source_header_sha256` binds the descriptor to the exact bytes of the TOML. The
+TOML holds the original five header lines, the total electron count including
+the core, and ordered block lengths. Adjacent blocks with the same symmetry
+retain distinct identities.
+
+The supported subshell state tables use occupation, physical seniority and J to
+identify a state. This is the ordinary Suite domain with additional state label
+`w=0`. Validation checks occupation capacity, allowed subshell states, parity,
+electron count, every coupling triangle and the final total J.
+In the supported catalog, the seniority-4 terms of a j=9/2 shell at subshell
+J=4 and J=6 each have multiplicity two. V3 rejects both terms for four
+electrons and four holes because the row has no additional term label.
+
+## Text conversion and restoration
+
+An explicit printed zero constrains the state or coupling. For a blank field,
+conversion uses the allowed states, printed couplings and total J to recover a
+unique complete chain. Ambiguous input reports the block, row and subshell.
+Restoration writes the canonical state and coupling fields from the numeric row.
+The same CSF and V3 row survive reimport, including when the source text printed
+a normally omitted value. Legacy GRASP text tools with four-character angular
+fields cannot read a five-character half-integer such as `105/2`. Keep that
+case in the numeric dataset for consumers that support the full V3 range.
 
 ```python
-from rcsfs import seniority_to_printed_v
+from rcsfs import descriptor_header_path, restore_csfs_from_descriptors
 
-assert seniority_to_printed_v(7, 4, 8, 2) == 2   # J=4 needs its v=2 label
-assert seniority_to_printed_v(7, 4, 8, 4) == 4   # different state with the same J
-assert seniority_to_printed_v(7, 4, 12, 2) == -1 # J=6 uniquely has v=2
+basis = "calculation_desc.parquet"
+restore_csfs_from_descriptors(basis, descriptor_header_path(basis), "selected.c", indices=[0])
 ```
 
-The Rust `decode_v2_into` interface now also requires the ordered Peel labels
-to recover the printed seniority policy.
-
-The shared physical-state table preserves the generator's original state order
-and text labels. Descriptor generation infers a missing label only when its
-physical seniority is determined; insufficient information is an error.
-
-Both memory and disk generation write the V2 descriptor/header pair.
-Regenerate V1 files from their original CSFs to recover physical seniority.
-Feature scaling belongs in the consuming ML pipeline.
-
-Use `restore_csfs_from_descriptors(descriptors, header, output)` to restore CSF
-text. Keep the exact source header alongside each descriptor file.
-
-## Coupling signatures for grouping
+## Python grouping and data selection
 
 ```python
-from rcsfs import read_csfs
+from rcsfs import read_csfs, select_csfs
 
 header, frame = read_csfs(
     "calculation_desc.parquet",
     include_block_id=True,
     include_coupling_signature=True,
 )
+select_csfs("calculation_desc.parquet", "selected_desc.parquet", [0])
 ```
 
-`coupling_signature` is a non-null `List(Int32)` derived from the validated V2
-row. Each occupied peel subshell contributes its printed coupling, falling back
-to printed subshell J or zero; the last entry is total doubled J. Unoccupied
-positions are omitted. Compare signatures within `block_id` to keep parity
-blocks separate. This deliberately groups coupling families and is not a unique
-CSF identifier: it omits occupation and seniority. Descriptor generation and
-identity comparison use the complete V2 row.
+`idx` is the zero-based source ordinal. The optional `coupling_signature`
+column is `List(Int32)`. At each occupied peel position it takes the canonical
+printed intermediate `2K`, the printed subshell `2J`, or zero, in that order.
+The last entry is physical total `2J`. A pure closed core has signature `[0]`.
+Use `block_id` when grouping signatures and use complete V3 rows on a common
+ordered basis or original ordinals for exact selection.
 
-Signature parsing defaults off. When enabled, malformed quantum fields fail
-explicitly. Calculation-quality callers should also require
-`header["conversion_stats"]["truncated_count"] == 0`.
-Derived datasets retain the source truncation count. Operations combining
-multiple input datasets sum their reported counts. These counts describe the
-input histories, including when a selection keeps only a subset of the rows.
+Selection and splitting preserve source block order and update the bound header.
+For partitioned inputs, selection and active-space filtering count the surviving
+zero-order prefix rows per block. A retained block can have a zero count.
+Whole-block splits preserve the original count. Merge preserves counts when each
+input provides them. Zero-first builds counts from the reference for each block.
 
-`CSFDescriptorGenerator` is an internal Rust type, not a Python class. See
-[the public API](../README.md#public-python-api) for supported Python functions.
+## Rebuild the acceptance sample
+
+Run this from the checkout's `rCSFs` directory with its V3 CLI on `PATH`.
+
+```fish
+set -l rcsfs_source (pwd)
+mkdir -p ../temp/tests/descriptor-v3-example
+cd ../temp/tests/descriptor-v3-example
+rcsfs convert "$rcsfs_source/tests/fixtures/descriptor_v3.c" basis_desc.parquet
+rcsfs info basis_desc.parquet --json
+```
+
+The sample contains the three even-parity rows in the [V3 plan](CSF_DESCRIPTOR_V3_PLAN.md).
+The final two columns are `[2, 1]` for each row and its explicit block lengths
+are `[2, 1]`. The second row changes the cumulative code at `3s` from `1` to `3`.
+The third row has an empty `4s` slot with code `(0, 0, 1, 2)`.

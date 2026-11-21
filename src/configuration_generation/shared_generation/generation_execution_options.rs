@@ -64,7 +64,7 @@ impl SegmentCodec {
 /// How the disk path makes the published descriptor unique.
 ///
 /// The internal generation path is proven to emit pairwise-distinct rows
-/// (`docs/V2_GENERATION_UNIQUENESS.md`), so for it the exact chain — partition
+/// (`docs/CSF_GENERATION.md#de-duplication`), so for it the exact chain — partition
 /// every row into root buckets, compare whole rows, keep the first — removes
 /// nothing by construction. `VerifiedUnique` skips that round trip; `Exact` is
 /// kept, and is the only strategy that can *measure* a duplicate.

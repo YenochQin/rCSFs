@@ -1,4 +1,4 @@
-//! Bounded V2 descriptor generation through ordered on-disk Arrow segments.
+//! Bounded V3 descriptor generation through ordered on-disk Arrow segments.
 //!
 //! This module owns the storage adapter: range scheduling and the segment
 //! writers, exact deduplication and the ordered descriptor merge.
@@ -24,23 +24,22 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::complete_csf_generation_pipeline::enumerated_descriptor_basis;
 use super::{
     ArtifactKind, CapacityEstimate, SpaceCheck, SpacePolicy, SpaceRole, check_space, preflight_run,
 };
 use super::{
-    DeduplicationStrategy, EnumeratedConfiguration, EnumeratedOccupations, ExcitationRequest,
-    GeneratedRecordRef, GeneratedRecordSink, GenerationOptions, GenerationPlan, PlanStats,
-    PlannedTask, RecordSelection, ResourceBudget, ResourcePermit, ResourceStats, SegmentCodec,
-    Subshell, SubshellOccupation, TaskSpan, enumerate_occupations_with_budget, estimate_capacity,
+    DeduplicationStrategy, EnumeratedConfiguration, ExcitationRequest, GeneratedRecordRef,
+    GeneratedRecordSink, GenerationOptions, GenerationPlan, PlanStats, PlannedTask,
+    RecordSelection, ResourceBudget, ResourcePermit, ResourceStats, SegmentCodec, Subshell,
+    SubshellOccupation, TaskSpan, enumerate_occupations_with_budget, estimate_capacity,
     estimate_workload, generate_configuration_records, plan_generation, report_plan,
     request_targets,
 };
 use crate::atomic_output::{create_temporary_output, publish_temporary_output};
 use crate::complete_csf::{OccupiedSubshell, Parity};
-use crate::descriptor_schema::{
-    DescriptorLayout, DescriptorVersion, output_schema, validate_record,
-};
-use crate::descriptor_v2::write_feature_row;
+use crate::descriptor_schema::{DescriptorLayout, DescriptorVersion, output_schema};
+use crate::descriptor_v3::write_generated_row;
 
 const DEFAULT_DEDUP_BUCKET_COUNT: usize = 256;
 const DEFAULT_DEDUP_MAX_ROWS_PER_BUCKET: usize = 65_536;
@@ -195,7 +194,7 @@ pub(crate) struct GenerationRange {
 /// tests. New production code passes the shared [`GenerationOptions`] directly.
 pub(crate) type StreamingGenerationOptions = GenerationOptions;
 
-/// One finalized Arrow IPC segment.  The file carries V2 columns followed by
+/// One finalized Arrow IPC segment.  The file carries V3 columns followed by
 /// `range_ordinal` and `local_ordinal`; the latter two are storage ordering
 /// columns and never appear in the final descriptor Parquet file.
 #[derive(Clone, Debug)]
@@ -239,7 +238,7 @@ pub(crate) struct SegmentMergeStats {
     pub(crate) block_lengths: Vec<usize>,
 }
 
-/// Limits for the exact, on-disk V2 de-duplication stage.
+/// Limits for the exact, on-disk V3 de-duplication stage.
 ///
 /// Only a leaf bucket is held in memory while comparing complete descriptor
 /// rows.  A bucket over `max_rows_per_bucket` is repartitioned with an
@@ -358,7 +357,7 @@ fn generate_disk_outputs_from_requests(
         )
     })?;
     stage_stats.push(setup_timer.finish("setup", 0, 0, 0, 0));
-    crate::reporting::detail!("Generating CSFs and V2 descriptors to disk segments...");
+    crate::reporting::detail!("Generating CSFs and V3 descriptors to disk segments...");
     // Refuse a run whose estimate does not fit the scratch or staging volumes,
     // while the scratch directory still holds nothing but the empty root.
     let preflight = |estimate: &CapacityEstimate| {
@@ -373,7 +372,7 @@ fn generate_disk_outputs_from_requests(
         Ok(())
     };
     let generated = if requests.len() == 1 {
-        generate_v2_descriptor_segments_checked(&requests[0], scratch_dir, options, preflight)?
+        generate_v3_descriptor_segments_checked(&requests[0], scratch_dir, options, preflight)?
     } else {
         generate_multiple_list_segments(requests, scratch_dir, options, preflight)?
     };
@@ -402,7 +401,7 @@ fn generate_disk_outputs_from_requests(
         }
         DeduplicationStrategy::Exact => {
             crate::reporting::detail!("Deduplicating descriptor segments...");
-            deduplicate_v2_descriptor_segments(
+            deduplicate_v3_descriptor_segments(
                 &generated,
                 &scratch_dir.join("dedup"),
                 &DeduplicationOptions::default(),
@@ -457,7 +456,7 @@ fn generate_disk_outputs_from_requests(
     crate::reporting::detail!("Writing final descriptor Parquet...");
     let timer = StageTimer::start();
     let merged =
-        merge_v2_deduplicated_segments(&deduplicated, descriptor_output, Some(header_output))?;
+        merge_v3_deduplicated_segments(&deduplicated, descriptor_output, Some(header_output))?;
     let descriptor_bytes = fs::metadata(descriptor_output)?.len();
     let merge_input_bytes = deduplicated
         .survivor_bitsets
@@ -607,16 +606,8 @@ fn prepare_multiple_lists(
         } else {
             core = Some(occupations.core_subshells.clone());
         }
-        let electrons = occupations
-            .core_subshells
-            .iter()
-            .map(|shell| usize::from(shell.capacity()))
-            .sum::<usize>()
-            + occupations.configurations[0]
-                .occupations
-                .iter()
-                .map(|entry| usize::from(entry.electrons))
-                .sum::<usize>();
+        let (list_peel, electrons) = enumerated_descriptor_basis(&occupations)
+            .with_context(|| format!("generation list {}", index + 1))?;
         if let Some(previous) = electron_count {
             ensure!(
                 previous == electrons,
@@ -628,7 +619,7 @@ fn prepare_multiple_lists(
         } else {
             electron_count = Some(electrons);
         }
-        peel.extend(precompute_peel_subshells(&occupations));
+        peel.extend(list_peel);
         enumeration_millis += start.elapsed().as_millis();
         let start = Instant::now();
         let workload = estimate_workload(request, &occupations, options.threads)?;
@@ -643,10 +634,6 @@ fn prepare_multiple_lists(
     }
     let mut peel = peel.into_iter().collect::<Vec<_>>();
     peel.sort_by_key(|shell| (shell.n(), shell.l(), shell.kappa() < 0));
-    ensure!(
-        !peel.is_empty(),
-        "no occupied Peel subshells were enumerated"
-    );
     Ok(PreparedLists {
         peel,
         core: core.unwrap(),
@@ -701,11 +688,7 @@ pub(crate) fn estimate_disk_generation_with_layout(
         !occupations.configurations.is_empty(),
         "occupation enumeration produced no configurations"
     );
-    let peel = precompute_peel_subshells(&occupations);
-    ensure!(
-        !peel.is_empty(),
-        "no occupied Peel subshells were enumerated"
-    );
+    let (peel, _) = enumerated_descriptor_basis(&occupations)?;
     let enumeration_millis = enumeration_timer.wall.elapsed().as_millis();
     let planning_timer = StageTimer::start();
     let workload = estimate_workload(&request, &occupations, options.threads)?;
@@ -725,7 +708,7 @@ pub(crate) fn estimate_disk_generation_with_layout(
         options.deduplication,
     )?;
     let estimate = DiskEstimate {
-        layout: DescriptorLayout::new(DescriptorVersion::V2, peel.len()),
+        layout: DescriptorLayout::new(DescriptorVersion::V3, peel.len()),
         plan_stats: plan.stats(),
         capacity,
         segment_codec: options.segment_codec.name(),
@@ -778,7 +761,7 @@ pub(crate) fn estimate_disk_generation_from_transcripts_with_layout(
         DeduplicationStrategy::Exact,
     )?;
     let estimate = DiskEstimate {
-        layout: DescriptorLayout::new(DescriptorVersion::V2, peel.len()),
+        layout: DescriptorLayout::new(DescriptorVersion::V3, peel.len()),
         plan_stats: plan.stats(),
         capacity,
         segment_codec: options.segment_codec.name(),
@@ -839,27 +822,6 @@ fn report_space_check(check: &SpaceCheck) {
     }
 }
 
-/// Determine the deterministic Peel table needed before any V2 row is written.
-///
-/// This scans the already-enumerated relativistic occupations rather than the
-/// active-orbital declaration.  It is therefore the same union the existing
-/// memory path derives from generated configuration chunks, except for the
-/// rare configuration that produces no target-J record; Phase 5's used-orbital
-/// bitmap will close that remaining header-equivalence edge case.
-pub(crate) fn precompute_peel_subshells(occupations: &EnumeratedOccupations) -> Vec<Subshell> {
-    let mut used = HashSet::new();
-    for configuration in &occupations.configurations {
-        for occupation in &configuration.occupations {
-            if occupation.electrons > 0 {
-                used.insert(occupation.subshell);
-            }
-        }
-    }
-    let mut peel = used.into_iter().collect::<Vec<_>>();
-    peel.sort_by_key(|shell| (shell.n(), shell.l(), shell.kappa() < 0));
-    peel
-}
-
 fn generate_multiple_list_segments(
     requests: &[ExcitationRequest],
     scratch_dir: &Path,
@@ -891,7 +853,7 @@ fn generate_multiple_list_segments(
     let mut ordinal_offset = 0u32;
     for (index, request) in requests.iter().enumerate() {
         let list_root = scratch_dir.join(format!("list-{:04}", index + 1));
-        let mut part = generate_v2_descriptor_segments_with_peel(
+        let mut part = generate_v3_descriptor_segments_with_peel(
             request,
             &list_root,
             options,
@@ -939,36 +901,36 @@ fn generate_multiple_list_segments(
     Ok(result)
 }
 
-/// Generate V2 descriptor rows into ordered Arrow IPC segments.
+/// Generate V3 descriptor rows into ordered Arrow IPC segments.
 ///
 /// `scratch_dir` is an operation-owned directory.  Each range creates a
 /// unique `ranges/range-XXXXXX` child and uses `create_new` for every segment,
 /// so a stale or concurrent run fails before it can overwrite data.
-pub(crate) fn generate_v2_descriptor_segments(
+pub(crate) fn generate_v3_descriptor_segments(
     request: &ExcitationRequest,
     scratch_dir: &Path,
     options: &StreamingGenerationOptions,
 ) -> Result<SegmentGeneration> {
-    generate_v2_descriptor_segments_checked(request, scratch_dir, options, |_| Ok(()))
+    generate_v3_descriptor_segments_checked(request, scratch_dir, options, |_| Ok(()))
 }
 
-/// Generate V2 segments, offering the counted capacity estimate to the caller
+/// Generate V3 segments, offering the counted capacity estimate to the caller
 /// before a single row is written.
 ///
 /// Enumeration and counting happen once. `preflight` therefore receives an
 /// estimate derived from the same counts that scheduled the work, and can
 /// refuse the run while the scratch directory is still empty instead of after
 /// the segments have filled a filesystem.
-pub(crate) fn generate_v2_descriptor_segments_checked(
+pub(crate) fn generate_v3_descriptor_segments_checked(
     request: &ExcitationRequest,
     scratch_dir: &Path,
     options: &StreamingGenerationOptions,
     preflight: impl FnOnce(&CapacityEstimate) -> Result<()>,
 ) -> Result<SegmentGeneration> {
-    generate_v2_descriptor_segments_with_peel(request, scratch_dir, options, preflight, None, 0)
+    generate_v3_descriptor_segments_with_peel(request, scratch_dir, options, preflight, None, 0)
 }
 
-fn generate_v2_descriptor_segments_with_peel(
+fn generate_v3_descriptor_segments_with_peel(
     request: &ExcitationRequest,
     scratch_dir: &Path,
     options: &StreamingGenerationOptions,
@@ -994,16 +956,10 @@ fn generate_v2_descriptor_segments_with_peel(
         !occupations.configurations.is_empty(),
         "occupation enumeration produced no configurations"
     );
-    let peel = shared_peel.map_or_else(
-        || precompute_peel_subshells(&occupations),
-        ToOwned::to_owned,
-    );
-    ensure!(
-        !peel.is_empty(),
-        "no occupied Peel subshells were enumerated"
-    );
+    let (peel, electron_count) = enumerated_descriptor_basis(&occupations)?;
+    let peel = shared_peel.map_or(peel, ToOwned::to_owned);
     let peel_subshells = peel.iter().map(ToString::to_string).collect::<Vec<_>>();
-    let layout = DescriptorLayout::new(DescriptorVersion::V2, peel_subshells.len());
+    let layout = DescriptorLayout::new(DescriptorVersion::V3, peel_subshells.len());
     let global_indices = peel
         .iter()
         .enumerate()
@@ -1119,16 +1075,6 @@ fn generate_v2_descriptor_segments_with_peel(
     // and merge buffers.
     drop(occupation_charge);
     let resource_stats = options.budget.snapshot(occupation_bytes);
-    let electron_count = occupations
-        .core_subshells
-        .iter()
-        .map(|shell| usize::from(shell.capacity()))
-        .sum::<usize>()
-        + occupations.configurations[0]
-            .occupations
-            .iter()
-            .map(|entry| usize::from(entry.electrons))
-            .sum::<usize>();
     Ok(SegmentGeneration {
         layout,
         peel_subshells,
@@ -1155,13 +1101,13 @@ fn generate_v2_descriptor_segments_with_peel(
     })
 }
 
-/// Merge all pre-deduplication segments to a final V2 Parquet descriptor.
+/// Merge all pre-deduplication segments to a final V3 Parquet descriptor.
 ///
 /// Blocks are ordered by `(2J, parity)` exactly like the existing writer;
 /// segments within a block are ordered by range ordinal and local ordinal.
 /// The temporary output guard guarantees that any decode/write/publication
 /// error leaves no destination descriptor behind.
-pub(crate) fn merge_v2_descriptor_segments(
+pub(crate) fn merge_v3_descriptor_segments(
     generated: &SegmentGeneration,
     output_path: &Path,
     header_path: Option<&Path>,
@@ -1242,15 +1188,15 @@ pub(crate) fn merge_v2_descriptor_segments(
     })
 }
 
-/// Select the first exact occurrence of every V2 descriptor row on disk.
+/// Select the first exact occurrence of every V3 descriptor row on disk.
 ///
 /// Rows are first partitioned per symmetry block by a stable 128-bit digest.
 /// The digest is only a routing key: every possible duplicate is confirmed by
-/// equality over all `4M + 2` V2 integers, including seniority and the
-/// distinction between `MISSING` and a printed zero.  The resulting on-disk
-/// bitsets are consumed by [`merge_v2_deduplicated_segments`] in a separate,
+/// equality over all `4M + 2` V3 integers, including seniority and every
+/// cumulative coupling.  The resulting on-disk
+/// bitsets are consumed by [`merge_v3_deduplicated_segments`] in a separate,
 /// stable source-order pass.
-pub(crate) fn deduplicate_v2_descriptor_segments(
+pub(crate) fn deduplicate_v3_descriptor_segments(
     generated: &SegmentGeneration,
     scratch_dir: &Path,
     options: &DeduplicationOptions,
@@ -1385,8 +1331,8 @@ pub(crate) fn deduplicate_v2_descriptor_segments(
 
 /// The verified path: every generated row survives, by the uniqueness proof.
 ///
-/// The internal generator cannot emit the same V2 row twice
-/// (`docs/V2_GENERATION_UNIQUENESS.md`), so a run that reaches this function
+/// The internal generator cannot emit the same V3 row twice
+/// (`docs/CSF_GENERATION.md#de-duplication`), so a run that reaches this function
 /// with the generator's own records has nothing to remove. What it still does
 /// is the part that is not a comparison: the merge reads the segments back in
 /// publication order, so the survivor bitsets have to exist and have to cover
@@ -1472,9 +1418,9 @@ fn generated_count(block_lengths: &[usize]) -> usize {
     block_lengths.iter().copied().sum()
 }
 
-/// Write unique V2 descriptors selected by
-/// [`deduplicate_v2_descriptor_segments`] in their original GRASP order.
-pub(crate) fn merge_v2_deduplicated_segments(
+/// Write unique V3 descriptors selected by
+/// [`deduplicate_v3_descriptor_segments`] in their original GRASP order.
+pub(crate) fn merge_v3_deduplicated_segments(
     deduplicated: &DeduplicatedSegments,
     output_path: &Path,
     header_path: Option<&Path>,
@@ -1951,7 +1897,7 @@ fn deduplicate_bucket(
 
 fn stable_row_hash(row: &[i8]) -> [u8; 16] {
     let mut hasher = Sha256::new();
-    hasher.update(b"rCSFs/CSFDescriptorV2/dedup/v1\\0");
+    hasher.update(b"rCSFs/CSFDescriptorV3/dedup/v1\\0");
     for value in row {
         hasher.update(value.to_le_bytes());
     }
@@ -1969,7 +1915,7 @@ fn root_bucket_index(hash: &[u8; 16], bucket_count: usize) -> usize {
 
 fn recursive_bucket_index(row: &[i8], depth: usize) -> usize {
     let mut hasher = Sha256::new();
-    hasher.update(b"rCSFs/CSFDescriptorV2/dedup/split/v1\\0");
+    hasher.update(b"rCSFs/CSFDescriptorV3/dedup/split/v1\\0");
     hasher.update(
         u64::try_from(depth)
             .expect("usize fits in u64")
@@ -2246,18 +2192,12 @@ impl GeneratedRecordSink for DescriptorBatchSink<'_> {
                 state: occupied.state,
             });
         }
-        validate_record(
-            self.peel_subshells,
-            &self.remapped_occupied,
-            record.couplings,
-        )?;
-        write_feature_row(
+        write_generated_row(
             self.layout,
             self.peel_subshells,
             &self.remapped_occupied,
-            record.couplings,
-            record.total_two_j,
-            record.parity,
+            record.cumulative,
+            (record.total_two_j, record.parity),
             &mut self.row,
         )?;
         self.range_writer
@@ -2846,7 +2786,7 @@ mod tests {
     use crate::configuration_generation::{
         GenerationRequest, enumerate_occupations, generate_csfs,
     };
-    use crate::descriptor_v2::write_feature_row;
+    use crate::descriptor_v3::write_generated_row;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -2898,7 +2838,7 @@ mod tests {
             .enumerate()
             .map(|(index, label)| Ok((label.parse::<Subshell>()?, u16::try_from(index)?)))
             .collect::<Result<HashMap<_, _>>>()?;
-        let layout = DescriptorLayout::new(DescriptorVersion::V2, peel_subshells.len());
+        let layout = DescriptorLayout::new(DescriptorVersion::V3, peel_subshells.len());
         let mut blocks = BTreeMap::<(u16, bool), Vec<Vec<i8>>>::new();
         for configuration in occupations.configurations {
             let generation_request = GenerationRequest {
@@ -2928,13 +2868,12 @@ mod tests {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let mut row = vec![0; layout.row_len()];
-                write_feature_row(
+                write_generated_row(
                     layout,
                     peel_subshells,
                     &remapped,
-                    file.couplings(record)?,
-                    record.total_two_j,
-                    record.parity,
+                    file.generated_cumulative(record)?.unwrap_or_default(),
+                    (record.total_two_j, record.parity),
                     &mut row,
                 )?;
                 blocks
@@ -2993,7 +2932,7 @@ mod tests {
     }
 
     #[test]
-    fn range_segments_merge_to_the_same_v2_rows_at_each_thread_count() {
+    fn range_segments_merge_to_the_same_v3_rows_at_each_thread_count() {
         // This transcript reaches the state-prefix split, which the registered
         // small transcripts never did: every configuration there produces at
         // most one record per 2J, so no split was ever scheduled and a broken
@@ -3022,7 +2961,7 @@ mod tests {
             let label = format!("t{threads}-r{records_per_task}");
             let scratch = root.join(format!("scratch-{label}"));
             let output = root.join(format!("descriptors-{label}.parquet"));
-            let generated = generate_v2_descriptor_segments(
+            let generated = generate_v3_descriptor_segments(
                 &request,
                 &scratch,
                 &StreamingGenerationOptions {
@@ -3047,7 +2986,7 @@ mod tests {
                 .iter()
                 .filter(|task| matches!(task.span, TaskSpan::StatePrefixes { .. }))
                 .count();
-            let merge = merge_v2_descriptor_segments(&generated, &output, None).unwrap();
+            let merge = merge_v3_descriptor_segments(&generated, &output, None).unwrap();
             assert_eq!(merge.record_count, generated.record_count);
             results.push((
                 read_rows(&output).unwrap(),
@@ -3115,7 +3054,7 @@ mod tests {
         let root = temporary_directory("preflight");
         fs::create_dir(&root).unwrap();
         let scratch = root.join("scratch");
-        let error = generate_v2_descriptor_segments_checked(
+        let error = generate_v3_descriptor_segments_checked(
             &request,
             &scratch,
             &StreamingGenerationOptions {
@@ -3141,7 +3080,7 @@ mod tests {
         let request = ExcitationRequest::from_transcript(transcript()).unwrap();
         let root = temporary_directory("failed-merge");
         fs::create_dir(&root).unwrap();
-        let generated = generate_v2_descriptor_segments(
+        let generated = generate_v3_descriptor_segments(
             &request,
             &root.join("scratch"),
             &StreamingGenerationOptions {
@@ -3155,7 +3094,7 @@ mod tests {
         .unwrap();
         fs::remove_file(&generated.segments[0].path).unwrap();
         let output = root.join("descriptors.parquet");
-        assert!(merge_v2_descriptor_segments(&generated, &output, None).is_err());
+        assert!(merge_v3_descriptor_segments(&generated, &output, None).is_err());
         assert!(!output.exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -3164,7 +3103,7 @@ mod tests {
     fn precomputed_peel_matches_the_enumerated_nonzero_union() {
         let request = ExcitationRequest::from_transcript(transcript()).unwrap();
         let occupations = enumerate_occupations(&request).unwrap();
-        let peel = precompute_peel_subshells(&occupations);
+        let (peel, _) = enumerated_descriptor_basis(&occupations).unwrap();
         assert!(peel.windows(2).all(|pair| {
             (pair[0].n(), pair[0].l(), pair[0].kappa() < 0)
                 < (pair[1].n(), pair[1].l(), pair[1].kappa() < 0)
@@ -3183,7 +3122,7 @@ mod tests {
         let request = ExcitationRequest::from_transcript(transcript()).unwrap();
         let root = temporary_directory("dedup");
         fs::create_dir(&root).unwrap();
-        let generated = generate_v2_descriptor_segments(
+        let generated = generate_v3_descriptor_segments(
             &request,
             &root.join("ranges"),
             &StreamingGenerationOptions {
@@ -3196,7 +3135,7 @@ mod tests {
         )
         .unwrap();
         let baseline_output = root.join("baseline.parquet");
-        merge_v2_descriptor_segments(&generated, &baseline_output, None).unwrap();
+        merge_v3_descriptor_segments(&generated, &baseline_output, None).unwrap();
         let baseline_rows = read_rows(&baseline_output).unwrap();
 
         let duplicate = copy_segment_into_later_range(
@@ -3224,7 +3163,7 @@ mod tests {
             budget: generated.budget.clone(),
             resource_stats: generated.resource_stats.clone(),
         };
-        let deduplicated = deduplicate_v2_descriptor_segments(
+        let deduplicated = deduplicate_v3_descriptor_segments(
             &duplicated,
             &root.join("dedup"),
             &DeduplicationOptions {
@@ -3237,7 +3176,7 @@ mod tests {
         assert_eq!(deduplicated.unique_count, baseline_rows.len());
         assert_eq!(deduplicated.duplicate_count, duplicate.record_count);
         let output = root.join("unique.parquet");
-        let merge = merge_v2_deduplicated_segments(&deduplicated, &output, None).unwrap();
+        let merge = merge_v3_deduplicated_segments(&deduplicated, &output, None).unwrap();
         assert_eq!(merge.record_count, baseline_rows.len());
         assert_eq!(read_rows(&output).unwrap(), baseline_rows);
         fs::remove_dir_all(root).unwrap();
@@ -3331,7 +3270,7 @@ mod tests {
         let request = ExcitationRequest::from_transcript(transcript()).unwrap();
         let root = temporary_directory("verified-boundary");
         fs::create_dir(&root).unwrap();
-        let generated = generate_v2_descriptor_segments(
+        let generated = generate_v3_descriptor_segments(
             &request,
             &root.join("ranges"),
             &StreamingGenerationOptions {
@@ -3371,7 +3310,7 @@ mod tests {
         assert_eq!(verified.duplicate_count, 0);
         assert_eq!(verified.unique_count, duplicated.record_count);
 
-        let exact = deduplicate_v2_descriptor_segments(
+        let exact = deduplicate_v3_descriptor_segments(
             &duplicated,
             &root.join("exact-dedup"),
             &DeduplicationOptions::default(),
@@ -3387,7 +3326,7 @@ mod tests {
     }
 
     #[test]
-    fn complete_row_comparison_preserves_v2_distinctions_after_hash_collision() {
+    fn complete_row_comparison_preserves_v3_distinctions_after_hash_collision() {
         let root = temporary_directory("collision");
         fs::create_dir(&root).unwrap();
         let bucket_dir = root.join("buckets");
@@ -3423,7 +3362,7 @@ mod tests {
         let request = ExcitationRequest::from_transcript(transcript()).unwrap();
         let root = temporary_directory("failed-deduplicated-merge");
         fs::create_dir(&root).unwrap();
-        let generated = generate_v2_descriptor_segments(
+        let generated = generate_v3_descriptor_segments(
             &request,
             &root.join("ranges"),
             &StreamingGenerationOptions {
@@ -3435,7 +3374,7 @@ mod tests {
             },
         )
         .unwrap();
-        let deduplicated = deduplicate_v2_descriptor_segments(
+        let deduplicated = deduplicate_v3_descriptor_segments(
             &generated,
             &root.join("dedup"),
             &DeduplicationOptions::default(),
@@ -3443,7 +3382,7 @@ mod tests {
         .unwrap();
         fs::remove_file(&generated.segments[0].path).unwrap();
         let output = root.join("unique.parquet");
-        assert!(merge_v2_deduplicated_segments(&deduplicated, &output, None).is_err());
+        assert!(merge_v3_deduplicated_segments(&deduplicated, &output, None).is_err());
         assert!(!output.exists());
         fs::remove_dir_all(root).unwrap();
     }
@@ -3521,7 +3460,7 @@ mod tests {
     fn each_segment_codec_is_reported_readable_and_actually_compresses() {
         let root = temporary_directory("segment-codec");
         fs::create_dir(&root).unwrap();
-        let layout = DescriptorLayout::new(DescriptorVersion::V2, 3);
+        let layout = DescriptorLayout::new(DescriptorVersion::V3, 3);
         let row_len = layout.row_len();
         let rows = 20_000;
         let mut sizes = BTreeMap::new();
@@ -3545,7 +3484,7 @@ mod tests {
                 ResourceBudget::unlimited(),
             );
             // A row a real run could produce: a handful of distinct values,
-            // mostly MISSING, which is what the V2 payload looks like.
+            // mostly empty slots and repeated angular codes.
             let row = (0..row_len)
                 .map(|index| {
                     if index % 5 == 0 {

@@ -69,11 +69,28 @@ fn zero_first_preserves_each_block_and_appends_ordered_complement() {
         let selected = dir.path().join("selected_descriptors.parquet");
         let selected_header = header_path(&selected).unwrap();
         select(&output, &header, &selected, &selected_header, &[0]).unwrap();
-        assert!(
-            read_header(&selected_header).unwrap().document["block_info"]
-                .get("zero_order_counts")
-                .is_none()
+        let selection = read_header(&selected_header).unwrap();
+        assert_eq!(
+            selection.document["block_info"]["zero_order_counts"][0].as_integer(),
+            Some(1)
         );
+        if counts.1 > 0 {
+            let complement = dir.path().join("complement_desc.parquet");
+            let complement_header = header_path(&complement).unwrap();
+            select(
+                &output,
+                &header,
+                &complement,
+                &complement_header,
+                &[counts.0 as u64],
+            )
+            .unwrap();
+            let selection = read_header(&complement_header).unwrap();
+            assert_eq!(
+                selection.document["block_info"]["zero_order_counts"][0].as_integer(),
+                Some(0)
+            );
+        }
     }
 }
 

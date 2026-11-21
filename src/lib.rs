@@ -10,7 +10,7 @@ pub mod descriptor_operations;
 mod descriptor_python;
 pub mod descriptor_schema;
 pub mod descriptor_transport;
-pub mod descriptor_v2;
+pub mod descriptor_v3;
 pub mod interaction;
 #[cfg(feature = "python")]
 mod interaction_py;

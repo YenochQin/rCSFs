@@ -36,7 +36,7 @@ mod tests {
     const EXOTIC_TABLES: [(u16, u16); 6] = [(5, 3), (7, 3), (7, 4), (9, 3), (9, 4), (9, 5)];
 
     /// Two states of one subshell must never carry the same `(2J, seniority)`
-    /// pair: such a pair is indistinguishable in a V2 row, so a subshell whose
+    /// pair: such a pair is indistinguishable in a V3 row, so a subshell whose
     /// table repeated one would emit genuinely duplicate rows.
     ///
     /// The same walk pins which tables exist at all, so the uniqueness argument
@@ -63,7 +63,7 @@ mod tests {
                                     (state.two_j, state.seniority),
                                     (other.two_j, other.seniority),
                                     "2j={two_j} with {electrons} electrons repeats the state \
-                                     {state:?}; two such states are one V2 row"
+                                     {state:?}; two such states are one V3 row"
                                 );
                             }
                         }

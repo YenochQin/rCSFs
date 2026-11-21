@@ -36,7 +36,7 @@ const RECORDS_PER_TASK_LOWER_BOUND: u64 = 32_768;
 
 /// Upper bound of one task's estimated record count.
 ///
-/// A V2 row is roughly one kilobyte of uncompressed Arrow, so this caps a
+/// A V3 row is roughly one kilobyte of uncompressed Arrow, so this caps a
 /// task's segment data at a few gigabytes rather than letting a single task
 /// grow without limit on a large input.
 const RECORDS_PER_TASK_UPPER_BOUND: u64 = 4_000_000;
@@ -449,12 +449,8 @@ fn split_configuration(
         request.max_two_j,
     )?;
     let counter = PreparedCounter::new(&prepared);
-    // The dynamic program cannot see the generator's per-selection `FIRST`
-    // flag, so a configuration whose intermediate couplings can exceed the
-    // output field is counted by the generator instead. That configuration must
-    // still be scheduled: refusing it here would fail a plan the workload
-    // counter already accepted, so it is split by 2J target only and reported
-    // as a long tail rather than rejected.
+    // If the dynamic program cannot certify the angular bound, use the same
+    // traversal as workload counting before splitting the accepted targets.
     let exact = counter.chain_count_is_exact();
     let first_task = tasks.len();
     let mut pending: Vec<u16> = Vec::new();

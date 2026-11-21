@@ -1,19 +1,19 @@
-//! Reversible V2 descriptors through the Rust text parsing API.
+//! Reversible V3 descriptors through the Rust text parsing API.
 
 use _rcsfs::complete_csf::CompleteCsfFile;
 use _rcsfs::csfs_descriptor::CSFDescriptorGenerator;
-use _rcsfs::descriptor_schema::{DescriptorVersion, MISSING};
-use _rcsfs::descriptor_v2::encode_v2;
+use _rcsfs::descriptor_schema::DescriptorVersion;
+use _rcsfs::descriptor_v3::encode_v3;
 use std::path::Path;
 
 #[test]
-fn descriptor_generator_defaults_to_v2_and_matches_integer_records() {
+fn descriptor_generator_defaults_to_v3_and_matches_integer_records() {
     let file = CompleteCsfFile::parse_path(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.csf"),
     )
     .unwrap();
     let generator = CSFDescriptorGenerator::new(file.subshells.clone());
-    assert_eq!(generator.layout().version(), DescriptorVersion::V2);
+    assert_eq!(generator.layout().version(), DescriptorVersion::V3);
     assert_eq!(generator.layout().channels_per_subshell(), 4);
     let mut expected = vec![0; generator.layout().row_len()];
     let mut reused = vec![99; expected.len()];
@@ -22,7 +22,7 @@ fn descriptor_generator_defaults_to_v2_and_matches_integer_records() {
         file.write_record_to(record, &mut bytes).unwrap();
         let text = String::from_utf8(bytes).unwrap();
         let lines = text.lines().collect::<Vec<_>>();
-        encode_v2(&file, record, &mut expected).unwrap();
+        encode_v3(&file, record, &mut expected).unwrap();
         assert_eq!(
             generator.parse_csf(lines[0], lines[1], lines[2]).unwrap(),
             expected
@@ -61,7 +61,7 @@ fn seniority_keeps_distinct_states_in_a_single_j_block() {
             generator.parse_csf(lines[0], lines[1], lines[2]).unwrap()
         })
         .collect::<Vec<_>>();
-    assert_eq!(rows, [[4, 4, 2, MISSING, 4, 1], [4, 4, 4, MISSING, 4, 1]]);
+    assert_eq!(rows, [[4, 2, 5, 5, 5, 1], [4, 4, 5, 5, 5, 1]]);
 }
 
 #[test]
@@ -83,6 +83,10 @@ fn descriptor_generator_rejects_non_ascii_and_wrong_buffers() {
 #[test]
 fn retired_descriptor_versions_require_regeneration() {
     let error = DescriptorVersion::from_tag(1).unwrap_err();
-    assert!(error.to_string().contains("regenerate V2"));
-    assert!(DescriptorVersion::from_tag(3).is_err());
+    assert!(error.to_string().contains("regenerate V3"));
+    assert!(DescriptorVersion::from_tag(2).is_err());
+    assert_eq!(
+        DescriptorVersion::from_tag(3).unwrap(),
+        DescriptorVersion::V3
+    );
 }

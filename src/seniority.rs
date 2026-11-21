@@ -11,16 +11,34 @@ use std::sync::OnceLock;
 use crate::complete_csf::SubshellState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PhysicalState {
-    two_j: u16,
-    seniority: u8,
+pub(crate) struct PhysicalState {
+    pub(crate) two_j: u16,
+    pub(crate) seniority: u8,
+}
+
+impl PhysicalState {
+    pub(crate) fn require_single_term(self, single_two_j: u16) -> Result<()> {
+        // Within the supported term catalog, only j=9/2, v=4 has two
+        // independent terms at the same J (J=4 and 6, including hole states).
+        ensure!(
+            !(single_two_j == 9 && self.seniority == 4 && matches!(self.two_j, 8 | 12)),
+            "subshell 2j={single_two_j}, v={}, 2J={} requires an additional w label",
+            self.seniority,
+            self.two_j
+        );
+        Ok(())
+    }
+
+    pub(crate) fn matches_printed(self, printed: SubshellState) -> bool {
+        self.two_j == printed.two_j && printed.seniority.is_none_or(|v| v == self.seniority)
+    }
 }
 
 // Shared by generation, descriptor encoding and restoration: avoid allocating
 // and rebuilding this small immutable table for every CSF subshell.
 static STATE_TABLES: [OnceLock<Vec<PhysicalState>>; 22 * 12] = [const { OnceLock::new() }; 22 * 12];
 
-fn physical_states(two_j: u16, electrons: u8) -> Result<&'static [PhysicalState]> {
+pub(crate) fn physical_states(two_j: u16, electrons: u8) -> Result<&'static [PhysicalState]> {
     ensure!(
         two_j > 0 && two_j % 2 == 1 && two_j <= 21,
         "single-electron 2j must be odd and in 1..=21"
@@ -175,22 +193,15 @@ fn checked_physical_states(
 pub(crate) fn validate_physical_seniority(
     two_j: u16,
     occupation: u8,
-    subshell_two_j: Option<u16>,
+    subshell_two_j: u16,
     seniority: u8,
 ) -> Result<()> {
-    if let Some(two_j_subshell) = subshell_two_j {
-        let state = PhysicalState {
-            two_j: two_j_subshell,
-            seniority,
-        };
-        checked_physical_states(two_j, occupation, state)?;
-    } else {
-        ensure!(
-            seniority == physical_seniority(two_j, occupation, None)?,
-            "physical seniority does not match omitted subshell state"
-        );
-    }
-    Ok(())
+    let state = PhysicalState {
+        two_j: subshell_two_j,
+        seniority,
+    };
+    checked_physical_states(two_j, occupation, state)?;
+    state.require_single_term(two_j)
 }
 
 /// Return the CSF printed-v value, using -1 when the label is omitted.

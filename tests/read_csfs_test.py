@@ -23,7 +23,7 @@ from rcsfs import (
 FIXTURE = Path(__file__).parent / "fixtures" / "descriptor_multiblock.c"
 
 
-@pytest.mark.parametrize("entry", ['"bad"', "[1]", "[true, 1]", "[0, 1]", "[1, 2]"])
+@pytest.mark.parametrize("entry", ['"bad"', "[1]", "[true, 1]", "[-1, 1]", "[1, 2]"])
 def test_read_rejects_invalid_zero_order_counts(tmp_path: Path, entry: str) -> None:
     path = tmp_path / "basis_descriptors.parquet"
     convert_csfs(FIXTURE, path)
@@ -134,10 +134,10 @@ def test_read_numeric_rows_preserves_schema_blocks_and_signatures(
     assert header["block_info"]["block_lengths"] == [1, 1]
     assert rows["idx"].dtype == pl.UInt64
     assert rows["idx"].to_list() == [0, 1]
-    assert rows["total_two_j"].to_list() == [0, 2]
+    assert rows["total_two_j_plus_one"].to_list() == [1, 3]
     assert rows["parity"].to_list() == [1, -1]
-    assert rows["sub0_n"].to_list() == [2, 1]
-    assert rows["sub1_2j"].to_list() == [-1, 3]
+    assert rows["sub0_occupation"].to_list() == [2, 1]
+    assert rows["sub1_two_j_plus_one"].to_list() == [1, 4]
     assert all(
         dtype == pl.Int8
         for column, dtype in rows.schema.items()

@@ -38,6 +38,7 @@ pub(crate) struct PreparedCounter {
     /// `reach[i]` is the largest cumulative `2J` the first `i + 1` subshells
     /// can reach, and therefore the upper bound of index `i`'s ways vector.
     reach: Vec<u16>,
+    closed_core: bool,
 }
 
 impl PreparedCounter {
@@ -58,6 +59,7 @@ impl PreparedCounter {
         Self {
             multiplicity,
             reach,
+            closed_core: prepared.is_closed_core(),
         }
     }
 
@@ -68,18 +70,13 @@ impl PreparedCounter {
 
     /// Whether the chain count equals the number of emitted records.
     ///
-    /// [`Generator::emit`] rejects an *intermediate* coupling that exceeds
-    /// GRASP's output field. Counting cannot see that per-selection `FIRST`
-    /// flag, so it is exact only while no reachable intermediate value can
-    /// exceed the limit. Unlike a rejection, counting more than the generator
-    /// emits would under-report nothing: it can only overestimate, which is
-    /// why an unsafe configuration is counted by running the generator instead
-    /// (see [`count_configuration_records`]).
+    /// If a reachable prefix could exceed the signed-byte angular bound, run
+    /// the generator to determine whether an out-of-range chain reaches a target.
     pub(crate) fn chain_count_is_exact(&self) -> bool {
-        let subshells = self.reach.len();
-        // A coupling is printed only between the first and the last subshell,
-        // so three or fewer occupied subshells never print one.
-        subshells < 4 || (1..=subshells - 2).all(|index| self.reach[index] <= 99)
+        let intermediate = self.reach.len().saturating_sub(1);
+        self.reach[..intermediate]
+            .iter()
+            .all(|&k| k <= crate::descriptor_transport::MAX_TWO_J)
     }
 
     /// Number of records the generator would emit for one target.
@@ -94,7 +91,7 @@ impl PreparedCounter {
         );
         let width = usize::from(self.max_two_j()) + 1;
         if prefix.is_empty() && self.multiplicity.is_empty() {
-            return Ok(0);
+            return Ok(u64::from(self.closed_core && target == 0));
         }
         if usize::from(target) >= width {
             return Ok(0);
@@ -202,9 +199,6 @@ pub(crate) fn count_configuration_records(
     targets: &[u16],
 ) -> Result<u64> {
     let prepared = prepare_configuration(core_subshells, configuration, min_two_j, max_two_j)?;
-    if prepared.occupied.is_empty() {
-        return Ok(0);
-    }
     let counter = PreparedCounter::new(&prepared);
     if counter.chain_count_is_exact() {
         let mut total = 0u64;

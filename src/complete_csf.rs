@@ -69,6 +69,17 @@ pub struct SubshellState {
     pub seniority: Option<u8>,
 }
 
+/// GRASP prints an interior coupling for a nonzero state after the first
+/// visible state. A visible J=0 state also clears the leading suppression.
+pub(crate) fn prints_intermediate_coupling(
+    seen_visible: &mut bool,
+    state: Option<SubshellState>,
+) -> bool {
+    let print = *seen_visible && state.is_some_and(|state| state.two_j != 0);
+    *seen_visible |= state.is_some();
+    print
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OccupiedSubshell {
     pub subshell_index: u16,
@@ -106,7 +117,7 @@ pub struct SymmetryBlock {
     pub parity: Parity,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct CompleteCsfFile {
     pub header_lines: [String; HEADER_LINE_COUNT],
     pub subshells: Vec<String>,
@@ -114,7 +125,23 @@ pub struct CompleteCsfFile {
     pub occupied_subshells: Vec<OccupiedSubshell>,
     pub intermediate_couplings: Vec<IntermediateCoupling>,
     pub blocks: Vec<SymmetryBlock>,
+    // Aligned with the occupied arena for records emitted by the generator.
+    generated_cumulative: Vec<u16>,
 }
+
+impl PartialEq for CompleteCsfFile {
+    fn eq(&self, other: &Self) -> bool {
+        // The complete generated chain is auxiliary to this text representation.
+        self.header_lines == other.header_lines
+            && self.subshells == other.subshells
+            && self.records == other.records
+            && self.occupied_subshells == other.occupied_subshells
+            && self.intermediate_couplings == other.intermediate_couplings
+            && self.blocks == other.blocks
+    }
+}
+
+impl Eq for CompleteCsfFile {}
 
 impl CompleteCsfFile {
     pub fn parse_path(path: &Path) -> Result<Self> {
@@ -158,6 +185,11 @@ impl CompleteCsfFile {
             .expect("exactly five header lines were collected");
         validate_header_labels(&header_lines)?;
         let subshells = parse_peel_subshells(&header_lines[3])?;
+        let has_core = !header_lines[1].trim().is_empty();
+        ensure!(
+            has_core || !subshells.is_empty(),
+            "empty core and peel orbital tables"
+        );
         let subshell_index = subshells
             .iter()
             .enumerate()
@@ -201,6 +233,10 @@ impl CompleteCsfFile {
                     .as_slice()
                     .try_into()
                     .expect("exactly three record lines were collected");
+                ensure!(
+                    has_core || !record_lines[0].1.is_empty(),
+                    "empty peel occupation requires a closed core"
+                );
                 let record = parse_record(
                     record_lines,
                     &subshells,
@@ -228,6 +264,7 @@ impl CompleteCsfFile {
             occupied_subshells,
             intermediate_couplings,
             blocks,
+            generated_cumulative: Vec::new(),
         })
     }
 
@@ -293,7 +330,7 @@ impl CompleteCsfFile {
     /// Build an empty file ready to receive records via
     /// [`Self::append_generated_record`].
     ///
-    /// Used by V2 descriptor restoration (`descriptor_v2::restore_file`): the
+    /// Used by V3 descriptor restoration (`descriptor_v3::restore_file`): the
     /// arena fields are private and `append_generated_record` is crate-only,
     /// so rebuilding a [`CompleteCsfFile`] from decoded rows must happen
     /// inside this crate.
@@ -308,6 +345,7 @@ impl CompleteCsfFile {
             occupied_subshells: Vec::new(),
             intermediate_couplings: Vec::new(),
             blocks: Vec::new(),
+            generated_cumulative: Vec::new(),
         }
     }
 
@@ -318,8 +356,12 @@ impl CompleteCsfFile {
         couplings: &[IntermediateCoupling],
         total_two_j: u16,
         parity: Parity,
+        cumulative: &[u16],
     ) -> Result<()> {
-        self.append_restored_record(occupied, couplings, total_two_j, parity, false)
+        self.generated_cumulative.try_reserve(cumulative.len())?;
+        self.append_restored_record(occupied, couplings, total_two_j, parity, false)?;
+        self.generated_cumulative.extend_from_slice(cumulative);
+        Ok(())
     }
 
     /// Append a decoded record, optionally preserving an explicit source block boundary.
@@ -381,6 +423,7 @@ impl CompleteCsfFile {
             + self.records.capacity() * size_of::<CsfRecord>()
             + self.occupied_subshells.capacity() * size_of::<OccupiedSubshell>()
             + self.intermediate_couplings.capacity() * size_of::<IntermediateCoupling>()
+            + self.generated_cumulative.capacity() * size_of::<u16>()
             + self.blocks.capacity() * size_of::<SymmetryBlock>()
             + header_bytes
     }
@@ -392,6 +435,19 @@ impl CompleteCsfFile {
             record.occupied_len,
             "occupied subshell",
         )
+    }
+
+    pub(crate) fn generated_cumulative(&self, record: &CsfRecord) -> Result<Option<&[u16]>> {
+        if self.generated_cumulative.is_empty() {
+            return Ok(None);
+        }
+        checked_slice(
+            &self.generated_cumulative,
+            record.occupied_start,
+            record.occupied_len,
+            "generated cumulative coupling",
+        )
+        .map(Some)
     }
 
     /// The intermediate couplings GRASP printed for this record.
@@ -458,10 +514,13 @@ fn format_record(
     occupied: &[OccupiedSubshell],
     couplings: &[IntermediateCoupling],
 ) -> Result<(String, String, String)> {
-    ensure!(
-        !occupied.is_empty(),
-        "cannot format a CSF without occupied subshells"
-    );
+    if occupied.is_empty() {
+        ensure!(
+            record.total_two_j == 0 && record.parity == Parity::Even && couplings.is_empty(),
+            "invalid closed-core record"
+        );
+        return Ok((String::new(), String::new(), "0+".into()));
+    }
     let field_count = occupied.len();
     let mut line1 = vec![b' '; field_count * FIELD_WIDTH];
     let mut line2 = vec![b' '; field_count * FIELD_WIDTH];
@@ -536,6 +595,16 @@ fn parse_record(
     let (line1_number, line1) = (&lines[0].0, &lines[0].1);
     let (line2_number, line2) = (&lines[1].0, &lines[1].1);
     let (line3_number, line3) = (&lines[2].0, &lines[2].1);
+    if line1.is_empty() && line2.is_empty() && line3 == "0+" {
+        return Ok(CsfRecord {
+            occupied_start: u64::try_from(occupied_arena.len())?,
+            occupied_len: 0,
+            coupling_start: u64::try_from(coupling_arena.len())?,
+            coupling_len: 0,
+            total_two_j: 0,
+            parity: Parity::Even,
+        });
+    }
     ensure!(
         !line1.is_empty() && line1.len().is_multiple_of(FIELD_WIDTH),
         "line {line1_number}: occupation line length {} is not a positive multiple of 9",
@@ -587,7 +656,7 @@ fn parse_record(
 
     let coupling_start = u64::try_from(coupling_arena.len())?;
     for boundary in 2..field_count {
-        let start = boundary * FIELD_WIDTH - 1;
+        let start = boundary * FIELD_WIDTH - 2;
         let end = boundary * FIELD_WIDTH + 3;
         let value = line3[start..end].trim();
         if !value.is_empty() {
@@ -604,7 +673,7 @@ fn parse_record(
     let bytes = line3.as_bytes();
     let parity = Parity::parse(bytes[line3.len() - 1])
         .with_context(|| format!("line {line3_number}: invalid final parity"))?;
-    let total_field = line3[field_count * FIELD_WIDTH - 3..field_count * FIELD_WIDTH + 1].trim();
+    let total_field = line3[field_count * FIELD_WIDTH - 4..field_count * FIELD_WIDTH + 1].trim();
     let total_two_j = parse_two_j(total_field)
         .with_context(|| format!("line {line3_number}: invalid total J {total_field:?}"))?;
 
@@ -660,7 +729,6 @@ fn parse_peel_subshells(line: &str) -> Result<Vec<String>> {
         .split_ascii_whitespace()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    ensure!(!subshells.is_empty(), "peel subshell header is empty");
     ensure!(
         subshells.len() <= usize::from(u16::MAX),
         "too many peel subshells"
@@ -787,7 +855,7 @@ fn write_state_field(field: &mut [u8], state: SubshellState) -> Result<()> {
 fn write_two_j_ending_at(line: &mut [u8], end: usize, two_j: u16) -> Result<()> {
     let value = format_two_j(two_j);
     ensure!(
-        value.len() <= 4,
+        value.len() <= 5,
         "J value {value:?} exceeds GRASP field width"
     );
     let start = end + 1 - value.len();

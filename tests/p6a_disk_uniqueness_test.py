@@ -16,7 +16,7 @@ end-of-generation invariant — the CSFs actually produced equal the number the
 workload planner counted before the run.
 
 The structural argument for why these runs cannot de-duplicate anything is
-``docs/V2_GENERATION_UNIQUENESS.md``.
+``docs/CSF_GENERATION.md#de-duplication``.
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ def test_the_verified_path_publishes_what_the_exact_path_publishes(
     """The skipped comparison must not change a single published byte.
 
     ``o1`` is the smaller registered fixture; the same differential runs on B1
-    and B2 in ``docs/benchmarks/v2_disk_generation_dedup_20260922.md``, where it
+    and B2 in ``docs/benchmarks/v3_disk_generation_dedup_20260922.md``, where it
     also measures what the skipped round trip cost.
     """
     exact, exact_header, exact_descriptors = run_fixture(

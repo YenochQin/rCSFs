@@ -33,7 +33,7 @@ macro_rules! field {
 pub(super) const COMMANDS: &[(&str, &str)] = &[
     (
         "convert",
-        "Import CSF text to V2 descriptor Parquet and a bound header TOML.",
+        "Import CSF text to V3 descriptor Parquet and a bound header TOML.",
     ),
     ("info", "Inspect Parquet metadata."),
     (
@@ -59,7 +59,7 @@ pub(super) const COMMANDS: &[(&str, &str)] = &[
     ),
     (
         "restore-csfs",
-        "Restore CSFs from V2 descriptors, verifying the source header.",
+        "Restore CSFs from V3 descriptors, verifying the source header.",
     ),
 ];
 pub(super) fn fields(command: &str) -> Vec<Field> {
@@ -110,6 +110,12 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
                 Some("allow-unchecked-space"),
                 Flag,
                 "Allow a run if free disk space cannot be measured."
+            ),
+            field!(
+                "descriptor_version",
+                Some("descriptor-version"),
+                Number,
+                "Require descriptor format version 3."
             ),
             field!(
                 "generation_storage",
@@ -218,7 +224,7 @@ pub(super) fn fields(command: &str) -> Vec<Field> {
                 "descriptors",
                 Some("descriptors"),
                 Text,
-                "V2 descriptor Parquet."
+                "V3 descriptor Parquet."
             ),
             field!(
                 "header",
@@ -447,7 +453,10 @@ impl Settings {
             self.positive(key)?;
         }
         if let Some(version) = self.number("descriptor_version")? {
-            ensure!(version == 2, "only descriptor version 2 is supported");
+            ensure!(
+                version == usize::from(crate::descriptor_transport::DescriptorVersion::V3.tag()),
+                "only descriptor version 3 is supported"
+            );
         }
         if let Some(storage) = self.string("generation_storage")? {
             ensure!(

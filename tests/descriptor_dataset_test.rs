@@ -21,7 +21,7 @@ fn import_select_restore_preserves_explicit_equal_symmetry_blocks() {
     let mut source = DescriptorRows::open(&path, &header).unwrap();
     assert_eq!(
         source.next_row().unwrap().unwrap(),
-        (0, 0, vec![2, -1, 0, -1, 0, -1, 0, -1, 0, 1])
+        (0, 0, vec![2, 0, 1, 1, 0, 0, 1, 1, 1, 1])
     );
     assert_eq!(source.next_row().unwrap().unwrap().1, 1);
     assert!(source.next_row().unwrap().is_none());
@@ -56,7 +56,7 @@ fn pure_closed_core_exports_and_reimports_explicit_record() {
     let copy_header = header_path(&copy).unwrap();
     import_text(&restored, &copy, &copy_header).unwrap();
     let mut source = DescriptorRows::open(&copy, &copy_header).unwrap();
-    assert_eq!(source.next_row().unwrap().unwrap().2, [0, 1]);
+    assert_eq!(source.next_row().unwrap().unwrap().2, [1, 1]);
 }
 
 #[test]

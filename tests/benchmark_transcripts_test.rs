@@ -8,7 +8,7 @@
 //!
 //! This test covers the cheap half of the contract: the SHA-256 of the input
 //! bytes and the number of enumerated occupation configurations.  The recorded
-//! CSF totals are checked by `scripts/benchmark_v2_generation.py` against a
+//! CSF totals are checked by `scripts/benchmark_v3_generation.py` against a
 //! real run, because generating millions of records does not belong in the
 //! default test suite.
 
@@ -100,7 +100,7 @@ fn registered_benchmark_transcripts_match_their_manifest() {
         assert!(entry_integer(entry, "records", file) > 0);
         // An entry marked `manual` is one whose enumeration is too expensive for
         // the default suite. Its hash is checked above; its counts are verified
-        // by scripts/estimate_v2_generation.py, which counts without generating.
+        // by scripts/estimate_v3_generation.py, which counts without generating.
         if entry
             .get("manual")
             .and_then(toml::Value::as_bool)

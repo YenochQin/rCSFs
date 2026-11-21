@@ -1,6 +1,6 @@
 # CSF 计算描述符 V3 生成计划
 
-2026-11-21 · 待实施 · 源码基线 `b885cec`。rCSFs 负责定义磁盘格式、生成和转换数据、提供 CLI/Python 数据集操作。本文用 `descriptor_version=3` 区分新字段语义，版本号指文件格式。
+2026-11-21 · V3 实施范围 · 源码基线 `b885cec`。rCSFs 负责定义磁盘格式、生成和转换数据、提供 CLI/Python 数据集操作。本文用 `descriptor_version=3` 区分新字段语义，版本号指文件格式。
 
 ## 磁盘契约
 
@@ -17,14 +17,14 @@
 
 初始 K=0，初始累计编码为 1。角动量以宽整数进行运算和校验，在 2J、2K 为 0 至 126 时才编码成 1 至 127。所有轨道都有确定值；−1 只可能出现在负宇称列。M>0 时，最后一个轨道的累计编码等于总角动量编码。M=0 时，纯闭核用一条 `[1, +1]` 表示。
 
-文件保留有序 core/peel 表、电子数、原始 header 字节的 SHA-256、显式块次序和长度；按适用情况保存每块的 `zero_order_counts`。使用版本、通道顺序、完整列名、逻辑类型和元数据联合识别布局。相邻的同对称性块各自有块身份。V2 读取使用自己的版本分支；两版行宽相同。[现行格式与 API](CSF_DESCRIPTOR_GUIDE.md) · [布局和元数据](../src/descriptor_transport.rs)
+文件保留有序 core/peel 表、电子数、原始 header 字节的 SHA-256、显式块次序和长度；按适用情况保存每块的 `zero_order_counts`。使用版本、通道顺序、完整列名、逻辑类型和元数据联合识别布局。相邻的同对称性块各自有块身份。V3 是当前读写格式。V2 文件从原始文本或生成输入重建。[现行格式与 API](CSF_DESCRIPTOR_GUIDE.md) · [布局和元数据](../src/descriptor_transport.rs)
 
 拟写入 `channels_per_subshell=4`、`descriptor_dtype=int8`、`seniority_encoding=physical`、`max_two_j=126`、`normalized=false`、有序 `feature_columns`、`global_columns` 及 `source_header_sha256`。V3 的元数据省去 `missing_sentinel`。生成配置的 `j_min`、`j_max` 继续以物理 2J 表示，写出行末时才加一。
 
 ## 生成与数据集操作
 
 1. **直接生成。** 在角动量递归的 `emit()` 处，把所选子壳层态和已占据轨道的 `cumulative` 交给 V3 编码器。把局部轨道映射到 header 顺序，输出完整 J、K 码，遇到空轨道继承累计码；省略的打印标签通过已有状态表确定物理 v。内存、磁盘分段及并行缓冲路径都要在临时借用结束前写入或保留所需信息。共用同一行编码规则和行序。[角动量递归与输出接口](../src/configuration_generation/shared_generation/angular_coupling_generator.rs) · [内存生成](../src/configuration_generation/csf_generation/complete_csf_generation_pipeline.rs) · [磁盘生成](../src/configuration_generation/csf_generation/disk_csf_generation_pipeline.rs) · [seniority 状态表](../src/seniority.rs)
-2. **文本转换与恢复。** 从三行 CSF 读入的显式 0 是一次真实选择。结合占据、态表、总 J 和耦合链补齐唯一可定的值；非平凡中间分支缺失且无法唯一确定时报告块、行和轨道。恢复文本时用规范打印规则选择输出位置。往返验收以同一物理 CSF 和同一 V3 整数行为准；原文本在哪一格留白无法由 V3 一般性地还原。[文本转换](../src/csfs_descriptor.rs) · [现有编码与恢复入口](../src/descriptor_v2.rs)
+2. **文本转换与恢复。** 从三行 CSF 读入的显式 0 是一次真实选择。结合占据、态表、总 J 和耦合链补齐唯一可定的值；非平凡中间分支缺失且无法唯一确定时报告块、行和轨道。恢复文本时用规范打印规则选择输出位置。往返验收以同一物理 CSF 和同一 V3 整数行为准；原文本在哪一格留白无法由 V3 一般性地还原。[文本转换](../src/csfs_descriptor.rs) · [现有编码与恢复入口](../src/descriptor_v3.rs)
 3. **数据集操作。** 让读取、写出、选择、分块、匹配、合并、去重及 zero-first 显式分派版本。合并轨道表时保留耦合顺序；插入的空轨道为 `(0,0,1,前一步累计码)`。不同占据表上的记录须先映射到同一有序基再匹配。选取或重分块后重建块长度和配套 header 哈希，按操作的分区语义保留或重算零阶计数。文件级 CSF 身份包含完整的占据、v、J、K 和总对称性。[数据集读写](../src/descriptor_dataset.rs) · [匹配、合并和分割](../src/descriptor_operations.rs)
 4. **对外接口。** CLI、Python 与类型声明同步暴露 V3 版本和实际列名。原始数据列提供计算码；`read_csfs(..., include_coupling_signature=True)` 的派生分组列继续提供 `List(Int32)`，尾项为物理总 2J。按规范打印边界生成既有分组语义：每个已占据 peel 位置依次取打印的 2K、打印的子壳层 2J、或 0，末项使用总 2J；纯闭核签名为 `[0]`。精确选择用完整记录或原始行号。更新格式指南及 API 示例。[Python 读取端](../src/descriptor_python.rs) · [公共 API](../rcsfs/__init__.py)
 

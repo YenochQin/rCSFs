@@ -41,14 +41,14 @@ fn parallel_generation_preserves_task_order_and_records() {
 }
 
 #[test]
-fn complete_integer_record_encodes_v2() {
+fn complete_integer_record_encodes_v3() {
     use _rcsfs::descriptor_schema::{DescriptorLayout, DescriptorVersion};
-    use _rcsfs::descriptor_v2::encode_v2;
+    use _rcsfs::descriptor_v3::encode_v3;
     let generated = generate_csfs(&request(&[("2p", 1)], 1, 5)).unwrap();
-    let layout = DescriptorLayout::new(DescriptorVersion::V2, generated.subshells.len());
+    let layout = DescriptorLayout::new(DescriptorVersion::V3, generated.subshells.len());
     let mut descriptor = vec![0; layout.row_len()];
-    encode_v2(&generated, &generated.records[0], &mut descriptor).unwrap();
-    assert_eq!(descriptor, [1, 3, 1, -1, 3, -1]);
+    encode_v3(&generated, &generated.records[0], &mut descriptor).unwrap();
+    assert_eq!(descriptor, [1, 1, 4, 4, 4, -1]);
 }
 
 fn roundtrip(request: &GenerationRequest) -> CompleteCsfFile {
@@ -556,4 +556,18 @@ fn parallel_state_prefixes_preserve_records_and_order() {
             }
         }
     }
+}
+
+#[test]
+fn memory_writer_preserves_explicit_relativistic_coupling_order() {
+    use _rcsfs::configuration_generation::write_generated_csfs;
+    use _rcsfs::descriptor_dataset::{DescriptorRows, header_path};
+    let generated = generate_csfs(&request(&[("3s", 1), ("1s", 1), ("2s", 1)], 1, 1)).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let descriptor = directory.path().join("basis_desc.parquet");
+    write_generated_csfs(&[], &[generated], &descriptor).unwrap();
+    let mut data = DescriptorRows::open(&descriptor, &header_path(&descriptor).unwrap()).unwrap();
+    assert_eq!(data.header.peel, ["3s", "1s", "2s"]);
+    assert_eq!(data.next_row().unwrap().unwrap().2[7], 1);
+    assert_eq!(data.next_row().unwrap().unwrap().2[7], 3);
 }

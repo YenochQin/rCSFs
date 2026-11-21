@@ -8,24 +8,22 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
 
-/// Sentinel for unprinted J/coupling fields. Physical seniority is never missing.
-///
-/// Distinct from a printed `0` (`2J` or `2K` can both be
-/// legitimately zero), so round-tripping preserves the "printed vs not"
-/// distinction needed to restore the original CSF record.
-pub const MISSING: i8 = -1;
-
 /// GRASP stores angular momenta as 2J+1 in a signed byte.
 pub const MAX_TWO_J: u16 = 126;
 pub const DESCRIPTOR_DTYPE: &str = "int8";
 
 /// Validate before narrowing; 127 fits i8 but violates GRASP's 2J+1 bound.
-pub fn checked_angular_value(two_j: u16, field: &str) -> Result<i8> {
+pub fn encode_angular(two_j: u16, field: &str) -> Result<i8> {
     ensure!(
         two_j <= MAX_TWO_J,
         "{field}={two_j} exceeds the descriptor angular bound 2J/2K <= {MAX_TWO_J} (GRASP |2J+1| <= 127)"
     );
-    i8::try_from(two_j).context("descriptor angular value does not fit Int8")
+    i8::try_from(two_j + 1).context("descriptor angular value does not fit Int8")
+}
+
+pub(crate) fn decode_angular(code: i8, field: &str) -> Result<u16> {
+    ensure!(code > 0, "{field} code must be in 1..=127, got {code}");
+    Ok(u16::try_from(code)? - 1)
 }
 
 pub fn validate_descriptor_storage(metadata: &[KeyValue]) -> Result<()> {
@@ -38,7 +36,7 @@ pub fn validate_descriptor_storage(metadata: &[KeyValue]) -> Result<()> {
         ensure!(
             entries.next().and_then(|entry| entry.value.as_deref()) == Some(expected)
                 && entries.next().is_none(),
-            "descriptor file requires {key}={expected}; regenerate legacy Int32 descriptors from CSF text or CSF Parquet"
+            "descriptor file requires {key}={expected}; regenerate legacy Int32 descriptors from CSF text or generation inputs"
         );
     }
     Ok(())
@@ -54,38 +52,37 @@ pub fn validate_seniority_encoding(metadata: &[KeyValue]) -> Result<()> {
     ensure!(
         entries.next().and_then(|entry| entry.value.as_deref()) == Some(SENIORITY_ENCODING)
             && entries.next().is_none(),
-        "descriptor file requires seniority_encoding=physical; regenerate legacy printed-seniority descriptors from CSF text or CSF Parquet"
+        "descriptor file requires seniority_encoding=physical; regenerate legacy printed-seniority descriptors from CSF text or generation inputs"
     );
     Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum DescriptorVersion {
-    V2,
+    V3,
 }
 
 impl DescriptorVersion {
     /// Integer channels stored per peel subshell.
     pub const fn channels_per_subshell(self) -> usize {
         match self {
-            Self::V2 => 4,
+            Self::V3 => 4,
         }
     }
 
     /// The stable integer tag written to Parquet KV metadata and TOML sidecars.
     pub const fn tag(self) -> u8 {
         match self {
-            Self::V2 => 2,
+            Self::V3 => 3,
         }
     }
 
     pub fn from_tag(tag: u8) -> Result<Self> {
         match tag {
-            1 => Err(anyhow::anyhow!(
-                "V1 descriptors have been removed; regenerate V2 descriptors from the original CSF data"
+            3 => Ok(Self::V3),
+            other => Err(anyhow::anyhow!(
+                "unsupported descriptor_version={other}; regenerate V3 descriptors from the original CSF text or generation inputs"
             )),
-            2 => Ok(Self::V2),
-            other => Err(anyhow::anyhow!("unknown descriptor_version tag {other}")),
         }
     }
 }
@@ -137,17 +134,15 @@ impl DescriptorLayout {
         0
     }
 
-    pub fn two_j_offset(self) -> usize {
+    pub fn seniority_offset(self) -> usize {
         1
     }
 
-    /// V2-only: offset of the seniority channel within a subshell's slot.
-    pub fn seniority_offset(self) -> usize {
-        debug_assert_eq!(self.version, DescriptorVersion::V2);
+    pub fn two_j_offset(self) -> usize {
         2
     }
 
-    /// Offset of the printed-coupling (`2K`) channel within a subshell's slot.
+    /// Offset of the cumulative 2K+1 channel within a subshell's slot.
     pub fn two_k_offset(self) -> usize {
         3
     }
@@ -169,10 +164,10 @@ impl DescriptorLayout {
         (0..self.subshell_count)
             .flat_map(|index| {
                 [
-                    format!("sub{index}_n"),
-                    format!("sub{index}_2j"),
-                    format!("sub{index}_v"),
-                    format!("sub{index}_2k"),
+                    format!("sub{index}_occupation"),
+                    format!("sub{index}_seniority"),
+                    format!("sub{index}_two_j_plus_one"),
+                    format!("sub{index}_cumulative_two_k_plus_one"),
                 ]
             })
             .collect()
@@ -180,7 +175,7 @@ impl DescriptorLayout {
 
     /// Names of the global (non-per-subshell) columns, in row order.
     pub fn global_column_names(self) -> Vec<String> {
-        vec!["total_two_j".to_owned(), "parity".to_owned()]
+        vec!["total_two_j_plus_one".to_owned(), "parity".to_owned()]
     }
 }
 
@@ -214,7 +209,7 @@ pub fn validate_output_schema(
                         && actual.data_type() == expected.data_type()
                         && !actual.is_nullable()
                 }),
-        "descriptor schema must contain the ordered non-null Int8 V2 columns; regenerate legacy Int32 descriptors"
+        "descriptor schema must contain the ordered non-null Int8 V3 columns; regenerate legacy Int32 descriptors"
     );
     Ok(())
 }
@@ -294,7 +289,6 @@ pub fn output_kv_metadata(
             "peel_subshells".to_owned(),
             Some(json_string_array(peel_subshells)),
         ),
-        KeyValue::new("missing_sentinel".to_owned(), Some(MISSING.to_string())),
         KeyValue::new(
             "seniority_encoding".to_owned(),
             Some(SENIORITY_ENCODING.to_owned()),

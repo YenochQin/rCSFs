@@ -17,6 +17,7 @@ pub(super) fn template(command: &str) -> Option<&'static str> {
 # estimate_only = false
 # allow_unchecked_space = false
 # generation_storage = "disk"
+# descriptor_version = 3
 # continue_lists = false
 "###
         }

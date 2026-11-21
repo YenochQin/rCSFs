@@ -164,7 +164,7 @@ fn descriptor_roundtrip_preserves_states_headers_and_selected_rows() {
     prepare_descriptor(p);
     let info = json(p, &["info", "features_descriptors.parquet", "--json"]);
     assert_eq!(info["num_rows"], 3);
-    assert_eq!(info["key_value_metadata"]["descriptor_version"], "2");
+    assert_eq!(info["key_value_metadata"]["descriptor_version"], "3");
     assert!(!p.join("input.c").exists());
     fs::write(p.join("restored.c"), "previous complete output").unwrap();
     restore(

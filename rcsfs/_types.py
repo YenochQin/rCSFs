@@ -68,7 +68,7 @@ class ParquetInfo(TypedDict):
 
 
 class CsfRestoreStats(TypedDict):
-    """Statistics returned from restoring CSFs out of a V2 descriptor file."""
+    """Statistics returned from restoring CSFs out of a V3 descriptor file."""
 
     success: bool
     output_file: str
@@ -203,7 +203,7 @@ class CsfGenerationEstimate(TypedDict):
     unique_occupations: int
     pre_deduplication_records: int
     peel_subshells: int
-    v2_columns: int
+    descriptor_columns: int
     #: The codec the predicted run would write its temporary segments with. The
     #: byte model is uncompressed, so a compressed run stays inside the
     #: estimate rather than exceeding it.

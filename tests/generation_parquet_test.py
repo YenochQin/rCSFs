@@ -72,7 +72,7 @@ def config_file(tmp_path: Path, **outputs: object) -> Path:
     return config
 
 
-def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
+def test_config_generation_v3_metadata_and_roundtrip(tmp_path: Path) -> None:
     config = config_file(tmp_path)
     assert cli.main(["csfsgenerate", "--config", str(config)]) == 0
     frame = pl.read_parquet(tmp_path / "out_descriptors.parquet")
@@ -81,15 +81,15 @@ def test_config_generation_v2_metadata_and_roundtrip(tmp_path: Path) -> None:
     assert frame.columns == [
         f"sub{index}_{channel}"
         for index in range(len(peel))
-        for channel in ("n", "2j", "v", "2k")
-    ] + ["total_two_j", "parity"]
+        for channel in ("occupation", "seniority", "two_j_plus_one", "cumulative_two_k_plus_one")
+    ] + ["total_two_j_plus_one", "parity"]
     assert frame.dtypes == [pl.Int8] * frame.width
-    assert frame["total_two_j"].to_list() == [0]
+    assert frame["total_two_j_plus_one"].to_list() == [1]
     assert frame["parity"].to_list() == [1]
     parquet_metadata = get_parquet_info(tmp_path / "out_descriptors.parquet")[
         "key_value_metadata"
     ]
-    assert parquet_metadata["descriptor_version"] == "2"
+    assert parquet_metadata["descriptor_version"] == "3"
     assert parquet_metadata["channels_per_subshell"] == "4"
     restored = tmp_path / "restored.c"
     stats = restore_csfs_from_descriptors(
@@ -180,7 +180,7 @@ def test_config_multiple_lists_union_and_exact_dedup(
     assert stats["duplicate_count"] == 1
     descriptors = pl.read_parquet(tmp_path / "union_descriptors.parquet")
     assert descriptors.height == 2
-    assert {row[0] for row in descriptors.select("sub0_n").iter_rows()} == {0, 2}
+    assert {row[0] for row in descriptors.select("sub0_occupation").iter_rows()} == {0, 2}
     restored = tmp_path / "restored.c"
     restore_csfs_from_descriptors(
         tmp_path / "union_descriptors.parquet",

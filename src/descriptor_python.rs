@@ -14,6 +14,7 @@ use serde_json::json;
 
 use crate::descriptor_dataset::{self as dataset, DescriptorRows};
 use crate::descriptor_operations as operations;
+use crate::descriptor_v3::decode_v3_into;
 
 pub(super) fn python_value(py: Python<'_>, value: &impl Serialize) -> PyResult<Py<PyAny>> {
     let text = serde_json::to_string(value).map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -80,6 +81,7 @@ fn read_csfs_arrow(
             let mut indices = Vec::new();
             let mut blocks = Vec::new();
             let mut signatures = ListBuilder::new(Int32Builder::new());
+            let (mut occupied, mut couplings) = (Vec::new(), Vec::new());
             while let Some((ordinal, block, row)) = reader.next_row()? {
                 indices.push(u64::try_from(ordinal)?);
                 if include_block_id {
@@ -89,26 +91,33 @@ fn read_csfs_arrow(
                     column.push(*value);
                 }
                 if include_coupling_signature {
-                    let mut signature = Vec::new();
-                    for slot in row[..layout.feature_len()].as_chunks::<4>().0 {
-                        if slot[0] > 0 {
-                            signature.push(if slot[3] != -1 {
-                                slot[3]
-                            } else if slot[1] != -1 {
-                                slot[1]
-                            } else {
-                                0
-                            });
-                        }
+                    let (total_two_j, _) = decode_v3_into(
+                        &row,
+                        layout,
+                        &reader.header.peel,
+                        &mut occupied,
+                        &mut couplings,
+                    )?;
+                    let mut printed_couplings = couplings.iter().peekable();
+                    for (index, shell) in occupied
+                        .iter()
+                        .enumerate()
+                        .take(occupied.len().saturating_sub(1))
+                    {
+                        let two_j = if printed_couplings
+                            .peek()
+                            .is_some_and(|step| usize::from(step.boundary) == index + 1)
+                        {
+                            printed_couplings
+                                .next()
+                                .expect("printed coupling was present")
+                                .two_j
+                        } else {
+                            shell.state.map_or(0, |state| state.two_j)
+                        };
+                        signatures.values().append_value(i32::from(two_j));
                     }
-                    if let Some(last) = signature.last_mut() {
-                        *last = row[row.len() - 2];
-                    } else {
-                        signature.push(row[row.len() - 2]);
-                    }
-                    for value in signature {
-                        signatures.values().append_value(i32::from(value));
-                    }
+                    signatures.values().append_value(i32::from(total_two_j));
                     signatures.append(true);
                 }
             }

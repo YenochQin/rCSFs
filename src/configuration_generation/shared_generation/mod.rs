@@ -29,5 +29,3 @@ pub(crate) use generation_task_planning::{
     GenerationPlan, PlanStats, PlannedTask, TaskSpan, estimate_workload, plan_generation,
     report_plan, request_targets,
 };
-
-pub(crate) use subshell_state_catalog::subshell_states;

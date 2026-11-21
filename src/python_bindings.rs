@@ -7,6 +7,10 @@ use std::path::Path;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add(
+        "DESCRIPTOR_VERSION",
+        descriptor_transport::DescriptorVersion::V3.tag(),
+    )?;
     descriptor_python::register(m)?;
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;
     m.add_function(wrap_pyfunction!(select_interacting_csfs, m)?)?;

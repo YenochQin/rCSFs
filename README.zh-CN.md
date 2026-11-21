@@ -13,8 +13,8 @@ rCSFs 是一个基于 Rust 的高性能工具库，用于在 Python 中处理原
 
 ## 描述符 CSF 数据集
 
-rCSFs 3.1.0 默认生成和处理 V2 描述符 Parquet 及配套 TOML header。Int8 列保存占据数、
-物理 seniority、中间耦合、总 2J 和宇称。header 保存轨道表、电子数和显式块长度，
+此版本生成和处理 V3 描述符 Parquet 及配套 TOML header。Int8 列保存占据数、
+物理 seniority、子壳层 2J+1、累计 2K+1、总 2J+1 和宇称。header 保存轨道表、电子数和显式块长度，
 Parquet 元数据用 SHA-256 校验配套 header 的内容。
 
 Python wheel 同时包含 `rcsfs` 包和 Rust 原生 CLI。源码构建见
@@ -52,7 +52,7 @@ rcsfs restore-csfs --descriptors ordered_desc.parquet --header ordered_header.to
 `name_desc.parquet` 和旧的 `name_descriptors.parquet` 都配对 `name_header.toml`。
 用 `csfs-split` 拆分较小 active spaces，各输出均带自己的 header，文件名需与输入对不同。
 
-`zero-first` 和 `interacting` 直接读写 V2 描述符及配套 header。
+`zero-first` 和 `interacting` 直接读写 V3 描述符及配套 header。
 `zero-first` 在每个显式对称性块中先写零阶参考，再按原顺序写参考中没有的全空间 CSF。
 输出 header 的 `[block_info].zero_order_counts` 按文件分块顺序记录各块开头的零阶 CSF 数。
 `interacting` 先写参考，再写参考中没有且通过占据数结构上界筛选的候选 CSF。

@@ -194,7 +194,7 @@ fn worker_count_does_not_change_output_order_or_stats() {
 }
 
 #[test]
-fn numerical_selection_and_partition_keep_explicit_zero_channels_across_batches() {
+fn numerical_selection_and_partition_keep_distinct_couplings_across_batches() {
     let dir = tempfile::tempdir().unwrap();
     let path = |name: &str| dir.path().join(format!("{name}_descriptors.parquet"));
     let reference = path("reference");
@@ -208,19 +208,17 @@ fn numerical_selection_and_partition_keep_explicit_zero_channels_across_batches(
         .unwrap()
     };
 
-    // Two closed s subshells followed by two spin-1/2 subshells coupled to J=0.
-    let row = [2, -1, 0, -1, 2, -1, 0, -1, 1, 1, 1, -1, 1, 1, 1, -1, 0, 1];
+    // Four spin-1/2 subshells with total J=0 and either K=0 or K=1 at the second orbital.
+    let row = [1, 1, 2, 2, 1, 1, 2, 1, 1, 1, 2, 2, 1, 1, 2, 1, 1, 1];
     let mut writer =
         DatasetWriter::new(header("2s 3s 4s 5s"), &reference, &reference_header, &[]).unwrap();
     writer.push(&row, 0).unwrap();
     writer.finish().unwrap();
 
     let mut padded = row[..16].to_vec();
-    padded.extend([0, -1, 0, -1, 0, 1]);
-    let mut explicit_j = padded.clone();
-    explicit_j[1] = 0;
-    let mut explicit_k = padded.clone();
-    explicit_k[7] = 0;
+    padded.extend([0, 0, 1, 1, 1, 1]);
+    let mut other_coupling = padded.clone();
+    other_coupling[7] = 3;
 
     let mut writer = DatasetWriter::new(
         header("2s 3s 4s 5s 6s"),
@@ -231,8 +229,7 @@ fn numerical_selection_and_partition_keep_explicit_zero_channels_across_batches(
     .unwrap();
     for index in 0..=8192 {
         let row = match index {
-            0 | 8192 => &explicit_j,
-            4096 => &explicit_k,
+            0 | 4096 | 8192 => &other_coupling,
             _ => &padded,
         };
         writer.push(row, 0).unwrap();
@@ -269,7 +266,7 @@ fn numerical_selection_and_partition_keep_explicit_zero_channels_across_batches(
 
     for path in [filtered, partitioned] {
         let mut rows = DescriptorRows::open(&path, &header_path(&path).unwrap()).unwrap();
-        for expected in [&padded, &explicit_j, &explicit_k, &explicit_j] {
+        for expected in [&padded, &other_coupling, &other_coupling, &other_coupling] {
             assert_eq!(&rows.next_row().unwrap().unwrap().2, expected);
         }
         assert!(rows.next_row().unwrap().is_none());

@@ -226,6 +226,16 @@ impl CSFDescriptorGenerator {
         );
 
         let subshells_line = line1.trim_end();
+        if subshells_line.is_empty() && line2.trim().is_empty() && line3.trim() == "0+" {
+            return write_text_row(
+                self.layout,
+                &self.peel_subshells,
+                &[],
+                &[],
+                (0, Parity::Even),
+                row,
+            );
+        }
         let line_length = subshells_line.len();
         ensure!(
             line_length > 0 && line_length.is_multiple_of(9),

@@ -78,6 +78,41 @@ fn integer_encoder_and_decoder_validate_each_angular_channel() {
 }
 
 #[test]
+fn edited_generated_coupling_agrees_with_reimported_text() {
+    let mut file = generate_csfs(&GenerationRequest {
+        core_subshells: vec![],
+        configuration: ["1s", "2s", "3s"]
+            .map(|label| SubshellOccupation {
+                subshell: label.parse().unwrap(),
+                electrons: 1,
+            })
+            .to_vec(),
+        min_two_j: 1,
+        max_two_j: 1,
+    })
+    .unwrap();
+    let parser = CSFDescriptorGenerator::new(file.subshells.clone());
+    let mut row = vec![0; parser.layout().row_len()];
+    let coupling = &mut file.intermediate_couplings[0];
+    assert_eq!((coupling.boundary, coupling.two_j), (2, 0));
+    coupling.two_j = 2;
+    let record = &file.records[0];
+    encode_v3(&file, record, &mut row).unwrap();
+    let mut text = Vec::new();
+    file.write_record_to(record, &mut text).unwrap();
+    let text = std::str::from_utf8(&text).unwrap();
+    let lines = text.lines().collect::<Vec<_>>();
+    assert_eq!(row, parser.parse_csf(lines[0], lines[1], lines[2]).unwrap());
+    assert_eq!(
+        row[parser.layout().slot(1) + parser.layout().two_k_offset()],
+        3
+    );
+
+    file.intermediate_couplings[0].two_j = 4;
+    assert!(encode_v3(&file, record, &mut row).is_err());
+}
+
+#[test]
 fn maximum_code_and_wide_intermediate_round_trip() {
     let file = generate_csfs(&GenerationRequest {
         core_subshells: vec![],

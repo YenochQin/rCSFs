@@ -253,6 +253,7 @@ impl Duplicate {
 /// What auditing one family found.
 struct Audit {
     records: usize,
+    requires_w: usize,
     configurations: usize,
     peel: Vec<Subshell>,
     row_duplicates: Vec<Duplicate>,
@@ -339,7 +340,10 @@ fn audit(requests: &[GenerationRequest]) -> Result<Audit> {
 
     let mut sighted = Vec::new();
     let mut decode_failures = Vec::new();
+    let mut local_survivors = Vec::new();
+    let mut requires_w = 0;
     for (configuration, file) in files.iter().enumerate() {
+        let first = sighted.len();
         let mut frame = PeelFrame::new(file, &peel, &index_of)?;
         for (index, record) in file.records.iter().enumerate() {
             let origin = format!("configuration {configuration} record {index}");
@@ -353,7 +357,25 @@ fn audit(requests: &[GenerationRequest]) -> Result<Audit> {
                     .all(|pair| pair[0].subshell_index < pair[1].subshell_index),
                 "{origin}: coupling order is not the run-level Peel order ({expected:?})"
             );
-            let row = frame.encode(file, record)?.to_vec();
+            // Only these seniority-four terms need an additional w label in V3.
+            let needs_w = expected.iter().any(|shell| {
+                peel[usize::from(shell.subshell_index)].capacity() == 10
+                    && matches!(shell.occupation, 4 | 6)
+                    && shell
+                        .state
+                        .is_some_and(|s| s.seniority == Some(4) && matches!(s.two_j, 8 | 12))
+            });
+            let encoded = frame.encode(file, record);
+            if needs_w {
+                let error = encoded.expect_err("V3 cannot distinguish these two terms");
+                ensure!(
+                    format!("{error:#}").contains("additional w label"),
+                    "{origin}: {error:#}"
+                );
+                requires_w += 1;
+                continue;
+            }
+            let row = encoded?.to_vec();
             let mut text = Vec::new();
             file.write_record_to(record, &mut text)?;
             let text = String::from_utf8(text).context("formatted CSF is not UTF-8")?;
@@ -379,19 +401,21 @@ fn audit(requests: &[GenerationRequest]) -> Result<Audit> {
             }
             sighted.push(Sighted { row, text, origin });
         }
+        local_survivors.extend(survivors(&sighted, first..sighted.len()));
     }
 
     let row_duplicates = duplicates_by(&sighted, |sighted| &sighted.row);
     let text_duplicates = duplicates_by(&sighted, |sighted| &sighted.text);
     Ok(Audit {
         records: sighted.len(),
+        requires_w,
         configurations: files.len(),
         peel,
         row_duplicates,
         text_duplicates,
         decode_failures,
         global_survivors: survivors(&sighted, 0..sighted.len()),
-        local_survivors: local_survivors(&sighted, &files),
+        local_survivors,
     })
 }
 
@@ -423,18 +447,6 @@ fn survivors(sighted: &[Sighted], range: std::ops::Range<usize>) -> Vec<usize> {
     range
         .filter(|&index| seen.insert(&sighted[index].row))
         .collect()
-}
-
-/// The same, restricted to each configuration's own records.
-fn local_survivors(sighted: &[Sighted], files: &[CompleteCsfFile]) -> Vec<usize> {
-    let mut start = 0;
-    let mut survivors = Vec::new();
-    for file in files {
-        let end = start + file.records.len();
-        survivors.extend(self::survivors(sighted, start..end));
-        start = end;
-    }
-    survivors
 }
 
 /// The registered multi-reference fixture. Its *enumeration* is cheap and is
@@ -528,11 +540,24 @@ fn every_supported_state_table_emits_distinct_rows() {
     );
     let audit = audit(&requests).unwrap();
     audit.assert_unique("single-subshell state tables");
+    // 5g and 6h-, each with four electrons or holes and J=4 or 6.
+    assert_eq!(audit.requires_w, 8);
     assert!(
         audit.records >= 100,
         "the state-table family lost records: {}",
         audit.records
     );
+}
+
+#[test]
+fn uniqueness_audit_keeps_encodable_terms_at_the_same_j_as_rejected_terms() {
+    let requests = [4, 6]
+        .into_iter()
+        .flat_map(|q| [8, 12].map(|two_j| request(&[(shell("5g"), q)], two_j, two_j)))
+        .collect::<Vec<_>>();
+    let audit = audit(&requests).unwrap();
+    assert_eq!((audit.records, audit.requires_w), (4, 4));
+    audit.assert_unique("seniority-two survivors");
 }
 
 /// Every subset of `shells` holding between `low` and `high` members.

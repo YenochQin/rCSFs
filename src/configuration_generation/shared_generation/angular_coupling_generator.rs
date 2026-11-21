@@ -245,9 +245,8 @@ impl PreparedGeneration {
 
 /// Enumerate new CSFs without invoking Fortran or constructing text records.
 ///
-/// An impossible target or empty occupation configuration yields an empty
-/// result. Inspect `records.is_empty()` before export: empty CSF lists cannot
-/// be written by the strict codec. Unsupported subshell state tables fail.
+/// An unreachable target yields an empty result. A closed core with no occupied
+/// peel subshells yields one even J=0 record when the requested range includes zero.
 pub fn generate_csfs(request: &GenerationRequest) -> Result<CompleteCsfFile> {
     generate_csfs_impl(request, 1)
 }

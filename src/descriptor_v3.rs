@@ -18,16 +18,11 @@ pub fn encode_v3(file: &CompleteCsfFile, record: &CsfRecord, row: &mut [i8]) -> 
     let occupied = file.occupied(record)?;
     let layout = DescriptorLayout::new(DescriptorVersion::V3, file.subshells.len());
     let symmetry = (record.total_two_j, record.parity);
-    if let Some(cumulative) = file.generated_cumulative(record)? {
-        return write_generated_row(layout, &file.subshells, occupied, cumulative, symmetry, row);
-    }
-    if occupied.is_empty() {
-        ensure!(
-            !file.header_lines[1].trim().is_empty(),
-            "an empty peel occupation requires a closed core"
-        );
-        return write_resolved_row(layout, occupied, std::iter::empty(), symmetry, row);
-    }
+    ensure!(
+        !occupied.is_empty() || !file.header_lines[1].trim().is_empty(),
+        "an empty peel occupation requires a closed core"
+    );
+    // Public callers can edit the occupied states and printed intermediate couplings.
     write_text_row(
         layout,
         &file.subshells,
@@ -143,6 +138,13 @@ pub(crate) fn write_text_row(
     symmetry: (u16, Parity),
     row: &mut [i8],
 ) -> Result<()> {
+    if occupied.is_empty() {
+        ensure!(
+            couplings.is_empty() && symmetry == (0, Parity::Even),
+            "invalid closed-core record"
+        );
+        return write_resolved_row(layout, occupied, std::iter::empty(), symmetry, row);
+    }
     validate_record(subshells, occupied, couplings)?;
     encode_angular(symmetry.0, "total 2J")?;
     let mut steps = Vec::with_capacity(occupied.len() + 1);
@@ -346,10 +348,9 @@ pub fn decode_v3_into(
 ///
 /// `rows` holds every row in the descriptor file's original order. When
 /// `indices` is `Some`, only those original row positions are restored, in
-/// the given order; block boundaries are still derived correctly because
-/// [`CompleteCsfFile::append_generated_record`] opens a new symmetry block
-/// whenever `total_two_j`/parity changes between consecutive appended
-/// records, which is correct for a full file or an arbitrary subset alike.
+/// the given order. Supplied block lengths preserve source block identity for
+/// both full and indexed restoration. An indexed caller without a block table
+/// can recover only changes of symmetry.
 pub fn restore_file(
     rows: &[Vec<i8>],
     layout: DescriptorLayout,
@@ -382,33 +383,33 @@ pub fn restore_file(
         None => (0..rows.len()).collect(),
     };
 
-    let full_restore = indices.is_none();
-    let block_starts = if full_restore {
-        let lengths = block_lengths.context("full restoration requires source block_lengths")?;
+    let mut block_ends = Vec::new();
+    if let Some(lengths) = block_lengths {
         ensure!(
             !lengths.is_empty(),
             "source block_lengths must not be empty"
         );
-        ensure!(
-            lengths
-                .iter()
-                .try_fold(0usize, |sum, &length| sum.checked_add(length))
-                == Some(rows.len()),
-            "source block_lengths do not cover all descriptor rows"
-        );
-        let mut starts = Vec::with_capacity(lengths.len());
-        let mut start = 0usize;
+        let mut end = 0usize;
         for &length in lengths {
             ensure!(length > 0, "source block_lengths contains an empty block");
-            starts.push(start);
-            start += length;
+            end = end
+                .checked_add(length)
+                .context("source block length overflow")?;
+            block_ends.push(end);
         }
-        Some(starts)
+        ensure!(
+            end == rows.len(),
+            "source block_lengths do not cover all descriptor rows"
+        );
     } else {
-        None
-    };
+        ensure!(
+            indices.is_some(),
+            "full restoration requires source block_lengths"
+        );
+    }
 
-    for (output_position, row_index) in row_indices.into_iter().enumerate() {
+    let mut previous_block = None;
+    for row_index in row_indices {
         let row = rows
             .get(row_index)
             .with_context(|| format!("row index {row_index} exceeds available rows"))?;
@@ -428,16 +429,15 @@ pub fn restore_file(
             &mut occupied_buf,
             &mut coupling_buf,
         )?;
-        let force_new_block = block_starts
-            .as_ref()
-            .is_some_and(|starts| starts.binary_search(&output_position).is_ok());
+        let block = block_ends.partition_point(|&end| end <= row_index);
         file.append_restored_record(
             &occupied_buf,
             &coupling_buf,
             total_two_j,
             parity,
-            force_new_block,
+            previous_block != Some(block),
         )?;
+        previous_block = Some(block);
     }
 
     ensure!(

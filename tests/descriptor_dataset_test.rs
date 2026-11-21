@@ -60,6 +60,21 @@ fn pure_closed_core_exports_and_reimports_explicit_record() {
 }
 
 #[test]
+fn empty_occupation_without_core_does_not_publish_a_dataset() {
+    let tmp = tempfile::tempdir().unwrap();
+    let input = tmp.path().join("empty.c");
+    fs::write(
+        &input,
+        "Core subshells:\n\nPeel subshells:\n  1s\nCSF(s):\n\n\n0+\n",
+    )
+    .unwrap();
+    let output = tmp.path().join("empty_desc.parquet");
+    let header = header_path(&output).unwrap();
+    assert!(import_text(&input, &output, &header).is_err());
+    assert!(!output.exists() && !header.exists());
+}
+
+#[test]
 fn invalid_inputs_do_not_publish_partial_pairs() {
     let tmp = tempfile::tempdir().unwrap();
     for (index, content) in [

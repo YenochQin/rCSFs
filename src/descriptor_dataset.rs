@@ -30,9 +30,8 @@ use crate::complete_csf::CompleteCsfFile;
 use crate::configuration_generation::Subshell;
 use crate::csfs_descriptor::CSFDescriptorGenerator;
 use crate::descriptor_schema::{
-    DescriptorLayout, DescriptorRowValidator, DescriptorVersion, empty_slot, output_kv_metadata,
-    output_schema, row_symmetry, validate_descriptor_storage, validate_output_schema,
-    validate_seniority_encoding,
+    DescriptorLayout, DescriptorRowValidator, DescriptorVersion, output_kv_metadata, output_schema,
+    row_symmetry, validate_descriptor_storage, validate_output_schema, validate_seniority_encoding,
 };
 use crate::descriptor_v3::decode_v3_into;
 
@@ -791,7 +790,6 @@ pub fn import_text(input: &Path, output: &Path, header_output: &Path) -> Result<
     }
     let header = DatasetHeader::from_lines(header_lines.try_into().expect("five header lines"))?;
     let closed_core = header.peel.is_empty();
-    let has_core = !header.core.is_empty();
     let width = header.layout().row_len();
     let parser = CSFDescriptorGenerator::new(header.peel.clone());
     let mut writer = DatasetWriter::new(header, output, header_output, &[input])?;
@@ -809,17 +807,7 @@ pub fn import_text(input: &Path, output: &Path, header_output: &Path) -> Result<
         let second = lines.next().context("truncated CSF state line")??;
         let third = lines.next().context("truncated CSF coupling line")??;
         let mut import = || -> Result<()> {
-            if has_core
-                && first.trim().is_empty()
-                && second.trim().is_empty()
-                && third.trim() == "0+"
-            {
-                let (features, globals) = row.split_at_mut(width - 2);
-                features.as_chunks_mut::<4>().0.fill(empty_slot(1));
-                globals.copy_from_slice(&[1, 1]);
-            } else {
-                parser.parse_row_into(&first, &second, &third, &mut row)?;
-            }
+            parser.parse_row_into(&first, &second, &third, &mut row)?;
             writer.push(&row, block)
         };
         import().with_context(|| {

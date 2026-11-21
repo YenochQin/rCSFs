@@ -100,15 +100,12 @@ the returned codec representation retains the printed sparse couplings.
 - The populated Fortran state tables are supported: all electron/hole
   occupations for `j <= 9/2`; at higher j, at most two electrons or two holes,
   including filled subshells. Other occupations fail explicitly.
-- Requested and printed J values must fit the original writer's decimal
-  fields: integer J at most 99, half-integer numerator at most 99.
+- V3 generation accepts physical `2J` and cumulative `2K` up to 126.
 - Generation has no fixed record-count cap. Available process memory limits the problem size.
   This limits record count; it is not a process memory or work/time budget.
   Large state products and coupling spaces can still take substantial time.
-- An empty peel configuration or an unreachable target returns an empty
-  `CompleteCsfFile`. Its records can be inspected, but the strict writer rejects
-  empty lists. A core-only configuration currently follows `GEN`'s zero-peel
-  behavior and produces no records.
+- A core-only configuration produces one even J=0 record when the requested
+  range includes zero. An unreachable target returns an empty `CompleteCsfFile`.
 
 ## Test scope
 

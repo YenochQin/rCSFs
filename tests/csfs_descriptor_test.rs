@@ -3,7 +3,7 @@
 use _rcsfs::complete_csf::CompleteCsfFile;
 use _rcsfs::csfs_descriptor::CSFDescriptorGenerator;
 use _rcsfs::descriptor_schema::DescriptorVersion;
-use _rcsfs::descriptor_v3::encode_v3;
+use _rcsfs::descriptor_v3::{encode_v3, restore_file};
 use std::path::Path;
 
 #[test]
@@ -34,6 +34,78 @@ fn descriptor_generator_defaults_to_v3_and_matches_integer_records() {
     }
     assert_eq!(generator.orbital_count(), file.subshells.len());
     assert_eq!(generator.peel_subshells(), &file.subshells);
+}
+
+#[test]
+fn indexed_restore_keeps_source_blocks_even_when_symmetries_match() {
+    let file = CompleteCsfFile::parse_reader(include_bytes!("fixtures/descriptor_v3.c").as_slice())
+        .unwrap();
+    let layout = CSFDescriptorGenerator::new(file.subshells.clone()).layout();
+    let rows: Vec<_> = file
+        .records
+        .iter()
+        .map(|record| {
+            let mut row = vec![0; layout.row_len()];
+            encode_v3(&file, record, &mut row).unwrap();
+            row
+        })
+        .collect();
+    for (indices, expected) in [
+        (vec![0, 1, 2], vec![2, 1]),
+        (vec![1, 2], vec![1, 1]),
+        (vec![2, 0, 2], vec![1, 1, 1]),
+    ] {
+        let restored = restore_file(
+            &rows,
+            layout,
+            file.header_lines.clone(),
+            Some(&[2, 1]),
+            Some(&indices),
+        )
+        .unwrap();
+        assert_eq!(
+            restored
+                .blocks
+                .iter()
+                .map(|b| b.record_len)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        for (record, index) in restored.records.iter().zip(indices) {
+            let mut row = vec![0; layout.row_len()];
+            encode_v3(&restored, record, &mut row).unwrap();
+            assert_eq!(row, rows[index as usize]);
+        }
+    }
+    for invalid in [&[2][..], &[2, 0, 1], &[usize::MAX, 1]] {
+        assert!(
+            restore_file(
+                &rows,
+                layout,
+                file.header_lines.clone(),
+                Some(invalid),
+                Some(&[0])
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn row_parser_accepts_closed_core_with_or_without_empty_peel_slots() {
+    for (peel, expected) in [
+        (vec![], vec![1, 1]),
+        (vec!["2s".to_owned()], vec![0, 0, 1, 1, 1, 1]),
+    ] {
+        let parser = CSFDescriptorGenerator::new(peel);
+        let mut row = vec![99; expected.len()];
+        parser.parse_row_into("", "", "0+", &mut row).unwrap();
+        assert_eq!(row, expected);
+        assert_eq!(parser.parse_csf("  ", " ", " 0+ ").unwrap(), expected);
+        for (state, coupling) in [("1/2", "0+"), ("", "1+"), ("", "0-")] {
+            assert!(parser.parse_csf("", state, coupling).is_err());
+        }
+    }
 }
 
 #[test]

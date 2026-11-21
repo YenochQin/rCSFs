@@ -13,12 +13,12 @@ use super::{
     EnumeratedOccupations, ExcitationRequest, GenerationRequest, Subshell, enumerate_occupations,
     generate_csfs_parallel,
 };
-use crate::complete_csf::{CompleteCsfFile, Parity};
+use crate::complete_csf::{CompleteCsfFile, CsfRecord, Parity};
 use crate::descriptor_dataset::{DatasetHeader, DatasetWriter, header_path};
 use crate::descriptor_operations::{common_header, mapping, remap};
 use crate::descriptor_schema::DescriptorLayout;
 use crate::descriptor_schema::DescriptorVersion;
-use crate::descriptor_v3::encode_v3;
+use crate::descriptor_v3::{encode_v3, write_generated_row};
 
 fn header(labels: impl IntoIterator<Item = String>) -> String {
     labels
@@ -120,7 +120,7 @@ pub fn write_generated_csfs(
     chunks: &[CompleteCsfFile],
     output_path: &Path,
 ) -> Result<WriteStats> {
-    write_generated_csfs_with_peel(core_subshells, chunks, output_path, None)
+    write_generated_csfs_with_peel(core_subshells, chunks, output_path, None, encode_v3)
 }
 
 fn write_generated_csfs_with_peel(
@@ -128,6 +128,7 @@ fn write_generated_csfs_with_peel(
     chunks: &[CompleteCsfFile],
     output_path: &Path,
     peel: Option<Vec<Subshell>>,
+    encode: impl Fn(&CompleteCsfFile, &CsfRecord, &mut [i8]) -> Result<()>,
 ) -> Result<WriteStats> {
     let count = chunks.iter().try_fold(0usize, |count, chunk| {
         count
@@ -199,7 +200,7 @@ fn write_generated_csfs_with_peel(
             let mut row = vec![0; layout.row_len()];
             let indices = mapping(&chunk.subshells, &destination.peel)?;
             for record in &chunk.records[start..end] {
-                encode_v3(chunk, record, &mut row)?;
+                encode(chunk, record, &mut row)?;
                 writer.push(
                     &remap(&row, &indices, destination.layout().row_len()),
                     index,
@@ -267,6 +268,17 @@ pub fn generate_csfs_from_transcript(
         &chunks,
         output_path,
         Some(peel),
+        // These chunks are private to this run and still have the original dense chain.
+        |chunk, record, row| {
+            write_generated_row(
+                DescriptorLayout::new(DescriptorVersion::V3, chunk.subshells.len()),
+                &chunk.subshells,
+                chunk.occupied(record)?,
+                chunk.generated_cumulative(record)?.unwrap_or_default(),
+                (record.total_two_j, record.parity),
+                row,
+            )
+        },
     )?;
     crate::reporting::detail!(
         "Generated {} CSFs across {} symmetry blocks",

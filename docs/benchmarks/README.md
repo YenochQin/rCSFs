@@ -1,9 +1,9 @@
 # Benchmark registry
 
-Measurements recorded here back the performance work in
-[CSF_V2_GENERATION_PERFORMANCE_PLAN.md](../CSF_V2_GENERATION_PERFORMANCE_PLAN.md).
-They are not part of the test suite: no file in this directory is run by
-`cargo test` or `pytest`.
+This directory records historical measurements and the inputs for future
+benchmarks. `tests/benchmark_reports_test.py` validates the stored JSON records
+without repeating the full benchmark runs. For current disk generation, see
+[CSF generation](../CSF_GENERATION.md).
 
 The GRASP occupation-branch compatibility fix of 2026-09-23 changes B1 and B3
 counts without changing their transcript bytes. Reports recorded before that fix
@@ -13,10 +13,11 @@ generator baselines. The current expected counts are registered in
 B2 19,243 / 560,351, and B3 7,027,846 / 5,811,925,522. New performance
 comparisons require new clean-source measurements; no old timing is rebased.
 
-The [2026-09-24 target-machine campaign](v2_target_xfs_20260924.md) registers
-the post-fix B1/B2 thread, budget and codec reports plus a B3 count/capacity
-estimate. The host's XFS type was confirmed with `findmnt`; the JSON metadata
-helper did not recognize Linux's `mount` output and records the type as null.
+The 2026-09-24 V2 target-machine campaign produced the post-fix B1/B2 thread,
+budget and codec reports plus a B3 count/capacity estimate. Its JSON files use
+the `v2_target_xfs_` prefix. The host's XFS type was confirmed with `findmnt`.
+The JSON metadata helper could not parse Linux's `mount` output and records
+the type as null. The original V2 analyses are available in Git at `5a6bf0e`.
 
 ## Conventions
 
@@ -166,11 +167,6 @@ historical descriptor digest.
 | `v2_disk_generation_parallel_descriptor_b1/b2_20260923.json` | Parallel Parquet descriptor column encoding at 8 threads; clean report `c91e51e`, none/zstd × verified/exact |
 | `v2_disk_generation_p0b_*_20260921.json` | (legacy) measured before source identity was captured |
 | `v2_disk_generation_b3_capacity_20260921.json` | Full-scale capacity, workload and time-range estimate (no generation) |
-| `v2_disk_generation_matrix_20260922.md` | What the three 2026-09-22 campaigns show |
-| `v2_disk_generation_codec_20260922.md` | What the P2a codec experiment shows |
-| `v2_disk_generation_dedup_20260922.md` | What the P6b fast path saves, and what the P2a+P6b combination costs |
-| `v2_disk_generation_final_encoding_20260922.md` | What the P4 one-pass tail saves, and the cumulative gain against the `7ad18b1` baseline |
-| `v2_disk_generation_parallel_descriptor_20260923.md` | Parallel descriptor encoding speedup, CPU/墙钟并行度、受管内存与新物理摘要 |
 
 A rejected configuration is part of the matrix, not a hole in it: the plan asks
 for a low budget to be reported as a resource rejection rather than being

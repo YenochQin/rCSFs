@@ -248,7 +248,7 @@ This is real overhead, but the expected effect on total runtime is unknown becau
 
 ### Tertiary (structural, from prior review)
 
-The single compute-dispatch thread processes one batch at a time (see `docs/CODE_REVIEW_1.2.2-beta1_FAST_PATH_FOLLOWUP.md` finding 1). The old architecture let multiple OS threads compete on `work_rx.recv()`, allowing multiple batches to be in compute concurrently. The current model limits in-flight compute to one batch.
+The single compute-dispatch thread at the measured revision processes one batch at a time. The earlier architecture let multiple OS threads compete on `work_rx.recv()`, allowing multiple batches to be in compute concurrently.
 
 This may cap scaling at high worker counts, especially if one batch has enough memory traffic that more threads mainly contend for bandwidth. It should be investigated after instrumentation identifies whether compute is waiting for reader input or writer output.
 
@@ -309,4 +309,4 @@ Single-batch-at-a-time dispatch means the pipeline efficiency factor is ~2.2× (
   - reader `row_copy` block: lines ~850–865
   - `build_*_descriptor_columns_parallel`: lines ~572–712 (return `StageTimings`, parallel merge)
   - writer thread: Phase 5, lines ~1020+
-- Prior review context: `docs/CODE_REVIEW_1.2.2-beta1_FAST_PATH_FOLLOWUP.md`
+- Prior review context: the fast-path follow-up in commit `4212ba3`

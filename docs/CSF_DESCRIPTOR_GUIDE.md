@@ -5,6 +5,9 @@ convert an existing GRASP text file with `rcsfs convert`. V3 requires an rCSFs
 build with `DESCRIPTOR_VERSION == 3`. Regenerate V1 and V2 data from the original
 CSF text or generation inputs.
 
+The [V3 generation plan](CSF_DESCRIPTOR_V3_PLAN.md) records the format design,
+validation cases and integration with the other repositories.
+
 ```python
 from rcsfs import DESCRIPTOR_VERSION, convert_csfs
 
@@ -107,7 +110,13 @@ rcsfs convert "$rcsfs_source/tests/fixtures/descriptor_v3.c" basis_desc.parquet
 rcsfs info basis_desc.parquet --json
 ```
 
-The sample contains the three even-parity rows in the [V3 plan](CSF_DESCRIPTOR_V3_PLAN.md).
-The final two columns are `[2, 1]` for each row and its explicit block lengths
-are `[2, 1]`. The second row changes the cumulative code at `3s` from `1` to `3`.
-The third row has an empty `4s` slot with code `(0, 0, 1, 2)`.
+The sample lists `1s`, `2s`, `3s` and `4s` in the peel table. Each orbital
+tuple gives occupation, seniority, `2Jᵢ+1` and `2Kᵢ+1`, in that order.
+
+| Row | 1s | 2s | 3s | 4s | Total `2J+1` | Parity |
+| --- | --- | --- | --- | --- | ---: | ---: |
+| `1s² 2s¹ 3s¹ 4s¹`, `K=0` at `3s` | (2,0,1,1) | (1,1,2,2) | (1,1,2,1) | (1,1,2,2) | 2 | +1 |
+| `1s² 2s¹ 3s¹ 4s¹`, `K=1` at `3s` | (2,0,1,1) | (1,1,2,2) | (1,1,2,3) | (1,1,2,2) | 2 | +1 |
+| `1s² 2s² 3s¹ 4s⁰` | (2,0,1,1) | (2,0,1,1) | (1,1,2,2) | (0,0,1,2) | 2 | +1 |
+
+The explicit block lengths are `[2, 1]`.

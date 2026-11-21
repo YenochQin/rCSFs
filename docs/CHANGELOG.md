@@ -321,7 +321,7 @@
   两遍参考差分检查逻辑 V2 行、schema、元数据以及 CSF 文本和 Parquet 行。
 - 干净提交 `c91e51e` 的 8 线程测量：B1/B2 descriptor encode 墙钟
   1.526→0.395 / 0.727→0.176 秒，端到端 4.075→3.317 / 1.512→0.979 秒；
-  新物理摘要、RSS 与资源峰值见[登记报告](benchmarks/v2_disk_generation_parallel_descriptor_20260923.md)。
+  新物理摘要、RSS 与资源峰值见[登记数据](benchmarks/README.md#registered-campaigns)。
 - CLI 对每个完整产物用无覆盖 hard link 原子显现；跨卷先复制至目标旁私有临时文件。
   这不是五文件事务；后续发布失败时已完成的文件保留，错误报告列明成功路径与失败目标。
   维护测试覆盖竞争写入与跨卷回退。
@@ -361,8 +361,7 @@
   这条受支持的"多线程编码"路径（`temp/parquet_probe`），产物逻辑内容与 `ArrowWriter`
   一致、字节布局不同；先前"无受支持入口"的说法是错的，已在计划中更正。
 
-历史计量（干净树 `45618fc`，8 线程，默认 `verified_unique`；见
-[报告](benchmarks/v2_disk_generation_final_encoding_20260922.md)）：
+历史计量使用干净树 `45618fc`、8 线程及默认的 `verified_unique`。原报告保存在 `5a6bf0e`。
 
 - **撤回**先前的"尾部 2.36–2.47×"：当时的相位计时不含两个 writer 的 close/footer、文本
   flush、发布，也不含逐行筛选/收集与释放格式化字符串这两段随数据增长的工作（B1 的相位
@@ -390,8 +389,8 @@
   计时与 `bbcd714`/`3588df1` 轮在同机同扩展上一致（扩展字节相同：其间提交只改了文档、
   harness 与测试）。
 - **内容差分证据**：B1/B2 上两种去重策略、两种 codec 的全部运行发布完全相同的字节，
-  四个产物的 SHA-256 逐一相同并登记在 [dedup 报告](benchmarks/v2_disk_generation_dedup_20260922.md)
-  的表格中；摘要跨 codec 也相同，印证 codec 只是存储选择。
+  四个产物的 SHA-256 逐一相同，见[去重基准登记数据](benchmarks/README.md#registered-campaigns)。
+  摘要跨 codec 也相同，印证 codec 只是存储选择。
 - **RSS 结论（新）**：压缩 codec 的进程 RSS **更低**而不是更高（B1 250.6 → 230.0/234.4
   MiB，B2 395.3 → 346.6/338.3 MiB，中位数），受管内存不变；已验证路径的 RSS 不高于
   精确路径（B2 389.3 对 433.0 MiB）。
@@ -415,7 +414,7 @@
 - 源码指纹不再跟随未跟踪符号链接，并拒绝 `git status` 警告、Git 探测失败及递归目录中
   的不可读对象，避免读取仓库外数据或把不完整源码误判为干净。
 
-### P6b：去重快速路径的计量（2026-09-22，登记于 `docs/benchmarks/v2_disk_generation_dedup_20260922.md`）
+### P6b：去重快速路径的计量（2026-09-22）
 
 - 干净树 `bbcd714`、8 线程、每组合预热 1 次测量 3 次：跳过精确去重链路后，B1
   13.747 → 9.287 秒（−32.4%），B2 4.832 → 2.971 秒（−38.5%）；节省全部落在去重阶段
@@ -444,7 +443,7 @@
   新版基准脚本在一次调用中同时跑两种策略并在四个发布产物的 SHA-256 不一致时拒绝写出
   报告；旧 B1/B2 报告在此改动前生成，需重测后才具备这项证据。
 
-### P2a：压缩实验结论（2026-09-22，登记于 `docs/benchmarks/v2_disk_generation_codec_20260922.md`）
+### P2a：压缩实验结论（2026-09-22）
 
 - 干净树 `3588df1`、8 线程、每 codec 预热 1 次测量 3 次：segment 写入量 B1
   1073.0 MiB → 25.0 MiB（lz4）/ 11.7 MiB（zstd），B2 506.0 MiB → 8.2 / 4.5 MiB；
@@ -484,7 +483,7 @@
 
 ### P6a：内部生成路径的唯一性证明与穷举程序（2026-09-22）
 
-- 新增 [V2_GENERATION_UNIQUENESS.md](V2_GENERATION_UNIQUENESS.md)：证明内部生成路径
+- V2 唯一性论证保存在 `5a6bf0e`，证明内部生成路径
   （transcript → 占据枚举 → 固定组态生成 → V2 行编码）产出的行两两不同——跨配置由
   "枚举 key ⇔ 占据向量"与"行的 n 列就是占据向量"给出，配置内由"态表在 (2J, seniority)
   上单射"与"隐藏耦合由行唯一决定"给出。据此**精确去重在该路径上是空操作**。
@@ -612,7 +611,7 @@
   1.01–1.62 倍。
 - 登记 B3 完整输入（`b3_cc1_9spdfg_4exc.rcsfgenerate`）：计数得到 7,031,941
   个组态与 5,814,175,207 条去重前 CSF，与计划 §2.2 的独立数值完全一致；容量
-  报告见 `docs/benchmarks/v2_disk_generation_b3_capacity_20260921.md`。
+  容量估算见 [B3 登记数据](benchmarks/v2_disk_generation_b3_capacity_20260921.json)。
 - 明确失败恢复策略为"重新开始"：scratch 未绑定输入哈希与格式版本，不从其中
   恢复；`plan_stats` 之外新增报告字段 `failure_recovery`。
 - 明确受管预算并发超出时的处理是立即返回资源错误（不是等待/背压），并在
@@ -1075,5 +1074,5 @@ CODE_REVIEW.md 的建议基于旧版 PyO3，不适用于当前版本。
 ## 相关文档
 
 - [历史代码审查报告（删除前版本）](https://github.com/YenochQin/rCSFs/blob/463ffda77499ed957e54c062d482d6908200ada4/docs/CODE_REVIEW.md)
-- [性能优化日志](./performance_optimization_log.md)
+- 历史性能优化日志见提交 `9376f93`。
 - [CSF 描述符指南](./CSF_DESCRIPTOR_GUIDE.md)

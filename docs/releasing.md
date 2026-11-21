@@ -76,7 +76,7 @@ files, type stubs/markers, source archive allowlists and wheel tags. It prints
 SHA-256 hashes and rejects mixed versions, plain Linux wheels, debug symbols
 and multiple/stale native extensions. The smoke test unpacks a compatible
 wheel into a temporary directory and uses a separate interpreter to check
-import origins, Python/native versions, CSF conversion, V2 descriptors and
+import origins, Python/native versions, CSF conversion, Int8 descriptors and
 the console entry point. Locally it uses runtime dependencies in this repository's environment;
 CI separately verifies dependency installation on fresh runners.
 

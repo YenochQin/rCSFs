@@ -129,7 +129,7 @@ Rust 实现应使用完整的离散 CSF/耦合键及明确的覆盖关系，但�
 | [`generation_task_planning.rs`](../src/configuration_generation/shared_generation/generation_task_planning.rs) / [`csf_record_counting.rs`](../src/configuration_generation/shared_generation/csf_record_counting.rs) | 每占据配置精确计数、J/状态前缀任务拆分、确定的 task ordinal | 对代表占据配置规划，另报告展开后的逻辑计数 |
 | [`complete_csf.rs`](../src/complete_csf.rs) 的 `format_record_parts` / `write_record_to` | 三行格式、seniority、显式零与未打印值的区分 | 复用记录编码；由 CSFG writer 提供自己的完整 header |
 | [`complete_csf_generation_pipeline.rs`](../src/configuration_generation/csf_generation/complete_csf_generation_pipeline.rs) | Jπ 分块、缓冲写出、统计 | 当前 header 只收集实际用到的轨道并按 `(n,l,κ分支)` 排序，**不能原样用于 CSFG** |
-| [`disk_csf_generation_pipeline.rs`](../src/configuration_generation/csf_generation/disk_csf_generation_pipeline.rs) | 分段顺序、资源预算、准确去重基础设施 | 当前围绕完整 CSF/V2 descriptors，且 `prepare_multiple_lists` / `precompute_peel_subshells` 重排 header；不能直接套用 |
+| [`disk_csf_generation_pipeline.rs`](../src/configuration_generation/csf_generation/disk_csf_generation_pipeline.rs) | 分段顺序、资源预算、准确去重基础设施 | 面向完整 CSF 描述符，且 `prepare_multiple_lists` / `precompute_peel_subshells` 重排 header，需要单独适配 |
 | [`_publication.py`](../rcsfs/_publication.py) | 完成后发布、路径处理、部分发布错误报告 | 两个文件同批准备和校验；现有实现是逐文件原子发布，**不是两文件原子事务** |
 
 还应区分两种“顺序”：
@@ -245,7 +245,7 @@ rlabel_out = "rlabel.out"
 - `j_min/j_max` 延续 2J 语义。`labeling_space` 首版要求显式提供，避免自动选择改变表示和输出顺序。
 - 新命令固定使用 GRASPG layout，不复用 `orbital_order="*"` 的旧含义。批量条目和 `as/conf` 文件命名可后续按现有配置约定加入；不能把 `as=4` 当作物理 active-space 定义。
 - 首版仅生成两个文本文件和统计，不自动生成完整 `rcsf.out`；展开是独立验证/可选步骤。
-- 不能将当前完整 CSF 的 V2 descriptors、训练标签或混合系数直接用于 CSFG。若以后增加 CSFG descriptors，
+- 完整 CSF 的描述符、训练标签和混合系数绑定展开后的基组。若以后增加 CSFG descriptors，
   必须记录 representation、标记集合、径向范围/类型等语义并单独设计，不在本次首版复用旧含义。
 - 两文件先在私有 staging 目录写完、校验配套关系，再使用现有发布机制；只有全部发布成功才返回成功。
   现有 helper 逐文件发布；发生部分发布时明确报告已发布/失败路径，不宣称两文件全有或全无。
@@ -273,7 +273,7 @@ rlabel_out = "rlabel.out"
 
 - 接入拟议 Python/CLI/TOML 入口及完整的类型/错误契约，补足文档、输出发布和路径错误测试。
 - 保留确定的任务序号，按计数分批生成/合并。先支持内存模式；再将必要的有限内存文本/整数段接到同一 record sink，
-  不为了借用当前 disk pipeline 而强制写不需要的完整 V2 descriptors。
+  磁盘模式直接写出 CSFG 结果。
 - 没有实现的 memory/disk/预算选项应拒绝或不暴露，不能接受后忽略。明确区分受控分配预算和进程峰值 RSS。
 - 验收：该 Gd 基准最终应为 1,125,587 条 CSF(G)，展开为 11,299,739 条；在相同 GRASPG 表示和已固定排序下，
   目标是复现参考 `.g/.l` 的逐字节结果。维数一致只是必要条件。

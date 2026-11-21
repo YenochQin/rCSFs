@@ -8,11 +8,8 @@ For direct GRASPG-compatible CSFG output, see the
 [CSFG generation guide](CSFG_GENERATION.md). The interfaces below continue to
 generate complete CSFs; the new `csfggenerate` command is separate.
 
-For the planned V2 disk-generation performance work, see the
-[V2 descriptor and CSF generation performance implementation plan](CSF_V2_GENERATION_PERFORMANCE_PLAN.md).
-It records the current measurements, staged changes, and acceptance criteria.
-The disk path now accepts a managed memory budget and reports its accounting
-alongside the stage timings; the budget is not an operating-system RSS limit.
+The current disk path reports its managed memory budget alongside the stage
+timings. Operating-system RSS is measured separately.
 
 `configuration_generation::generate_csfs` is the first serial implementation in phase C.
 It creates new CSFs for **one explicit relativistic occupation configuration**.
@@ -403,13 +400,12 @@ asserts that its tasks account for exactly the records counted for it. A
 scheduling mistake that drops work therefore fails the run instead of producing
 a shorter output file.
 
-Managed memory and RSS are reported separately. On B1/B2 the managed peak was
-29-88 MiB against 371-660 MiB of process RSS: the accounting covers the
-structures the pipeline owns, not the allocator, thread stacks, Arrow/Parquet
-runtime buffers or the page cache. A reservation that would exceed the budget
-fails immediately with a resource error instead of waiting, so a brief
-concurrent overshoot produces one clear failure rather than a stall whose timing
-depends on which worker finishes first.
+Managed memory accounts for structures the pipeline owns. Process RSS also
+includes the allocator, thread stacks and Arrow/Parquet runtime buffers. A
+reservation that would exceed the managed budget fails immediately with a
+resource error. Full-scale V3 capacity and performance acceptance requires
+measurements of wall time, managed memory, process RSS and peak scratch use on
+the target machine. Run the capacity estimate before starting a full B3 run.
 
 
 Both generation backends write ordered V3 descriptor rows and their bound TOML

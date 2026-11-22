@@ -1,5 +1,6 @@
 """Cross-entry-point acceptance rows from the V3 format specification."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -277,6 +278,14 @@ def test_backends_keep_orbitals_without_target_records(
         assert main(["csfsgenerate", "--config", str(config)]) == 0
     memory_header, memory = read_csfs(tmp_path / "memory_desc.parquet")
     disk_header, disk = read_csfs(tmp_path / "disk_desc.parquet")
-    assert memory_header == disk_header
+    for backend, header in [("memory", memory_header), ("disk", disk_header)]:
+        descriptor = tmp_path / f"{backend}_desc.parquet"
+        assert (
+            header["descriptor_sha256"]
+            == hashlib.sha256(descriptor.read_bytes()).hexdigest()
+        )
+    assert memory_header["block_info"] == disk_header["block_info"]
+    assert memory_header["header_info"] == disk_header["header_info"]
+    assert memory_header["conversion_stats"] == disk_header["conversion_stats"]
     assert memory.equals(disk)
     assert memory["sub0_occupation"].to_list() == [0]

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import _native_cli as cli
 import pytest
+import pyarrow.parquet as pq
 
 from rcsfs import (
     descriptor_header_path,
@@ -19,7 +20,30 @@ pytestmark = pytest.mark.usefixtures("cli_cwd")
 
 def _assert_binding(descriptors: Path, header: Path) -> str:
     metadata = get_parquet_info(descriptors)["key_value_metadata"]
-    expected = hashlib.sha256(header.read_bytes()).hexdigest()
+    raw = header.read_bytes()
+    expected = hashlib.sha256(raw.split(b"\n", 1)[1]).hexdigest()
+    document = tomllib.loads(raw.decode())
+    assert (
+        document["descriptor_sha256"]
+        == hashlib.sha256(descriptors.read_bytes()).hexdigest()
+    )
+    symmetries = pq.read_table(
+        descriptors, columns=["total_two_j_plus_one", "parity"]
+    ).to_pylist()
+    start = 0
+    for block, length in zip(
+        document["block_info"]["blocks"],
+        document["block_info"]["block_lengths"],
+        strict=True,
+    ):
+        assert (block["start_row"], block["length"]) == (start, length)
+        assert all(
+            (row["total_two_j_plus_one"] - 1, row["parity"])
+            == (block["two_j"], block["parity"])
+            for row in symmetries[start : start + length]
+        )
+        start += length
+    assert start == len(symmetries)
     assert metadata["source_header_sha256"] == expected
     assert metadata["source_header_filename"] == header.name
     return expected

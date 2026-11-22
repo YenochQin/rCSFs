@@ -457,6 +457,7 @@ fn generate_disk_outputs_from_requests(
     let timer = StageTimer::start();
     let merged =
         merge_v3_deduplicated_segments(&deduplicated, descriptor_output, Some(header_output))?;
+    crate::descriptor_transport::seal_descriptor_header(header_output, descriptor_output)?;
     let descriptor_bytes = fs::metadata(descriptor_output)?.len();
     let merge_input_bytes = deduplicated
         .survivor_bitsets
@@ -479,7 +480,8 @@ fn generate_disk_outputs_from_requests(
         unique_count: deduplicated.unique_count,
         duplicate_count: deduplicated.duplicate_count,
         block_count: deduplicated.block_lengths.len(),
-        blocks: grouped_segments(&deduplicated.segments)
+        blocks: deduplicated
+            .survivor_bitsets
             .keys()
             .zip(&deduplicated.block_lengths)
             .map(
@@ -2015,7 +2017,12 @@ fn write_generation_header(
 ) -> Result<()> {
     let mut header = crate::descriptor_dataset::DatasetHeader::from_lines(header_lines)?;
     header.electron_count = Some(electron_count);
-    let header = header.finalized(&deduplicated.block_lengths)?;
+    let symmetries = deduplicated
+        .survivor_bitsets
+        .keys()
+        .map(|&(two_j, odd)| Ok((i8::try_from(two_j)?, if odd { -1 } else { 1 })))
+        .collect::<Result<Vec<_>>>()?;
+    let header = header.finalized(&deduplicated.block_lengths, &symmetries)?;
     let text = toml::to_string_pretty(&header.document)
         .context("failed to serialize generation header")?;
     let mut file = File::options()
@@ -2023,7 +2030,7 @@ fn write_generation_header(
         .create_new(true)
         .open(path)
         .with_context(|| format!("failed to create header {}", path.display()))?;
-    file.write_all(text.as_bytes())
+    crate::descriptor_transport::write_staged_header(&mut file, text.as_bytes())
         .with_context(|| format!("failed to write header {}", path.display()))?;
     file.flush()
         .with_context(|| format!("failed to flush header {}", path.display()))?;

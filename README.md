@@ -16,8 +16,9 @@ The current Python API is function-based and centered around streaming, parallel
 This checkout generates and processes CSFs as V3 descriptor Parquet with a
 companion TOML header. The compact Int8 columns preserve occupations, physical
 seniority, subshell 2J+1, cumulative 2K+1, total 2J+1 and parity. The header records the
-orbital tables, electron count and explicit block lengths. Parquet metadata binds
-the dataset to the exact header bytes by SHA-256.
+orbital tables, electron count, final Parquet SHA-256 and a row range for each
+explicit (2J, parity) block. Parquet metadata binds the header body, including
+the ordered block index. See the [on-disk format](docs/CSF_DESCRIPTOR_GUIDE.md#disk-layout).
 
 The Python wheel includes the `rcsfs` package and native CLI. See
 [development](docs/development.md) for building from this checkout and

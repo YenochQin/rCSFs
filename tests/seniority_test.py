@@ -3,6 +3,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from _descriptor_binding import seal
 
 from rcsfs import (
     convert_csfs,
@@ -109,6 +110,7 @@ def test_restore_rejects_negative_physical_seniority(tmp_path: Path) -> None:
     metadata.pop(b"ARROW:schema", None)
     invalid = tmp_path / "invalid.parquet"
     pq.write_table(table.replace_schema_metadata(metadata), invalid)
+    seal(header, invalid)
     output = tmp_path / "rejected.c"
     with pytest.raises((ValueError, RuntimeError, OSError), match="physical seniority"):
         restore_csfs_from_descriptors(invalid, header, output)

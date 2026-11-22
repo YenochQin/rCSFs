@@ -17,7 +17,7 @@
 
 初始 K=0，初始累计编码为 1。角动量以宽整数进行运算和校验，在 2J、2K 为 0 至 126 时才编码成 1 至 127。所有轨道都有确定值；−1 只可能出现在负宇称列。M>0 时，最后一个轨道的累计编码等于总角动量编码。M=0 时，纯闭核用一条 `[1, +1]` 表示。
 
-文件保留有序 core/peel 表、电子数、原始 header 字节的 SHA-256、显式块次序和长度；按适用情况保存每块的 `zero_order_counts`。使用版本、通道顺序、完整列名、逻辑类型和元数据联合识别布局。相邻的同对称性块各自有块身份。V3 是当前读写格式。V2 文件从原始文本或生成输入重建。[现行格式与 API](CSF_DESCRIPTOR_GUIDE.md) · [布局和元数据](../src/descriptor_transport.rs)
+文件保留有序 core/peel 表、电子数、最终 Parquet 与 header 正文各自的 SHA-256、各显式块的物理 2J、宇称、零基起始行和长度；按适用情况保存每块的 `zero_order_counts`。使用版本、通道顺序、完整列名、逻辑类型和元数据联合识别布局。相邻的同对称性块各自有块身份。V3 是当前读写格式。V2 文件从原始文本或生成输入重建。[现行格式与 API](CSF_DESCRIPTOR_GUIDE.md) · [布局和元数据](../src/descriptor_transport.rs)
 
 拟写入 `channels_per_subshell=4`、`descriptor_dtype=int8`、`seniority_encoding=physical`、`max_two_j=126`、`normalized=false`、有序 `feature_columns`、`global_columns` 及 `source_header_sha256`。V3 的元数据省去 `missing_sentinel`。生成配置的 `j_min`、`j_max` 继续以物理 2J 表示，写出行末时才加一。
 

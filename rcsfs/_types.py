@@ -31,11 +31,19 @@ class CsfHeaderInfo(TypedDict):
     electron_count: NotRequired[int]
 
 
+class CsfBlockRecord(TypedDict):
+    two_j: int
+    parity: int
+    start_row: int
+    length: int
+
+
 class CsfBlockInfo(TypedDict):
     """Explicit symmetry-block lengths and optional zero-order counts."""
 
     block_lengths: list[int]
     block_count: int
+    blocks: list[CsfBlockRecord]
     zero_order_counts: NotRequired[list[int]]
 
 
@@ -50,6 +58,7 @@ class CsfDataStats(TypedDict):
 class CsfHeaderData(TypedDict):
     """Header dictionary matching the TOML written by :func:`convert_csfs`."""
 
+    descriptor_sha256: str
     header_info: CsfHeaderInfo
     block_info: CsfBlockInfo
     conversion_stats: CsfDataStats

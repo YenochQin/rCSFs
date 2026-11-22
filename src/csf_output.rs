@@ -19,7 +19,7 @@ pub(crate) mod descriptor {
 
     use super::ROW_GROUP_ROWS;
 
-    /// Bind published descriptors to the completed header's exact bytes.
+    /// Bind published descriptors to the exact header body (including its block index).
     /// Header-less intermediate merges can omit the binding explicitly.
     pub(crate) fn metadata(
         layout: DescriptorLayout,

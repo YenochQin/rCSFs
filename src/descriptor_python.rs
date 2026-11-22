@@ -148,7 +148,7 @@ fn read_csfs_arrow(
                 )));
                 arrays.push(Arc::new(array));
             }
-            let header = reader.header.read_metadata()?;
+            let header = reader.header.document;
             Ok((
                 header,
                 RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)?,

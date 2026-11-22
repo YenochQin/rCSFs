@@ -2,7 +2,7 @@
 
 Generate the descriptor and its companion TOML with `rcsfs csfsgenerate`, or
 convert an existing GRASP text file with `rcsfs convert`. V3 requires an rCSFs
-build with `DESCRIPTOR_VERSION == 3`. Regenerate V1 and V2 data from the original
+build with `DESCRIPTOR_VERSION == 3`. Regenerate unindexed V3, V1 and V2 data from the original
 CSF text or generation inputs.
 
 The [V3 generation plan](CSF_DESCRIPTOR_V3_PLAN.md) records the format design,
@@ -41,10 +41,18 @@ exact ordered column names are recorded in `feature_columns` and `global_columns
 Required metadata also includes `descriptor_version=3`,
 `channels_per_subshell=4`, `descriptor_dtype=int8`, `seniority_encoding=physical`,
 `max_two_j=126`, `normalized=false`, `subshell_count`, and `peel_subshells`.
-`source_header_sha256` binds the descriptor to the exact bytes of the TOML. The
-TOML holds the original five header lines, the total electron count including
-the core, and ordered block lengths. Adjacent blocks with the same symmetry
-retain distinct identities.
+The first TOML line has the exact ASCII form `descriptor_sha256 = "<64 lowercase hex digits>"`
+followed by LF. It stores the SHA-256 of the entire, closed Parquet file, including
+its footer. Parquet metadata `source_header_sha256` covers every TOML byte after
+that first LF, including comments and trailing whitespace. Both digests are required.
+
+The header contains the five original CSF header lines, the electron count including
+the core, and an ordered `[[block_info.blocks]]` record for each explicit symmetry
+block. The four integer fields are physical `two_j`, `parity` (+1 or −1),
+zero-based logical `start_row`, and positive `length`. The block ranges are contiguous
+and cover the entire Parquet. The lengths also appear in `block_info.block_lengths`.
+An index entry can span Parquet row groups. Adjacent blocks with equal symmetry
+keep separate entries. All operations that publish a new pair rebuild and bind its index.
 
 The supported subshell state tables use occupation, physical seniority and J to
 identify a state. This is the ordinary Suite domain with additional state label

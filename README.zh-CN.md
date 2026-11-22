@@ -14,8 +14,8 @@ rCSFs 是一个基于 Rust 的高性能工具库，用于在 Python 中处理原
 ## 描述符 CSF 数据集
 
 此版本生成和处理 V3 描述符 Parquet 及配套 TOML header。Int8 列保存占据数、
-物理 seniority、子壳层 2J+1、累计 2K+1、总 2J+1 和宇称。header 保存轨道表、电子数和显式块长度，
-Parquet 元数据用 SHA-256 校验配套 header 的内容。
+物理 seniority、子壳层 2J+1、累计 2K+1、总 2J+1 和宇称。header 保存轨道表、电子数、最终 Parquet 的 SHA-256，以及每个显式块的物理 2J、宇称、零基起始行和长度。
+Parquet 元数据绑定包含块目录的 header 正文。详见[磁盘格式](docs/CSF_DESCRIPTOR_GUIDE.md#disk-layout)。
 
 Python wheel 同时包含 `rcsfs` 包和 Rust 原生 CLI。源码构建见
 [开发说明](docs/development.md)，打包流程见[发布说明](docs/releasing.md)。

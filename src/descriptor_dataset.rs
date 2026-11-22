@@ -14,11 +14,11 @@ use parquet::arrow::{
 };
 use parquet::basic::{LogicalType, Type as ParquetType};
 use parquet::file::properties::WriterProperties;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -38,7 +38,9 @@ use crate::descriptor_v3::decode_v3_into;
 const BATCH_ROWS: usize = 8192;
 
 pub fn read_header(path: &Path) -> Result<DatasetHeader> {
-    DatasetHeader::parse(toml::from_str(&fs::read_to_string(path)?)?, true)
+    let bytes = fs::read(path)?;
+    crate::descriptor_transport::header_binding(&bytes)?;
+    DatasetHeader::parse(toml::from_str(std::str::from_utf8(&bytes)?)?, true)
 }
 
 pub(crate) fn descriptor_stem(stem: &str) -> &str {
@@ -61,6 +63,14 @@ pub fn header_path(descriptors: &Path) -> Result<PathBuf> {
     Ok(descriptors.with_file_name(format!("{stem}_header.toml")))
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BlockRecord {
+    two_j: i8,
+    parity: i8,
+    start_row: usize,
+    length: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct DatasetHeader {
     pub document: toml::Value,
@@ -69,6 +79,7 @@ pub struct DatasetHeader {
     pub core: Vec<Subshell>,
     pub block_lengths: Vec<usize>,
     pub electron_count: Option<usize>,
+    blocks: Vec<BlockRecord>,
 }
 
 /// Legacy bound headers may omit the conversion statistics.
@@ -190,13 +201,31 @@ impl DatasetHeader {
             })
             .transpose()?
             .unwrap_or_default();
+        let mut blocks = Vec::new();
+        let mut total = 0usize;
         if require_blocks {
             ensure!(!block_lengths.is_empty(), "missing symmetry blocks");
+            blocks = document["block_info"]
+                .get("blocks")
+                .context("missing block_info.blocks index")?
+                .clone()
+                .try_into::<Vec<BlockRecord>>()?;
+            ensure!(
+                blocks.len() == block_lengths.len(),
+                "block index count mismatch"
+            );
+            for (block, &length) in blocks.iter().zip(&block_lengths) {
+                ensure!(
+                    block.start_row == total && block.length == length,
+                    "invalid block index range"
+                );
+                ensure!(
+                    (0..=126).contains(&block.two_j) && matches!(block.parity, -1 | 1),
+                    "invalid indexed symmetry"
+                );
+                total = total.checked_add(length).context("CSF count overflow")?;
+            }
         }
-        let total = block_lengths
-            .iter()
-            .try_fold(0usize, |sum, n| sum.checked_add(*n))
-            .context("CSF count overflow")?;
         for (section, key, expected) in [
             ("block_info", "block_count", block_lengths.len()),
             ("conversion_stats", "csf_count", total),
@@ -224,6 +253,7 @@ impl DatasetHeader {
             lines,
             peel,
             core,
+            blocks,
             block_lengths,
             electron_count,
         };
@@ -285,18 +315,36 @@ impl DatasetHeader {
         self.block_lengths.iter().sum()
     }
 
-    pub(crate) fn finalized(mut self, lengths: &[usize]) -> Result<Self> {
+    pub(crate) fn finalized(mut self, lengths: &[usize], symmetries: &[(i8, i8)]) -> Result<Self> {
         ensure!(!lengths.is_empty(), "cannot publish an empty CSF dataset");
         if self.peel.is_empty() {
             ensure!(lengths == [1], "closed-core dataset must contain one CSF");
         }
+        ensure!(
+            lengths.len() == symmetries.len(),
+            "missing output block symmetry"
+        );
+        self.blocks.clear();
+        let mut start_row = 0usize;
+        for (&length, &(two_j, parity)) in lengths.iter().zip(symmetries) {
+            self.blocks.push(BlockRecord {
+                two_j,
+                parity,
+                start_row,
+                length,
+            });
+            start_row = start_row
+                .checked_add(length)
+                .context("CSF count overflow")?;
+        }
         self.block_lengths = lengths.to_vec();
-        let count = self.row_count();
+        let count = start_row;
         let truncated = truncated_count(&self.document)?;
         let root = self
             .document
             .as_table_mut()
             .context("invalid header document")?;
+        root.remove("descriptor_sha256");
         let info = root
             .get_mut("header_info")
             .and_then(toml::Value::as_table_mut)
@@ -324,6 +372,7 @@ impl DatasetHeader {
                 .collect::<std::result::Result<Vec<_>, _>>()?
                 .into(),
         );
+        blocks.insert("blocks".into(), toml::Value::try_from(&self.blocks)?);
         root.insert("block_info".into(), blocks.into());
         let mut stats = toml::Table::new();
         stats.insert("csf_count".into(), i64::try_from(count)?.into());
@@ -334,27 +383,6 @@ impl DatasetHeader {
         stats.insert("truncated_count".into(), truncated.into());
         root.insert("conversion_stats".into(), stats.into());
         Ok(self)
-    }
-
-    #[cfg(feature = "python")]
-    pub(crate) fn read_metadata(self) -> Result<toml::Value> {
-        // Older bound headers can omit inferred values. Fill those fields while
-        // preserving the source's conversion history, including its line count.
-        let mut document = self.document.clone();
-        let lengths = self.block_lengths.clone();
-        let defaults = self.finalized(&lengths)?.document;
-        let root = document.as_table_mut().context("invalid header document")?;
-        for name in ["header_info", "block_info", "conversion_stats"] {
-            let section = root
-                .entry(name)
-                .or_insert_with(|| toml::Table::new().into())
-                .as_table_mut()
-                .with_context(|| format!("invalid {name} table"))?;
-            for (key, value) in defaults[name].as_table().expect("finalized table") {
-                section.entry(key).or_insert_with(|| value.clone());
-            }
-        }
-        Ok(document)
     }
 }
 
@@ -367,16 +395,17 @@ pub struct DescriptorRows {
     ordinal: usize,
     block: usize,
     block_rows: usize,
-    symmetry: Option<(i8, i8)>,
 }
 
 impl DescriptorRows {
     pub fn open(path: &Path, header_path: &Path) -> Result<Self> {
         ensure_distinct_inputs(path, header_path, "descriptor and header paths must differ")?;
         let bytes = fs::read(header_path)?;
-        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let (expected_digest, body) = crate::descriptor_transport::header_binding(&bytes)?;
+        let hash = format!("{:x}", Sha256::digest(body));
         let header = DatasetHeader::parse(toml::from_str(std::str::from_utf8(&bytes)?)?, true)?;
-        let builder = ParquetRecordBatchReaderBuilder::try_new(File::open(path)?)?;
+        let mut file = File::open(path)?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file.try_clone()?)?;
         let metadata = builder.metadata().file_metadata();
         ensure!(
             usize::try_from(metadata.num_rows()).ok() == Some(header.row_count()),
@@ -445,6 +474,11 @@ impl DescriptorRows {
                 "closed-core dataset must contain one CSF"
             );
         }
+        file.rewind()?;
+        ensure!(
+            crate::descriptor_transport::file_sha256(&mut file)? == expected_digest,
+            "descriptor_sha256 does not match the final Parquet file"
+        );
         Ok(Self {
             validator: DescriptorRowValidator::new(&header.core, &header.peel)?,
             header,
@@ -454,7 +488,6 @@ impl DescriptorRows {
             ordinal: 0,
             block: 0,
             block_rows: 0,
-            symmetry: None,
         })
     }
 
@@ -494,7 +527,6 @@ impl DescriptorRows {
         if self.block_rows == self.header.block_lengths[self.block] {
             self.block += 1;
             self.block_rows = 0;
-            self.symmetry = None;
         }
         self.validator
             .validate(&row, &mut self.header.electron_count)
@@ -505,12 +537,13 @@ impl DescriptorRows {
                     self.block_rows + 1
                 )
             })?;
-        let symmetry = row_symmetry(&row);
+        let indexed = &self.header.blocks[self.block];
         ensure!(
-            self.symmetry.is_none_or(|s| s == symmetry),
-            "mixed symmetry within explicit block"
+            row_symmetry(&row) == (indexed.two_j, indexed.parity),
+            "descriptor symmetry differs from block index at block {}, row {}",
+            self.block + 1,
+            self.block_rows + 1
         );
-        self.symmetry = Some(symmetry);
         let result = (self.ordinal, self.block, row);
         self.ordinal += 1;
         self.block_rows += 1;
@@ -528,7 +561,10 @@ impl DescriptorRows {
     }
 
     pub(crate) fn block_symmetry(&self) -> Option<(i8, i8)> {
-        self.symmetry
+        (self.block_rows > 0).then(|| {
+            let block = &self.header.blocks[self.block];
+            (block.two_j, block.parity)
+        })
     }
 }
 
@@ -553,7 +589,7 @@ pub struct DatasetWriter {
     columns: Vec<Vec<i8>>,
     lengths: Vec<usize>,
     current_block: Option<usize>,
-    symmetry: Option<(i8, i8)>,
+    symmetries: Vec<(i8, i8)>,
     batch_rows: usize,
 }
 
@@ -637,7 +673,7 @@ impl DatasetWriter {
             columns,
             lengths: Vec::new(),
             current_block: None,
-            symmetry: None,
+            symmetries: Vec::new(),
             batch_rows: BATCH_ROWS,
         })
     }
@@ -653,17 +689,16 @@ impl DatasetWriter {
     pub fn push(&mut self, row: &[i8], block: usize) -> Result<()> {
         self.validator
             .validate(row, &mut self.header.electron_count)?;
+        let symmetry = row_symmetry(row);
         if self.current_block != Some(block) {
             self.lengths.push(0);
             self.current_block = Some(block);
-            self.symmetry = None;
+            self.symmetries.push(symmetry);
         }
-        let symmetry = row_symmetry(row);
         ensure!(
-            self.symmetry.is_none_or(|s| s == symmetry),
+            self.symmetries.last() == Some(&symmetry),
             "mixed output block symmetry"
         );
-        self.symmetry = Some(symmetry);
         *self.lengths.last_mut().expect("block initialized") += 1;
         for (column, value) in self.columns.iter_mut().zip(row) {
             column.push(*value);
@@ -714,7 +749,7 @@ impl DatasetWriter {
         self.flush()?;
         self.writer.finish()?;
         drop(self.writer);
-        let mut header = self.header.finalized(&self.lengths)?;
+        let mut header = self.header.finalized(&self.lengths, &self.symmetries)?;
         if let Some(counts) = counts {
             ensure!(
                 counts.len() == self.lengths.len()
@@ -736,8 +771,7 @@ impl DatasetWriter {
         let bytes = toml::to_string(&header.document)?.into_bytes();
         let hash = format!("{:x}", Sha256::digest(&bytes));
         let (header_temp, mut header_file) = create_temporary_output(&self.header_output)?;
-        header_file.write_all(&bytes)?;
-        header_file.sync_all()?;
+        crate::descriptor_transport::write_staged_header(&mut header_file, &bytes)?;
         drop(header_file);
         let metadata = output_kv_metadata(
             header.layout(),
@@ -762,6 +796,10 @@ impl DatasetWriter {
             output.write(&batch?)?;
         }
         output.close()?;
+        crate::descriptor_transport::seal_descriptor_header(
+            header_temp.path(),
+            output_temp.path(),
+        )?;
         let stats = DatasetStats {
             success: true,
             output_file: self.output.display().to_string(),

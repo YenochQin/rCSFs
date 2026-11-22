@@ -6,6 +6,7 @@ from typing import get_type_hints
 import polars as pl
 import pyarrow.parquet as pq
 import pytest
+from _descriptor_binding import seal
 
 from rcsfs import (
     CsfHeaderData,
@@ -23,20 +24,24 @@ from rcsfs import (
 FIXTURE = Path(__file__).parent / "fixtures" / "descriptor_multiblock.c"
 
 
+def rebind_header(path: Path, header: Path, body: bytes) -> bytes:
+    table = pq.read_table(path)
+    metadata = dict(pq.read_metadata(path).metadata or {})
+    metadata.pop(b"ARROW:schema", None)
+    metadata[b"source_header_sha256"] = hashlib.sha256(body).hexdigest().encode()
+    pq.write_table(table.replace_schema_metadata(metadata), path)
+    return seal(header, path, body)
+
+
 @pytest.mark.parametrize("entry", ['"bad"', "[1]", "[true, 1]", "[-1, 1]", "[1, 2]"])
 def test_read_rejects_invalid_zero_order_counts(tmp_path: Path, entry: str) -> None:
     path = tmp_path / "basis_descriptors.parquet"
     convert_csfs(FIXTURE, path)
     header = descriptor_header_path(path)
-    raw = header.read_bytes().replace(
+    body = header.read_bytes().split(b"\n", 1)[1].replace(
         b"[block_info]\n", f"[block_info]\nzero_order_counts = {entry}\n".encode()
     )
-    table = pq.read_table(path)
-    metadata = dict(pq.read_metadata(path).metadata or {})
-    metadata.pop(b"ARROW:schema", None)
-    metadata[b"source_header_sha256"] = hashlib.sha256(raw).hexdigest().encode()
-    header.write_bytes(raw)
-    pq.write_table(table.replace_schema_metadata(metadata), path)
+    rebind_header(path, header, body)
     with pytest.raises(OSError, match="zero_order_counts"):
         read_csfs(path)
     with pytest.raises(OSError, match="zero_order_counts"):
@@ -75,17 +80,12 @@ def test_truncation_history_survives_read_selection_and_combination(
     for count, path in enumerate(pairs, start=1):
         convert_csfs(FIXTURE, path)
         header = descriptor_header_path(path)
-        raw = header.read_bytes().replace(
+        body = header.read_bytes().split(b"\n", 1)[1].replace(
             b"truncated_count = 0", f"truncated_count = {count}".encode()
         )
-        raw = raw.replace(b"total_lines = 6", b"total_lines = 7")
-        header.write_bytes(raw)
-        table = pq.read_table(path)
-        metadata = pq.read_metadata(path).metadata.copy()
-        metadata.pop(b"ARROW:schema", None)
-        metadata[b"source_header_sha256"] = hashlib.sha256(raw).hexdigest().encode()
-        pq.write_table(table.replace_schema_metadata(metadata), path)
-        assert read_csfs(path)[0] == tomllib.loads(raw.decode())
+        body = body.replace(b"total_lines = 6", b"total_lines = 7")
+        bound = rebind_header(path, header, body)
+        assert read_csfs(path)[0] == tomllib.loads(bound.decode())
 
     selected = tmp_path / "selected.parquet"
     select_csfs(pairs[0], selected, [0])
@@ -132,6 +132,10 @@ def test_read_numeric_rows_preserves_schema_blocks_and_signatures(
     assert header == tomllib.loads(header_path.read_text())
     assert header["header_info"]["electron_count"] == 4
     assert header["block_info"]["block_lengths"] == [1, 1]
+    assert header["block_info"]["blocks"] == [
+        {"two_j": 0, "parity": 1, "start_row": 0, "length": 1},
+        {"two_j": 2, "parity": -1, "start_row": 1, "length": 1},
+    ]
     assert rows["idx"].dtype == pl.UInt64
     assert rows["idx"].to_list() == [0, 1]
     assert rows["total_two_j_plus_one"].to_list() == [1, 3]
@@ -164,3 +168,44 @@ def test_read_requires_descriptor_and_exact_companion_header(tmp_path: Path) -> 
     header.write_text(header.read_text() + "\n# stale\n")
     with pytest.raises(OSError, match="source_header_sha256"):
         read_csfs(output)
+
+
+def test_rejects_reencoded_parquet_and_missing_digest(tmp_path: Path) -> None:
+    path = tmp_path / "basis_desc.parquet"
+    convert_csfs(FIXTURE, path)
+    header = descriptor_header_path(path)
+    original = header.read_bytes()
+    table = pq.read_table(path)
+    metadata = dict(pq.read_metadata(path).metadata or {})
+    metadata.pop(b"ARROW:schema", None)
+    pq.write_table(table.replace_schema_metadata(metadata), path, compression="NONE")
+    with pytest.raises(OSError, match="descriptor_sha256"):
+        read_csfs(path)
+    header.write_bytes(original.split(b"\n", 1)[1])
+    with pytest.raises(OSError, match="descriptor_sha256"):
+        read_csfs(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    [
+        (b"start_row = 1", b"start_row = 0", "block index range"),
+        (b"start_row = 1", b"start_row = 2", "block index range"),
+        (b"length = 1", b"length = 2", "block index range"),
+        (b"two_j = 2", b"two_j = 127", "indexed symmetry"),
+        (b"parity = -1", b"parity = 0", "indexed symmetry"),
+        (b"parity = -1", b"parity = 1", "symmetry differs"),
+    ],
+)
+def test_validates_index_ranges_and_row_symmetry(
+    tmp_path: Path, field: bytes, replacement: bytes, message: str
+) -> None:
+    path = tmp_path / "basis_desc.parquet"
+    convert_csfs(FIXTURE, path)
+    header = descriptor_header_path(path)
+    body = header.read_bytes().split(b"\n", 1)[1]
+    assert field in body
+    body = body.replace(field, replacement, 1)
+    rebind_header(path, header, body)
+    with pytest.raises(OSError, match=message):
+        read_csfs(path)

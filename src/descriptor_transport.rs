@@ -5,6 +5,8 @@
 use anyhow::{Context, Result, ensure};
 use parquet::file::metadata::KeyValue;
 use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -214,18 +216,51 @@ pub fn validate_output_schema(
     Ok(())
 }
 
-/// Lower-hex SHA-256 of a header TOML file's bytes.
-///
-/// This is the mechanism behind design doc §6's "header, blocks and
-/// descriptors must match as a set" (plan D5): binding a descriptor file to
-/// the exact header bytes it was generated from lets a restore path detect a
-/// header that was regenerated or edited after the fact.
+// The first line is the only byte range excluded from source_header_sha256.
+const DIGEST_PREFIX: &str = "descriptor_sha256 = \"";
+const EMPTY_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+pub(crate) fn header_binding(bytes: &[u8]) -> Result<(&str, &[u8])> {
+    let (line, body) = bytes
+        .split_at_checked(DIGEST_PREFIX.len() + 64 + 2)
+        .context("missing descriptor_sha256 header line")?;
+    let digest = std::str::from_utf8(line)?
+        .strip_prefix(DIGEST_PREFIX)
+        .and_then(|line| line.strip_suffix("\"\n"))
+        .filter(|s| {
+            s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+        .context("invalid descriptor_sha256 header line")?;
+    Ok((digest, body))
+}
+
+pub(crate) fn write_staged_header(file: &mut File, body: &[u8]) -> Result<()> {
+    writeln!(file, "{DIGEST_PREFIX}{EMPTY_DIGEST}\"")?;
+    file.write_all(body)?;
+    Ok(())
+}
+
+pub(crate) fn file_sha256(file: &mut File) -> Result<String> {
+    let mut hash = Sha256::new();
+    std::io::copy(file, &mut hash)?;
+    file.rewind()?;
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+/// Seal a private staged pair after the Parquet footer has been written.
+pub(crate) fn seal_descriptor_header(header: &Path, descriptor: &Path) -> Result<()> {
+    let digest = file_sha256(&mut File::open(descriptor)?)?;
+    let mut file = File::options().write(true).open(header)?;
+    file.seek(SeekFrom::Start(DIGEST_PREFIX.len() as u64))?;
+    file.write_all(digest.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
+}
+
 pub fn hash_header_file(header_path: &Path) -> Result<String> {
-    let bytes = std::fs::read(header_path)
-        .with_context(|| format!("failed to read header file {}", header_path.display()))?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Ok(format!("{:x}", hasher.finalize()))
+    let bytes = std::fs::read(header_path)?;
+    Ok(format!("{:x}", Sha256::digest(header_binding(&bytes)?.1)))
 }
 
 fn escape_json_string(value: &str) -> String {

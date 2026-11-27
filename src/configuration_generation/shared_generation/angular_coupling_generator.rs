@@ -6,6 +6,7 @@
 //! and are not inferred by this interface.
 
 use crate::descriptor_transport::{MAX_TWO_J, encode_angular};
+use crate::orbital_label::{self, MAX_PRINCIPAL_QUANTUM_NUMBER, ORBITAL_LETTERS};
 use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -19,7 +20,6 @@ use crate::complete_csf::{
     CompleteCsfFile, IntermediateCoupling, OccupiedSubshell, Parity, SubshellState,
 };
 
-const ORBITAL_LETTERS: &[u8] = b"spdfghiklmn";
 const MAX_OCCUPIED_SUBSHELLS: usize = 20;
 
 /// Relativistic orbital identity; kappa > 0 denotes j=l-1/2.
@@ -30,8 +30,15 @@ pub struct Subshell {
 }
 
 impl Subshell {
-    /// GRASP's supported orbitals have n <= 15 and l <= 10.
+    /// Create a subshell through the established constructor.
+    ///
+    /// See [`Self::try_new`] for the allowed quantum numbers.
     pub fn new(n: u8, kappa: i8) -> Result<Self> {
+        Self::try_new(n, kappa)
+    }
+
+    /// Create a relativistic subshell with `n` up to [`MAX_PRINCIPAL_QUANTUM_NUMBER`] and `l <= 10`.
+    pub fn try_new(n: u8, kappa: i8) -> Result<Self> {
         ensure!(
             kappa != 0 && (-11..=10).contains(&kappa),
             "kappa must be in -11..=-1 or 1..=10"
@@ -42,18 +49,24 @@ impl Subshell {
             kappa.unsigned_abs() - 1
         };
         ensure!(
-            (1..=15).contains(&n) && l < n,
-            "subshell must satisfy 0 <= l < n <= 15"
+            (1..=MAX_PRINCIPAL_QUANTUM_NUMBER).contains(&n) && l < n,
+            "subshell must satisfy 0 <= l < n <= {MAX_PRINCIPAL_QUANTUM_NUMBER}"
         );
         Ok(Self { n, kappa })
     }
 
+    /// Principal quantum number of the subshell.
+    #[must_use]
     pub fn n(self) -> u8 {
         self.n
     }
+    /// Relativistic angular quantum number, positive for `j = l - 1/2`.
+    #[must_use]
     pub fn kappa(self) -> i8 {
         self.kappa
     }
+    /// Orbital angular momentum quantum number derived from `kappa`.
+    #[must_use]
     pub fn l(self) -> u8 {
         if self.kappa > 0 {
             self.kappa as u8
@@ -61,6 +74,8 @@ impl Subshell {
             self.kappa.unsigned_abs() - 1
         }
     }
+    /// Maximum electron population, `2j + 1 = 2 * |kappa|`.
+    #[must_use]
     pub fn capacity(self) -> u8 {
         2 * self.kappa.unsigned_abs()
     }
@@ -72,7 +87,7 @@ impl fmt::Display for Subshell {
             f,
             "{}{}{}",
             self.n,
-            char::from(ORBITAL_LETTERS[usize::from(self.l())]),
+            char::from(ORBITAL_LETTERS.as_bytes()[usize::from(self.l())]),
             if self.kappa > 0 { "-" } else { "" }
         )
     }
@@ -82,31 +97,23 @@ impl FromStr for Subshell {
     type Err = anyhow::Error;
 
     fn from_str(label: &str) -> Result<Self> {
-        let (orbital, lower) = label
-            .strip_suffix('-')
-            .map_or((label, false), |s| (s, true));
-        ensure!(
-            orbital.is_ascii() && orbital.len() >= 2,
-            "invalid subshell label {label:?}"
-        );
-        let (n, letter) = orbital.split_at(orbital.len() - 1);
-        let l = ORBITAL_LETTERS
-            .iter()
-            .position(|&value| value == letter.as_bytes()[0])
-            .with_context(|| format!("invalid orbital letter in {label:?}"))? as i8;
-        ensure!(!lower || l > 0, "s- is not a relativistic subshell");
-        let subshell = Self::new(n.parse()?, if lower { l } else { -l - 1 })?;
-        ensure!(
-            subshell.to_string() == label,
-            "non-canonical subshell label {label:?}"
-        );
-        Ok(subshell)
+        let (n, kappa) = orbital_label::parse_subshell(label)?;
+        Self::try_new(
+            u8::try_from(n).with_context(|| {
+                format!("subshell n must be in 1..={MAX_PRINCIPAL_QUANTUM_NUMBER}")
+            })?,
+            kappa,
+        )
+        .with_context(|| format!("invalid generator subshell {label:?}"))
     }
 }
 
+/// An electron population assigned to one relativistic subshell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SubshellOccupation {
+    /// Subshell whose population is specified.
     pub subshell: Subshell,
+    /// Number of electrons, from zero through the subshell's capacity.
     pub electrons: u8,
 }
 
@@ -118,9 +125,13 @@ pub struct SubshellOccupation {
 /// retain GEN's state-table order and ascending intermediate couplings.
 #[derive(Clone, Debug)]
 pub struct GenerationRequest {
+    /// Fully occupied subshells written to the core header in this order.
     pub core_subshells: Vec<Subshell>,
+    /// Peel subshell occupations in the order used to couple angular momenta.
     pub configuration: Vec<SubshellOccupation>,
+    /// Inclusive lower bound on twice the total angular momentum.
     pub min_two_j: u16,
+    /// Inclusive upper bound on twice the total angular momentum.
     pub max_two_j: u16,
 }
 

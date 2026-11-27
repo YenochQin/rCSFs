@@ -147,7 +147,7 @@ fn zero_occupations_are_omitted_and_zero_results_are_explicit() {
 
 #[test]
 fn invalid_inputs_and_unsupported_tables_fail() {
-    for label in ["0s", "1p", "2s-", "16s", "02p", "+2p", "2p+", "2j"] {
+    for label in ["0s", "1p", "2s-", "31s", "02p", "+2p", "2p+", "2j"] {
         assert!(label.parse::<Subshell>().is_err(), "accepted {label}");
     }
     for input in [
@@ -366,7 +366,7 @@ fn registered_rcsfgenerate_references_expand_individually() {
 
 fn closed_configuration(count: usize) -> GenerationRequest {
     let mut input = request(&[], 0, 0);
-    for n in 1..=15 {
+    for n in 1..=_rcsfs::configuration_generation::MAX_PRINCIPAL_QUANTUM_NUMBER {
         for l in 0..n.min(11) {
             for kappa in [l as i8, -(l as i8) - 1] {
                 if kappa == 0 {
@@ -397,6 +397,102 @@ fn twenty_subshell_limit_is_checked_without_truncation() {
             .to_string()
             .contains("20 occupied")
     );
+}
+
+#[test]
+fn non_ascii_reference_orbital_returns_a_parse_error() {
+    use _rcsfs::csf_generation::ReferenceConfiguration;
+
+    let error = ReferenceConfiguration::from_spectroscopic("2s(2,i)3δ(1,*)").unwrap_err();
+    assert!(error.to_string().contains("ASCII orbital letter"));
+
+    let input = include_str!("fixtures/o1_cc1as1.rcsfgenerate").replacen("3d(", "3δ(", 1);
+    let error = ExcitationRequest::from_transcript(&input).unwrap_err();
+    assert!(error.to_string().contains("ASCII orbital letter"));
+}
+
+#[test]
+fn reference_and_active_lists_accept_only_supported_physical_orbitals() {
+    use _rcsfs::csf_generation::{Orbital, ReferenceConfiguration};
+
+    for label in ["3δ", "3ｄ", "3D", "3j", "0s", "1p", "2d", "3f", "31s"] {
+        assert!(label.parse::<Orbital>().is_err(), "{label}");
+        assert!(
+            ReferenceConfiguration::from_spectroscopic(&format!("{label}(1,*)")).is_err(),
+            "{label}"
+        );
+        for core in [0, 6] {
+            let input = excitation_transcript(core, "7s(1,*)", &format!("7s,{label}"), 0);
+            assert!(
+                ExcitationRequest::from_transcript(&input).is_err(),
+                "core {core}, label {label}"
+            );
+        }
+    }
+    for (label, n, l) in [
+        ("1s", 1, 0),
+        ("3d", 3, 2),
+        ("4f", 4, 3),
+        ("8k", 8, 7),
+        ("15n", 15, 10),
+        ("16s", 16, 0),
+        ("30n", 30, 10),
+    ] {
+        let orbital = label.parse::<Orbital>().unwrap();
+        assert_eq!((orbital.n(), orbital.l()), (n, l));
+        assert_eq!(orbital.label(), label);
+    }
+}
+
+#[test]
+fn enumerates_both_relativistic_partners_at_the_maximum_n_and_l() {
+    let input = excitation_transcript(0, "30n(1,*)", "30n", 0);
+    let request = ExcitationRequest::from_transcript(&input).unwrap();
+    let occupations = enumerate_occupations(&request).unwrap();
+    let mut subshells: Vec<_> = occupations
+        .configurations
+        .iter()
+        .map(|configuration| {
+            let [occupied] = configuration.occupations.as_slice() else {
+                panic!("expected one occupied subshell");
+            };
+            assert_eq!(occupied.electrons, 1);
+            occupied.subshell.to_string()
+        })
+        .collect();
+    subshells.sort();
+    assert_eq!(subshells, ["30n", "30n-"]);
+}
+
+#[test]
+fn radon_core_normalization_uses_physical_orbitals_and_preserves_closed_4f_rules() {
+    for (active, expected_core_electrons) in [("7s", 72u16), ("7s,6d", 86), ("7s,6g", 86)] {
+        let input = excitation_transcript(6, "7s(1,*)", active, 0);
+        let request = ExcitationRequest::from_transcript(&input).unwrap();
+        assert!(
+            request
+                .active_orbitals
+                .iter()
+                .all(|orbital| orbital.l() < orbital.n())
+        );
+        let occupations = enumerate_occupations(&request).unwrap();
+        assert_eq!(
+            occupations
+                .core_subshells
+                .iter()
+                .map(|shell| u16::from(shell.capacity()))
+                .sum::<u16>(),
+            expected_core_electrons,
+            "{active}"
+        );
+        assert!(
+            occupations
+                .active_subshells
+                .iter()
+                .all(|shell| shell.l() != 3),
+            "{active}"
+        );
+    }
 }
 
 #[test]
@@ -567,7 +663,7 @@ fn memory_writer_preserves_explicit_relativistic_coupling_order() {
     let descriptor = directory.path().join("basis_desc.parquet");
     write_generated_csfs(&[], &[generated], &descriptor).unwrap();
     let mut data = DescriptorRows::open(&descriptor, &header_path(&descriptor).unwrap()).unwrap();
-    assert_eq!(data.header.peel, ["3s", "1s", "2s"]);
+    assert_eq!(data.header().peel, ["3s", "1s", "2s"]);
     assert_eq!(data.next_row().unwrap().unwrap().2[7], 1);
     assert_eq!(data.next_row().unwrap().unwrap().2[7], 3);
 }

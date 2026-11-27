@@ -7,11 +7,10 @@
 use anyhow::{Context, Result, ensure};
 use arrow::array::{Array, ArrayRef, Int8Array};
 use arrow::record_batch::RecordBatch;
-use arrow_ipc::{reader::FileReader, writer::FileWriter};
-use parquet::arrow::{
-    ArrowWriter, arrow_reader::ParquetRecordBatchReader,
-    arrow_reader::ParquetRecordBatchReaderBuilder,
-};
+use arrow_ipc::reader::FileReader;
+use arrow_ipc::writer::FileWriter;
+use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use parquet::basic::{LogicalType, Type as ParquetType};
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
@@ -37,6 +36,7 @@ use crate::descriptor_v3::decode_v3_into;
 
 const BATCH_ROWS: usize = 8192;
 
+/// Read the indexed TOML sidecar without opening its companion Parquet file.
 pub fn read_header(path: &Path) -> Result<DatasetHeader> {
     let bytes = fs::read(path)?;
     crate::descriptor_transport::header_binding(&bytes)?;
@@ -49,6 +49,7 @@ pub(crate) fn descriptor_stem(stem: &str) -> &str {
         .unwrap_or(stem)
 }
 
+/// Derive the companion TOML path from a descriptor Parquet filename.
 pub fn header_path(descriptors: &Path) -> Result<PathBuf> {
     ensure!(
         descriptors.extension().is_some_and(|s| s == "parquet"),
@@ -71,13 +72,20 @@ struct BlockRecord {
     length: usize,
 }
 
+/// Header and explicit block index for one descriptor dataset.
 #[derive(Clone, Debug)]
 pub struct DatasetHeader {
+    /// Parsed sidecar, including metadata carried through descriptor transformations.
     pub document: toml::Value,
+    /// Five lines of the original GRASP text header, in file order.
     pub lines: [String; 5],
+    /// Peel orbital labels in descriptor column order.
     pub peel: Vec<String>,
+    /// Closed-core subshells in text header order.
     pub core: Vec<Subshell>,
+    /// Number of rows in each explicit block, in descriptor order.
     pub block_lengths: Vec<usize>,
+    /// Total electrons including the closed core, if known.
     pub electron_count: Option<usize>,
     blocks: Vec<BlockRecord>,
 }
@@ -118,6 +126,10 @@ impl DatasetHeader {
         Ok(())
     }
 
+    /// Build an unindexed header from five GRASP text lines without line terminators.
+    ///
+    /// A dataset writer fills in the block index and electron count as it writes rows.
+    /// Returns an error if the header labels or orbital lists are invalid.
     pub fn from_lines(lines: [String; 5]) -> Result<Self> {
         let mut document = toml::Table::new();
         let mut info = toml::Table::new();
@@ -307,10 +319,19 @@ impl DatasetHeader {
         }))
     }
 
+    /// V3 row layout for the header's ordered peel subshells.
+    #[must_use]
     pub fn layout(&self) -> DescriptorLayout {
         DescriptorLayout::new(DescriptorVersion::V3, self.peel.len())
     }
 
+    /// Total descriptor rows across all indexed blocks, or zero for an unindexed header.
+    ///
+    /// # Panics
+    ///
+    /// With overflow checks enabled, panics if the caller changes
+    /// [`Self::block_lengths`] so that their sum exceeds `usize::MAX`.
+    #[must_use]
     pub fn row_count(&self) -> usize {
         self.block_lengths.iter().sum()
     }
@@ -386,8 +407,20 @@ impl DatasetHeader {
     }
 }
 
+/// A descriptor row and its location in the source dataset.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DescriptorRow {
+    /// Zero-based row number across all blocks.
+    pub ordinal: usize,
+    /// Zero-based explicit block index, even when adjacent blocks share a symmetry.
+    pub block_index: usize,
+    /// Int8 descriptor channels in the order defined by the V3 layout.
+    pub values: Vec<i8>,
+}
+
+/// Streams and validates descriptor rows against the bound sidecar.
 pub struct DescriptorRows {
-    pub header: DatasetHeader,
+    header: DatasetHeader,
     validator: DescriptorRowValidator,
     reader: ParquetRecordBatchReader,
     batch: Option<RecordBatch>,
@@ -398,6 +431,28 @@ pub struct DescriptorRows {
 }
 
 impl DescriptorRows {
+    /// Borrow the validated header and block index used by this stream.
+    ///
+    /// The block table is read-only while the stream holds its validation state.
+    /// ```compile_fail,E0616
+    /// use _rcsfs::descriptor_dataset::DescriptorRows;
+    ///
+    /// fn clear_block_index(rows: &mut DescriptorRows) {
+    ///     rows.header.block_lengths.clear();
+    /// }
+    /// ```
+    #[must_use]
+    pub fn header(&self) -> &DatasetHeader {
+        &self.header
+    }
+
+    /// Consume the stream and take ownership of its header and block index.
+    #[must_use]
+    pub fn into_header(self) -> DatasetHeader {
+        self.header
+    }
+
+    /// Open a Parquet/sidecar pair and verify its schema and file binding.
     pub fn open(path: &Path, header_path: &Path) -> Result<Self> {
         ensure_distinct_inputs(path, header_path, "descriptor and header paths must differ")?;
         let bytes = fs::read(header_path)?;
@@ -491,12 +546,23 @@ impl DescriptorRows {
         })
     }
 
+    /// Read the next row as `(ordinal, block_index, values)`.
+    ///
+    /// See [`Self::next_descriptor_row`] for the same result with named fields.
     pub fn next_row(&mut self) -> Result<Option<(usize, usize, Vec<i8>)>> {
-        while self
-            .batch
-            .as_ref()
-            .is_none_or(|b| self.batch_row == b.num_rows())
-        {
+        Ok(self
+            .next_descriptor_row()?
+            .map(|row| (row.ordinal, row.block_index, row.values)))
+    }
+
+    /// Read the next validated row, or return `None` at the end of the dataset.
+    pub fn next_descriptor_row(&mut self) -> Result<Option<DescriptorRow>> {
+        let batch = loop {
+            if let Some(batch) = &self.batch
+                && self.batch_row < batch.num_rows()
+            {
+                break batch;
+            }
             self.batch = self.reader.next().transpose()?;
             self.batch_row = 0;
             if self.batch.is_none() {
@@ -506,12 +572,11 @@ impl DescriptorRows {
                 );
                 return Ok(None);
             }
-        }
+        };
         ensure!(
             self.ordinal < self.header.row_count(),
             "too many descriptor rows"
         );
-        let batch = self.batch.as_ref().expect("batch loaded");
         let row = batch
             .columns()
             .iter()
@@ -544,7 +609,11 @@ impl DescriptorRows {
             self.block + 1,
             self.block_rows + 1
         );
-        let result = (self.ordinal, self.block, row);
+        let result = DescriptorRow {
+            ordinal: self.ordinal,
+            block_index: self.block,
+            values: row,
+        };
         self.ordinal += 1;
         self.block_rows += 1;
         self.batch_row += 1;
@@ -554,8 +623,8 @@ impl DescriptorRows {
     /// Read a known number of rows from the current explicit block.
     pub(crate) fn read_rows(&mut self, count: usize) -> impl Iterator<Item = Result<Vec<i8>>> + '_ {
         (0..count).map(move |_| {
-            self.next_row()?
-                .map(|(_, _, row)| row)
+            self.next_descriptor_row()?
+                .map(|row| row.values)
                 .context("truncated descriptor block")
         })
     }
@@ -568,17 +637,26 @@ impl DescriptorRows {
     }
 }
 
+/// Statistics returned after publishing a V3 descriptor dataset and its sidecar.
 #[derive(Debug, Serialize)]
 pub struct DatasetStats {
+    /// Publication status reported to callers. Successful operations return `true`.
     pub success: bool,
+    /// Path of the output descriptor Parquet file.
     pub output_file: String,
+    /// Path of the bound TOML sidecar.
     pub header_file: String,
+    /// Total number of CSF rows written to the Parquet file.
     pub record_count: usize,
+    /// Number of explicit blocks written.
     pub block_count: usize,
+    /// Row count of each output block, in file order.
     pub block_lengths: Vec<usize>,
+    /// Total electrons per CSF, including the closed core.
     pub electron_count: usize,
 }
 
+/// Stages validated descriptor rows before publishing the Parquet/sidecar pair.
 pub struct DatasetWriter {
     header: DatasetHeader,
     validator: DescriptorRowValidator,
@@ -632,7 +710,25 @@ pub(crate) fn output_identity(path: &Path) -> Result<PathBuf> {
 }
 
 impl DatasetWriter {
+    /// Peel labels in output column order for mapping source rows onto this writer.
+    pub(crate) fn peel_subshells(&self) -> &[String] {
+        &self.header.peel
+    }
+
+    /// Create a staged writer through the established constructor.
+    ///
+    /// See [`Self::try_new`] for the output path and input aliasing checks.
     pub fn new(
+        header: DatasetHeader,
+        output: &Path,
+        header_output: &Path,
+        inputs: &[&Path],
+    ) -> Result<Self> {
+        Self::try_new(header, output, header_output, inputs)
+    }
+
+    /// Stage a writer for two new output paths that must not alias one another or an input.
+    pub fn try_new(
         header: DatasetHeader,
         output: &Path,
         header_output: &Path,
@@ -686,6 +782,7 @@ impl DatasetWriter {
         self
     }
 
+    /// Append a row. A change in `block` starts a new explicit output block.
     pub fn push(&mut self, row: &[i8], block: usize) -> Result<()> {
         self.validator
             .validate(row, &mut self.header.electron_count)?;
@@ -730,6 +827,7 @@ impl DatasetWriter {
         Ok(())
     }
 
+    /// Finish validating and publish the completed Parquet/sidecar pair.
     pub fn finish(self) -> Result<DatasetStats> {
         self.prepare()?.publish()
     }
@@ -782,9 +880,7 @@ impl DatasetWriter {
         let properties = WriterProperties::builder()
             .set_key_value_metadata(Some(metadata))
             .set_max_row_group_row_count(Some(BATCH_ROWS))
-            .set_compression(crate::csfs_descriptor::parquet_batch::parse_compression(
-                None,
-            )?)
+            .set_compression(crate::parquet_compression::parse(None)?)
             .build();
         let (output_temp, output_file) = create_temporary_output(&self.output)?;
         let mut output = ArrowWriter::try_new(
@@ -829,8 +925,8 @@ pub fn import_text(input: &Path, output: &Path, header_output: &Path) -> Result<
     let header = DatasetHeader::from_lines(header_lines.try_into().expect("five header lines"))?;
     let closed_core = header.peel.is_empty();
     let width = header.layout().row_len();
-    let parser = CSFDescriptorGenerator::new(header.peel.clone());
-    let mut writer = DatasetWriter::new(header, output, header_output, &[input])?;
+    let parser = CSFDescriptorGenerator::try_new(header.peel.clone())?;
+    let mut writer = DatasetWriter::try_new(header, output, header_output, &[input])?;
     let mut block = 0;
     let mut count_in_block = 0;
     let mut row = vec![0; width];
@@ -873,17 +969,17 @@ pub fn select(
     output_header: &Path,
     indices: &[u64],
 ) -> Result<DatasetStats> {
-    ensure!(!indices.is_empty(), "empty CSF selection");
+    let last_index = *indices.last().context("empty CSF selection")?;
     ensure!(
         indices.windows(2).all(|w| w[0] < w[1]),
         "CSF indices must be unique and increasing"
     );
     let mut source = DescriptorRows::open(input, header)?;
     ensure!(
-        indices.last().copied().unwrap() < u64::try_from(source.header.row_count())?,
+        last_index < u64::try_from(source.header.row_count())?,
         "CSF index out of range"
     );
-    let mut output = DatasetWriter::new(
+    let mut output = DatasetWriter::try_new(
         source.header.clone(),
         output,
         output_header,
@@ -892,7 +988,12 @@ pub fn select(
     let prefix_ends = source.header.zero_order_ends()?;
     let mut retained_counts = std::collections::BTreeMap::<usize, usize>::new();
     let mut selected = indices.iter().copied().peekable();
-    while let Some((ordinal, block, row)) = source.next_row()? {
+    while let Some(DescriptorRow {
+        ordinal,
+        block_index: block,
+        values: row,
+    }) = source.next_descriptor_row()?
+    {
         if selected.peek() == Some(&(ordinal as u64)) {
             output.push(&row, block)?;
             if let Some(ends) = &prefix_ends {
@@ -907,23 +1008,51 @@ pub fn select(
         .publish()
 }
 
+/// Counts from publishing a restored GRASP text file.
+#[derive(Debug, PartialEq, Eq)]
+pub struct RestoreStats {
+    /// Number of CSF records written.
+    pub record_count: usize,
+    /// Size of the published text file in bytes, including the header and block separators.
+    pub output_bytes: u64,
+}
+
+/// Restore CSF text and return `(record_count, output_bytes)`.
+///
+/// See [`restore_text_with_stats`] for the same counts with named fields.
 pub fn restore_text(
     input: &Path,
     header: &Path,
     output: &Path,
     indices: Option<&[u64]>,
 ) -> Result<(usize, u64)> {
+    let stats = restore_text_with_stats(input, header, output, indices)?;
+    Ok((stats.record_count, stats.output_bytes))
+}
+
+/// Restore canonical GRASP text in dataset order, preserving explicit block boundaries.
+///
+/// An optional selection contains unique, increasing, zero-based row ordinals.
+pub fn restore_text_with_stats(
+    input: &Path,
+    header: &Path,
+    output: &Path,
+    indices: Option<&[u64]>,
+) -> Result<RestoreStats> {
     ensure!(!output.exists(), "output already exists");
     ensure_output_does_not_alias_input(output, input, "descriptor")?;
     ensure_output_does_not_alias_input(output, header, "header")?;
     let mut source = DescriptorRows::open(input, header)?;
     if let Some(indices) = indices {
+        let last_index = *indices
+            .last()
+            .context("CSF indices must be nonempty, unique and increasing")?;
         ensure!(
-            !indices.is_empty() && indices.windows(2).all(|w| w[0] < w[1]),
+            indices.windows(2).all(|w| w[0] < w[1]),
             "CSF indices must be nonempty, unique and increasing"
         );
         ensure!(
-            indices.last().copied().unwrap() < source.header.row_count() as u64,
+            last_index < u64::try_from(source.header.row_count())?,
             "CSF index out of range"
         );
     }
@@ -936,7 +1065,12 @@ pub fn restore_text(
     let mut prior_block = None;
     let mut count = 0;
     let (mut occupied, mut couplings) = (Vec::new(), Vec::new());
-    while let Some((ordinal, block, row)) = source.next_row()? {
+    while let Some(DescriptorRow {
+        ordinal,
+        block_index: block,
+        values: row,
+    }) = source.next_descriptor_row()?
+    {
         if let Some(selection) = &mut selected {
             if selection.peek() != Some(&(ordinal as u64)) {
                 continue;
@@ -968,5 +1102,8 @@ pub fn restore_text(
     drop(writer);
     let bytes = fs::metadata(temporary.path())?.len();
     publish_temporary_output(temporary.path(), output, false)?;
-    Ok((count, bytes))
+    Ok(RestoreStats {
+        record_count: count,
+        output_bytes: bytes,
+    })
 }

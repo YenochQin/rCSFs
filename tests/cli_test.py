@@ -5,6 +5,26 @@ import pytest
 
 
 @pytest.mark.parametrize(
+    ("answers", "label", "next_prompt"),
+    [
+        ("*\n0\n3δ(1,*)\n", "3δ", "Give configuration 2"),
+        ("*\n0\n1p(1,*)\n", "1p", "Give configuration 2"),
+        ("*\n0\n31s(1,*)\n", "31s", "Give configuration 2"),
+        ("*\n0\n30s(1,*)\n*\n31s\n", "31s", "Resulting 2*J"),
+        ("*\n6\n7s(1,*)\n*\n7s,3f\n", "3f", "Resulting 2*J"),
+    ],
+)
+def test_interactive_generation_rejects_invalid_orbital_on_entry(
+    tmp_path: Path, answers: str, label: str, next_prompt: str
+) -> None:
+    result = cli.run(["csfsgenerate"], input_text=answers, cwd=tmp_path)
+    assert result.returncode != 0
+    assert label in result.stderr
+    assert next_prompt not in result.stderr
+    assert not list(tmp_path.glob("*.parquet"))
+
+
+@pytest.mark.parametrize(
     ("fixture", "expected_hash"),
     [
         (

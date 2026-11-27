@@ -1,13 +1,9 @@
 //! Merge CLI overrides and TOML once, then validate a complete batch before running it.
-use super::{
-    arguments::{self, Settings},
-    commands, files, generation,
-};
+use super::arguments::{self, Settings};
+use super::{commands, files, generation};
 use anyhow::{Context, Result, bail, ensure};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::fs;
+use std::path::{Path, PathBuf};
 use toml::Table;
 
 #[derive(Clone, Debug)]

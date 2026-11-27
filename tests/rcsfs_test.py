@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -196,4 +197,33 @@ def test_generate_csfs_from_transcript_reports_failure(tmp_path: Path) -> None:
         generate_csfs_from_transcript(
             "not a valid transcript", tmp_path / "out_descriptors.parquet"
         )
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("storage", ["disk", "memory"])
+def test_maximum_principal_quantum_number_roundtrip(
+    tmp_path: Path, storage: Literal["disk", "memory"]
+) -> None:
+    assert rcsfs.MAX_PRINCIPAL_QUANTUM_NUMBER == 30
+    transcript = "* ! Orbital order\n0\n30n(1,*)\n*\n30n\n19,21\n0\nn\n"
+    output = tmp_path / "basis_desc.parquet"
+    stats = generate_csfs_from_transcript(
+        transcript, output, threads=1, storage=storage
+    )
+    assert stats["record_count"] == 2
+    header = descriptor_header_path(output)
+    assert read_peel_subshells(header) == ["30n-", "30n"]
+    text = tmp_path / "restored.c"
+    restore_csfs_from_descriptors(output, header, text)
+    restored = tmp_path / "restored_desc.parquet"
+    convert_csfs(text, restored)
+    assert read_csfs(output)[1].equals(read_csfs(restored)[1])
+
+
+def test_generate_csfs_rejects_non_ascii_orbital_before_publication(
+    tmp_path: Path,
+) -> None:
+    transcript = "* ! Orbital order\n0\n2δ(1,*)\n\n2s\n1,1\n0\nn\n"
+    with pytest.raises(OSError, match="ASCII orbital letter"):
+        generate_csfs_from_transcript(transcript, tmp_path / "basis_desc.parquet")
     assert not list(tmp_path.iterdir())

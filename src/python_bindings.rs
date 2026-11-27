@@ -1,5 +1,11 @@
 //! Python interfaces over the shared Rust implementation.
-use crate::*;
+use crate::configuration_generation;
+use crate::descriptor_dataset;
+use crate::descriptor_python;
+use crate::descriptor_transport::DescriptorVersion;
+use crate::interaction_py;
+use crate::parquet_info;
+use crate::seniority;
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyModuleMethods;
@@ -7,9 +13,10 @@ use std::path::Path;
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add("DESCRIPTOR_VERSION", DescriptorVersion::V3.tag())?;
     m.add(
-        "DESCRIPTOR_VERSION",
-        descriptor_transport::DescriptorVersion::V3.tag(),
+        "MAX_PRINCIPAL_QUANTUM_NUMBER",
+        configuration_generation::MAX_PRINCIPAL_QUANTUM_NUMBER,
     )?;
     descriptor_python::register(m)?;
     m.add_function(wrap_pyfunction!(get_parquet_info, m)?)?;

@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 /// GRASP stores angular momenta as 2J+1 in a signed byte.
 pub const MAX_TWO_J: u16 = 126;
+/// Parquet metadata value for the signed 8-bit descriptor channels.
 pub const DESCRIPTOR_DTYPE: &str = "int8";
 
 /// Validate before narrowing; 127 fits i8 but violates GRASP's 2J+1 bound.
@@ -28,6 +29,9 @@ pub(crate) fn decode_angular(code: i8, field: &str) -> Result<u16> {
     Ok(u16::try_from(code)? - 1)
 }
 
+/// Require one `descriptor_dtype=int8` entry and one `max_two_j=126` entry.
+///
+/// Returns an error for missing, duplicate or incompatible storage markers.
 pub fn validate_descriptor_storage(metadata: &[KeyValue]) -> Result<()> {
     let maximum = MAX_TWO_J.to_string();
     for (key, expected) in [
@@ -47,6 +51,7 @@ pub fn validate_descriptor_storage(metadata: &[KeyValue]) -> Result<()> {
 /// Required marker separating physical-v descriptors from older printed-v files.
 pub const SENIORITY_ENCODING: &str = "physical";
 
+/// Require exactly one `seniority_encoding=physical` marker in the Parquet footer.
 pub fn validate_seniority_encoding(metadata: &[KeyValue]) -> Result<()> {
     let mut entries = metadata
         .iter()
@@ -59,13 +64,17 @@ pub fn validate_seniority_encoding(metadata: &[KeyValue]) -> Result<()> {
     Ok(())
 }
 
+/// Version of the row encoding shared by a descriptor Parquet file and its TOML sidecar.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum DescriptorVersion {
+    /// Signed Int8 channels for occupation, physical seniority, `2J+1` and
+    /// cumulative `2K+1` per peel subshell, followed by total `2J+1` and parity.
     V3,
 }
 
 impl DescriptorVersion {
     /// Integer channels stored per peel subshell.
+    #[must_use]
     pub const fn channels_per_subshell(self) -> usize {
         match self {
             Self::V3 => 4,
@@ -73,12 +82,14 @@ impl DescriptorVersion {
     }
 
     /// The stable integer tag written to Parquet KV metadata and TOML sidecars.
+    #[must_use]
     pub const fn tag(self) -> u8 {
         match self {
             Self::V3 => 3,
         }
     }
 
+    /// Decode the stored integer version tag, returning an error for unsupported versions.
     pub fn from_tag(tag: u8) -> Result<Self> {
         match tag {
             3 => Ok(Self::V3),
@@ -91,6 +102,17 @@ impl DescriptorVersion {
 
 /// The fixed-width row shape for one descriptor version over `subshell_count`
 /// peel subshells. Cheap to copy; construct it once per generator/export call.
+///
+/// # Examples
+///
+/// ```
+/// use _rcsfs::descriptor_transport::{DescriptorLayout, DescriptorVersion};
+///
+/// let layout = DescriptorLayout::new(DescriptorVersion::V3, 2);
+/// assert_eq!(layout.slot(1) + layout.two_j_offset(), 6);
+/// assert_eq!(layout.total_two_j_index(), Some(8));
+/// assert_eq!(layout.row_len(), 10);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DescriptorLayout {
     version: DescriptorVersion,
@@ -98,6 +120,11 @@ pub struct DescriptorLayout {
 }
 
 impl DescriptorLayout {
+    /// Describe a row with one slot per peel subshell. A closed core adds no slots.
+    ///
+    /// The caller supplies the peel count from the same ordered orbital list
+    /// used to encode or decode the rows.
+    #[must_use]
     pub fn new(version: DescriptorVersion, subshell_count: usize) -> Self {
         Self {
             version,
@@ -105,56 +132,74 @@ impl DescriptorLayout {
         }
     }
 
+    /// Encoding version used to interpret the slot and global channels.
+    #[must_use]
     pub fn version(self) -> DescriptorVersion {
         self.version
     }
 
+    /// Number of peel subshell slots in the row, excluding the closed core.
+    #[must_use]
     pub fn subshell_count(self) -> usize {
         self.subshell_count
     }
 
+    /// Width of one peel slot in columns. V3 uses four columns per slot.
+    #[must_use]
     pub fn channels_per_subshell(self) -> usize {
         self.version.channels_per_subshell()
     }
 
     /// Per-subshell feature columns: `channels_per_subshell * subshell_count`.
+    #[must_use]
     pub fn feature_len(self) -> usize {
         self.channels_per_subshell() * self.subshell_count
     }
 
     /// Full row width including global columns (`4M+2`).
+    #[must_use]
     pub fn row_len(self) -> usize {
         self.feature_len() + 2
     }
 
     /// Base offset of the feature block for peel subshell `index` (0-based).
+    #[must_use]
     pub fn slot(self, index: usize) -> usize {
         index * self.channels_per_subshell()
     }
 
+    /// Offset of the electron occupation within a peel slot.
+    #[must_use]
     pub fn n_offset(self) -> usize {
         0
     }
 
+    /// Offset of physical seniority within a peel slot.
+    #[must_use]
     pub fn seniority_offset(self) -> usize {
         1
     }
 
+    /// Offset of the subshell state's encoded `2J+1` within a peel slot.
+    #[must_use]
     pub fn two_j_offset(self) -> usize {
         2
     }
 
     /// Offset of the cumulative 2K+1 channel within a subshell's slot.
+    #[must_use]
     pub fn two_k_offset(self) -> usize {
         3
     }
 
     /// Index of the total angular momentum global column.
+    #[must_use]
     pub fn total_two_j_index(self) -> Option<usize> {
         Some(self.feature_len())
     }
 
     /// Index of the parity global column.
+    #[must_use]
     pub fn parity_index(self) -> Option<usize> {
         Some(self.feature_len() + 1)
     }
@@ -162,6 +207,7 @@ impl DescriptorLayout {
     /// Names of the per-subshell feature columns, in row order.
     ///
     /// Named feature columns let consumers exclude the global columns.
+    #[must_use]
     pub fn feature_column_names(self) -> Vec<String> {
         (0..self.subshell_count)
             .flat_map(|index| {
@@ -176,6 +222,7 @@ impl DescriptorLayout {
     }
 
     /// Names of the global (non-per-subshell) columns, in row order.
+    #[must_use]
     pub fn global_column_names(self) -> Vec<String> {
         vec!["total_two_j_plus_one".to_owned(), "parity".to_owned()]
     }
@@ -195,6 +242,7 @@ pub fn output_schema(layout: DescriptorLayout) -> Result<Arc<arrow_schema::Schem
     Ok(Arc::new(Schema::new(fields)))
 }
 
+/// Check that the schema has the V3 column names in row order, all non-null Int8.
 pub fn validate_output_schema(
     actual: &arrow_schema::Schema,
     layout: DescriptorLayout,
@@ -258,6 +306,10 @@ pub(crate) fn seal_descriptor_header(header: &Path, descriptor: &Path) -> Result
     Ok(())
 }
 
+/// Compute the lowercase hexadecimal SHA-256 of the TOML sidecar body.
+///
+/// The first line must carry a valid `descriptor_sha256` marker and is excluded
+/// from the hash. The result is the Parquet footer's `source_header_sha256` value.
 pub fn hash_header_file(header_path: &Path) -> Result<String> {
     let bytes = std::fs::read(header_path)?;
     Ok(format!("{:x}", Sha256::digest(header_binding(&bytes)?.1)))
@@ -296,6 +348,7 @@ fn json_string_array(values: &[String]) -> String {
 /// optional `source_header_sha256`/`source_header_filename` bind a descriptor
 /// file to the `{stem}_header.toml` it was generated from; omit them when no
 /// such header exists yet (e.g. unit tests constructing a schema in isolation).
+#[must_use]
 pub fn output_kv_metadata(
     layout: DescriptorLayout,
     peel_subshells: &[String],

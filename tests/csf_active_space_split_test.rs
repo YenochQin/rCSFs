@@ -27,11 +27,11 @@ fn overlapping_spaces_preserve_order_and_blocks() {
     assert_eq!(stats[0].block_lengths, [1, 1]);
     assert_eq!(stats[1].block_lengths, [2, 1]);
     let mut small_rows = DescriptorRows::open(&small.0, &small.1).unwrap();
-    assert_eq!(small_rows.header.peel, ["2s", "5s"]);
+    assert_eq!(small_rows.header().peel, ["2s", "5s"]);
     assert_eq!(small_rows.next_row().unwrap().unwrap().2[4], 2);
     assert_eq!(small_rows.next_row().unwrap().unwrap().2[0], 2);
     let mut large_rows = DescriptorRows::open(&large.0, &large.1).unwrap();
-    assert_eq!(large_rows.header.peel, ["2s", "5s", "15s"]);
+    assert_eq!(large_rows.header().peel, ["2s", "5s", "15s"]);
     assert_eq!(large_rows.next_row().unwrap().unwrap().2[4], 2);
     assert_eq!(large_rows.next_row().unwrap().unwrap().2[8], 2);
     assert_eq!(large_rows.next_row().unwrap().unwrap().2[0], 2);

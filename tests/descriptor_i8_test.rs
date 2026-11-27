@@ -14,7 +14,7 @@ fn angular_narrowing_checks_the_grasp_bound_before_casting() {
 
 #[test]
 fn text_parser_rejects_large_values_without_wrapping() {
-    let generator = CSFDescriptorGenerator::new(vec!["5s".to_owned()]);
+    let generator = CSFDescriptorGenerator::try_new(vec!["5s".to_owned()]).unwrap();
     // Exercise numeric range checking, not the physical coupling of this row.
     for last_line in ["        64+", "      9999+"] {
         let error = generator
@@ -91,7 +91,7 @@ fn edited_generated_coupling_agrees_with_reimported_text() {
         max_two_j: 1,
     })
     .unwrap();
-    let parser = CSFDescriptorGenerator::new(file.subshells.clone());
+    let parser = CSFDescriptorGenerator::try_new(file.subshells.clone()).unwrap();
     let mut row = vec![0; parser.layout().row_len()];
     let coupling = &mut file.intermediate_couplings[0];
     assert_eq!((coupling.boundary, coupling.two_j), (2, 0));
@@ -128,7 +128,7 @@ fn maximum_code_and_wide_intermediate_round_trip() {
     })
     .unwrap();
     assert_eq!(file.records.len(), 1);
-    let generator = CSFDescriptorGenerator::new(file.subshells.clone());
+    let generator = CSFDescriptorGenerator::try_new(file.subshells.clone()).unwrap();
     let mut row = vec![0; generator.layout().row_len()];
     encode_v3(&file, &file.records[0], &mut row).unwrap();
     assert_eq!(&row[row.len() - 2..], &[127, 1]);

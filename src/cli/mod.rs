@@ -10,11 +10,9 @@ mod templates;
 
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use std::{
-    path::{Path, PathBuf},
-    process::ExitCode,
-    time::Instant,
-};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::time::Instant;
 
 fn print_result(command: &str, result: &Value, json_output: bool, elapsed: f64) -> Result<()> {
     if json_output {

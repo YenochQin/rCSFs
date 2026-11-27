@@ -2,14 +2,12 @@
 use super::{config, files};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use std::{
-    fmt,
-    fs::{self, File, OpenOptions},
-    io::Write,
-    path::{Path, PathBuf},
-    sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::fmt;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 struct State {
     file: File,
@@ -95,7 +93,7 @@ impl RunLog {
             .append(true)
             .open(&log_path)
             .with_context(|| format!("cannot write run log {}", log_path.display()))?;
-        *ACTIVE.lock().unwrap() = Some(State {
+        *ACTIVE.lock().expect("run log mutex poisoned") = Some(State {
             file,
             error: None,
             command: String::new(),
@@ -114,7 +112,7 @@ impl RunLog {
 
     pub fn step(&self, index: usize, job: &config::Job) -> Result<()> {
         {
-            let mut active = ACTIVE.lock().unwrap();
+            let mut active = ACTIVE.lock().expect("run log mutex poisoned");
             let state = active.as_mut().context("run log is not open")?;
             state.command.clone_from(&job.command);
             state.step = index;
@@ -124,7 +122,7 @@ impl RunLog {
     }
 
     pub fn event(&self, record: Value) -> Result<()> {
-        let mut active = ACTIVE.lock().unwrap();
+        let mut active = ACTIVE.lock().expect("run log mutex poisoned");
         let state = active.as_mut().context("run log is not open")?;
         ensure!(
             state.error.is_none(),
@@ -138,13 +136,13 @@ impl RunLog {
 
 impl Drop for RunLog {
     fn drop(&mut self) {
-        *ACTIVE.lock().unwrap() = None;
+        *ACTIVE.lock().expect("run log mutex poisoned") = None;
     }
 }
 
 fn diagnostic(kind: crate::reporting::Kind, message: fmt::Arguments<'_>) {
     use crate::reporting::Kind;
-    let mut active = ACTIVE.lock().unwrap();
+    let mut active = ACTIVE.lock().expect("run log mutex poisoned");
     if let Some(state) = active.as_mut() {
         if kind == Kind::Warning {
             eprintln!("{message}");

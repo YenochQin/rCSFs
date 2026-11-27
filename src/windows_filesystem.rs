@@ -3,7 +3,9 @@
 use std::ffi::c_void;
 use std::fs::OpenOptions;
 use std::io;
-use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 
 // FILE_ID_INFO from winbase.h. FileIdInfo is FILE_INFO_BY_HANDLE_CLASS 18.

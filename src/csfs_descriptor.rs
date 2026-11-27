@@ -1,69 +1,21 @@
 //! Explicit CSF text import primitives and the V3 record encoder.
 use crate::complete_csf::{IntermediateCoupling, OccupiedSubshell, Parity, SubshellState};
+use crate::configuration_generation::Subshell;
 use crate::descriptor_schema::{DescriptorLayout, DescriptorVersion};
 use crate::descriptor_v3::write_text_row;
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::HashMap;
 
-pub(crate) mod parquet_batch {
-    use anyhow::Result;
-    pub(crate) fn parse_compression(
-        compression: Option<&str>,
-    ) -> Result<parquet::basic::Compression> {
-        use parquet::basic::Compression;
-
-        let Some(spec) = compression else {
-            return Ok(Compression::ZSTD(
-                parquet::basic::ZstdLevel::try_new(3).expect("zstd level 3 is always valid"),
-            ));
-        };
-
-        let lower = spec.trim().to_ascii_lowercase();
-        match lower.as_str() {
-            "none" | "uncompressed" => Ok(Compression::UNCOMPRESSED),
-            "snappy" => Ok(Compression::SNAPPY),
-            "zstd" => Ok(Compression::ZSTD(
-                parquet::basic::ZstdLevel::try_new(3).expect("zstd level 3 is always valid"),
-            )),
-            other if other.starts_with("zstd-") => {
-                let level_str = &other["zstd-".len()..];
-                let level: i32 = level_str.parse().map_err(|_| {
-                    anyhow::anyhow!(
-                        "invalid zstd level '{}': expected integer 1..=22",
-                        level_str
-                    )
-                })?;
-                let zstd_level = parquet::basic::ZstdLevel::try_new(level).map_err(|_| {
-                    anyhow::anyhow!("zstd level {} out of range (expected 1..=22)", level)
-                })?;
-                Ok(Compression::ZSTD(zstd_level))
-            }
-            other => Err(anyhow::anyhow!(
-                "unknown compression '{}': expected one of none/uncompressed/snappy/zstd/zstd-N",
-                other
-            )),
-        }
-    }
-}
-
-/// Convert a J-value string to its doubled integer representation (2J)
+/// Parse a GRASP integer or half-integer angular momentum as twice its value.
+/// A trailing parity sign is optional. Invalid values return an [`anyhow::Error`].
 ///
-/// # Arguments
-/// * `j_str` - J value as string, e.g., "3/2", "2", "5/2"
+/// ```
+/// use _rcsfs::csfs_descriptor::j_to_double_j;
 ///
-/// # Returns
-/// * `Ok(i32)` - The doubled J value (2J)
-/// * `Err(String)` - Error message if parsing fails
-///
-/// # Examples
-/// ```text
-/// // Fractional J values:
-/// j_to_double_j("3/2") => Ok(3)
-/// j_to_double_j("5/2") => Ok(5)
-///
-/// // Integer J values:
-/// j_to_double_j("2")  => Ok(4)
-/// j_to_double_j("4")  => Ok(8)
+/// assert_eq!(j_to_double_j("3/2-")?, 3);
+/// assert_eq!(j_to_double_j("2")?, 4);
+/// assert!(j_to_double_j("1/3").is_err());
+/// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn j_to_double_j(j_str: &str) -> Result<i32> {
     let trimmed = j_str.trim();
@@ -127,45 +79,48 @@ pub struct CSFDescriptorGenerator {
 }
 
 impl CSFDescriptorGenerator {
-    /// Create a V3 CSF descriptor generator
-    ///
-    /// # Arguments
-    /// * `peel_subshells` - List of subshell names (e.g., ["5s", "4d-", "4d"])
-    ///
-    /// # Returns
-    /// A new generator instance
-    pub fn new(peel_subshells: Vec<String>) -> Self {
-        Self::new_with_version(peel_subshells, DescriptorVersion::V3)
+    /// Create a V3 encoder with one slot per distinct physical peel subshell.
+    pub fn try_new(peel_subshells: Vec<String>) -> Result<Self> {
+        Self::try_new_with_version(peel_subshells, DescriptorVersion::V3)
     }
 
-    /// Create a new CSF descriptor generator for a specific descriptor version.
-    pub fn new_with_version(peel_subshells: Vec<String>, version: DescriptorVersion) -> Self {
+    /// Validate the complete peel table, including subshells unoccupied in every input record.
+    pub fn try_new_with_version(
+        peel_subshells: Vec<String>,
+        version: DescriptorVersion,
+    ) -> Result<Self> {
         let orbital_count = peel_subshells.len();
-        let orbital_index_map: HashMap<_, _> = peel_subshells
-            .iter()
-            .enumerate()
-            .map(|(i, name)| (name.clone(), i))
-            .collect();
+        let mut orbital_index_map = HashMap::with_capacity(orbital_count);
+        for (index, label) in peel_subshells.iter().enumerate() {
+            label.parse::<Subshell>()?;
+            ensure!(
+                orbital_index_map.insert(label.clone(), index).is_none(),
+                "duplicate peel subshell {label:?}"
+            );
+        }
 
-        Self {
+        Ok(Self {
             peel_subshells,
             orbital_index_map,
             orbital_count,
             layout: DescriptorLayout::new(version, orbital_count),
-        }
+        })
     }
 
     /// Get the number of orbitals
+    #[must_use]
     pub fn orbital_count(&self) -> usize {
         self.orbital_count
     }
 
     /// Get the peel subshells list
+    #[must_use]
     pub fn peel_subshells(&self) -> &[String] {
         &self.peel_subshells
     }
 
     /// Get this generator's descriptor row layout.
+    #[must_use]
     pub fn layout(&self) -> DescriptorLayout {
         self.layout
     }
@@ -365,7 +320,7 @@ mod tests {
     #[test]
     fn test_descriptor_generator_creation() {
         let subshells = vec!["5s".to_string(), "4d-".to_string(), "4d".to_string()];
-        let generator = CSFDescriptorGenerator::new(subshells.clone());
+        let generator = CSFDescriptorGenerator::try_new(subshells.clone()).unwrap();
 
         assert_eq!(generator.orbital_count(), 3);
         assert_eq!(generator.peel_subshells(), &subshells);
@@ -373,7 +328,7 @@ mod tests {
 
     #[test]
     fn parse_csf_into_rejects_wrong_buffer_size() {
-        let generator = CSFDescriptorGenerator::new(vec!["5s".to_string()]);
+        let generator = CSFDescriptorGenerator::try_new(vec!["5s".to_string()]).unwrap();
         let mut too_short = vec![0i8; 2];
 
         let result = generator.parse_csf_into("  5s ( 2)", "", "      0  ", &mut too_short);
@@ -393,7 +348,7 @@ mod tests {
     ////////////////////////////////////////////////////////////////////////////
 
     fn v3_generator(subshells: Vec<String>) -> CSFDescriptorGenerator {
-        CSFDescriptorGenerator::new_with_version(subshells, DescriptorVersion::V3)
+        CSFDescriptorGenerator::try_new_with_version(subshells, DescriptorVersion::V3).unwrap()
     }
 
     /// Generate one physically legal CSF record and return its three

@@ -14,6 +14,12 @@ use crate::descriptor_schema::{
 };
 use crate::seniority::{PhysicalState, physical_seniority, physical_states, printed_seniority};
 
+/// Encode one record from `file` into a V3 Int8 row.
+///
+/// `row` must have [`DescriptorLayout::row_len`] channels for the file's peel
+/// table. The encoder reconstructs omitted states and couplings, and returns
+/// an error if the record fails validation or the text cannot identify a
+/// unique physical coupling chain. The row buffer can be modified on error.
 pub fn encode_v3(file: &CompleteCsfFile, record: &CsfRecord, row: &mut [i8]) -> Result<()> {
     let occupied = file.occupied(record)?;
     let layout = DescriptorLayout::new(DescriptorVersion::V3, file.subshells.len());
@@ -86,11 +92,9 @@ fn write_resolved_row(
     let mut cumulative_code = 1;
     for (index, slot) in features.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         *slot = empty_slot(cumulative_code);
-        if entries
-            .peek()
-            .is_some_and(|(shell, _)| usize::from(shell.subshell_index) == index)
+        if let Some((shell, state)) =
+            entries.next_if(|(shell, _)| usize::from(shell.subshell_index) == index)
         {
-            let (shell, state) = entries.next().expect("entry was present");
             let (state, k) = state?;
             ensure!(
                 valid_coupling(previous, state.two_j, k),
@@ -169,18 +173,10 @@ pub(crate) fn write_text_row(
             .with_context(|| format!("invalid state table for subshell {label}"))?;
         let fixed_k = if position + 1 == occupied.len() {
             Some(symmetry.0)
-        } else if printed_couplings
-            .peek()
-            .is_some_and(|next| usize::from(next.boundary) == position + 1)
-        {
-            Some(
-                printed_couplings
-                    .next()
-                    .expect("printed coupling was present")
-                    .two_j,
-            )
         } else {
-            None
+            printed_couplings
+                .next_if(|next| usize::from(next.boundary) == position + 1)
+                .map(|coupling| coupling.two_j)
         };
         if let Some(k) = fixed_k {
             encode_angular(k, "cumulative 2K").with_context(|| format!("subshell {label}"))?;

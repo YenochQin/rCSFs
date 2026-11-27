@@ -638,7 +638,7 @@ fn prepare_multiple_lists(
     peel.sort_by_key(|shell| (shell.n(), shell.l(), shell.kappa() < 0));
     Ok(PreparedLists {
         peel,
-        core: core.unwrap(),
+        core: core.expect("at least one generation list supplied the core table"),
         plan: merge_plans(plans)?,
         enumeration_millis,
         planning_millis,
@@ -1131,8 +1131,7 @@ pub(crate) fn merge_v3_descriptor_segments(
     )?;
     let properties = WriterProperties::builder()
         .set_compression(
-            crate::csfs_descriptor::parquet_batch::parse_compression(None)
-                .expect("default compression is valid"),
+            crate::parquet_compression::parse(None).expect("default compression is valid"),
         )
         .set_dictionary_enabled(true)
         .set_max_row_group_row_count(Some(crate::csf_output::ROW_GROUP_ROWS))

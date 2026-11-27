@@ -1,5 +1,6 @@
 //! Route library diagnostics without tying algorithms to the CLI or its log format.
-use std::{fmt, sync::OnceLock};
+use std::fmt;
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Kind {

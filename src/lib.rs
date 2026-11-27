@@ -1,4 +1,5 @@
-// Public modules for integration testing
+//! Generate GRASP configuration state functions and transform V3 descriptor datasets.
+
 pub mod atomic_output;
 pub mod complete_csf;
 pub mod configuration_generation;
@@ -14,6 +15,8 @@ pub mod descriptor_v3;
 pub mod interaction;
 #[cfg(feature = "python")]
 mod interaction_py;
+mod orbital_label;
+mod parquet_compression;
 pub mod parquet_info;
 mod reporting;
 pub mod seniority;

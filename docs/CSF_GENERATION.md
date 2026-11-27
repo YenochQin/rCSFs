@@ -88,7 +88,8 @@ the returned codec representation retains the printed sparse couplings.
 
 ## Limits and failure behavior
 
-- Orbitals must satisfy `1 <= n <= 15`, `0 <= l < n`, and `l <= 10`.
+- Orbitals must satisfy `1 <= n <= 30`, `0 <= l < n`, and `l <= 10`.
+  Python callers can read the generator limit from `rcsfs.MAX_PRINCIPAL_QUANTUM_NUMBER`.
 - At most 20 peel subshells may have nonzero occupations, matching `GEN`.
 - Every occupation must be within the relativistic subshell capacity. Core
   duplicates, peel duplicates and core/peel overlaps are errors.
@@ -177,13 +178,13 @@ plus closed `4d/5s/5p`, and user core 6 to low-level core 5 plus closed
 Directly constructed requests use the low-level core selector. Closed shells
 must be full; changes in the closed set across references are unsupported.
 
-The active-limit patches follow `rcsfexcitation`, including its nonphysical
-`3f` sentinel for core 6; the sentinel never becomes a subshell. One upstream
-edge case is deliberately preserved: core 6 with active `7s` becomes `3f,7s`,
-and the wrapper's last-l rule omits closed `4f`, reducing the core by 14 electrons.
-Core 6 with `7s,6d` or `7s,6g` retains it. This compatibility behavior is tested;
-it is not a correction to the original physics input. Other active lists must
-end with their highest l symmetry.
+Reference and active orbital labels use the lowercase letters `spdfghiklmn`
+in increasing angular momentum order. Each label must satisfy `1 <= n <= 30`
+and `l < n`. An explicit `3f` therefore gives an input error for every core.
+Core 6 preserves the GRASP wrapper's closed-shell convention: active `7s`
+omits closed `4f`, reducing the core by 14 electrons, while `7s,6d` and
+`7s,6g` retain it. When the orbital walk must extend beyond a final d limit
+to include closed `4f`, the actual closed shell supplies the f limit.
 
 Negative excitation counts become positive limits and insert zero-population
 `d` entries only for missing active reference shells. Explicit zero-population

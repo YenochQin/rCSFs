@@ -37,6 +37,28 @@ fn blank_state_is_distinct_from_explicit_zero_state() {
 }
 
 #[test]
+fn header_rejects_invalid_core_and_unoccupied_peel_labels() {
+    for label in ["2δ", "2q", "2d", "1s-"] {
+        for line in [2, 4] {
+            let changed = with_line(
+                line,
+                &format!("{}  {label}", CSF.lines().nth(line - 1).unwrap()),
+            );
+            assert!(
+                CompleteCsfFile::parse_reader(Cursor::new(changed)).is_err(),
+                "line {line}: {label}"
+            );
+        }
+    }
+    // The lossless text format also accepts physical orbitals above the generation limit.
+    let changed = with_line(4, &format!("{}  31s", CSF.lines().nth(3).unwrap()));
+    let file = CompleteCsfFile::parse_reader(Cursor::new(&changed)).unwrap();
+    let mut output = Vec::new();
+    file.write_to(&mut output).unwrap();
+    assert_eq!(output, changed.as_bytes());
+}
+
+#[test]
 fn rejects_subshell_missing_from_header() {
     let input = CSF.replacen("4f-( 3)", "5g-( 3)", 1);
     let error = CompleteCsfFile::parse_reader(Cursor::new(input)).unwrap_err();

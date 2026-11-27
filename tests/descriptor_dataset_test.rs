@@ -1,4 +1,6 @@
-use _rcsfs::descriptor_dataset::{DescriptorRows, header_path, import_text, restore_text, select};
+use _rcsfs::descriptor_dataset::{
+    DescriptorRows, header_path, import_text, restore_text, restore_text_with_stats, select,
+};
 use _rcsfs::descriptor_operations::{
     filter_active_space, match_indices, merge, split_blocks, zero_first,
 };
@@ -23,10 +25,18 @@ fn import_select_restore_preserves_explicit_equal_symmetry_blocks() {
         source.next_row().unwrap().unwrap(),
         (0, 0, vec![2, 0, 1, 1, 0, 0, 1, 1, 1, 1])
     );
-    assert_eq!(source.next_row().unwrap().unwrap().1, 1);
+    let row = source.next_descriptor_row().unwrap().unwrap();
+    assert_eq!(row.ordinal, 1);
+    assert_eq!(row.block_index, 1);
+    assert_eq!(row.values, [0, 0, 1, 1, 2, 0, 1, 1, 1, 1]);
     assert!(source.next_row().unwrap().is_none());
     let restored = tmp.path().join("restored.c");
-    restore_text(&path, &header, &restored, None).unwrap();
+    let restored_stats = restore_text_with_stats(&path, &header, &restored, None).unwrap();
+    assert_eq!(restored_stats.record_count, 2);
+    assert_eq!(
+        restored_stats.output_bytes,
+        fs::metadata(&restored).unwrap().len()
+    );
     assert!(fs::read_to_string(&restored).unwrap().contains("\n *\n"));
     let selected = tmp.path().join("selected_descriptors.parquet");
     let selected_header = header_path(&selected).unwrap();
@@ -148,7 +158,7 @@ fn numerical_merge_partition_matching_and_active_space() {
     assert_eq!(
         DescriptorRows::open(&active, &active_header)
             .unwrap()
-            .header
+            .header()
             .peel,
         ["1s", "2s"]
     );

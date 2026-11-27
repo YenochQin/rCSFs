@@ -4,6 +4,19 @@
 
 ---
 
+## 未发布
+
+- CSF 生成与 V3 描述符处理支持主量子数 `1 ≤ n ≤ 30`，Python 接口通过
+  `rcsfs.MAX_PRINCIPAL_QUANTUM_NUMBER` 提供上限。
+- Rust 的 `DescriptorRows` 通过 `header()` 借用已验证的头信息。需要取得所有权时，
+  使用 `into_header()` 消耗读取器。直接访问 `reader.header` 的调用方需迁移。
+- Rust 的 `InteractionMethod` 支持今后增加算法，其他 crate 中的 `match` 需处理通配分支。
+- 参考组态和活性空间统一检查小写光谱轨道符号及量子数，用户输入的 `3f` 对所有核选择均报错。
+  完整 CSF 输入也校验 core 和 peel 中的轨道，包括从未占据的壳层。
+- Rust 调用方使用 `Orbital::try_new(n, l)` 构造轨道，通过 `n()`、`l()` 读取量子数。
+  `CSFDescriptorGenerator::try_new` 和 `try_new_with_version` 在构造时校验 peel 表并返回 `Result`，
+  分别替代原来的 `new` 和 `new_with_version`。
+
 ## [4.1.0] — 2026-11-22
 
 - 所有 descriptor/header 输出保存最终 Parquet 的 SHA-256 及各显式块的物理 2J、宇称、零基起始行和长度。

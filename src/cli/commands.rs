@@ -1,6 +1,8 @@
 //! File commands call the same conversion, descriptor and selection algorithms as Python.
-use super::{arguments::Settings, files};
-use crate::{descriptor_dataset::descriptor_stem, parquet_info};
+use super::arguments::Settings;
+use super::files;
+use crate::descriptor_dataset::descriptor_stem;
+use crate::parquet_info;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -120,16 +122,26 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
                 &[input.clone(), header.clone()],
                 s.config.as_deref(),
             )?;
-            let indices = s.values.get("indices").map(|v| {
-                v.as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|v| v.as_integer().unwrap() as u64)
-                    .collect::<Vec<_>>()
-            });
+            let indices = s
+                .values
+                .get("indices")
+                .map(|value| {
+                    value
+                        .as_array()
+                        .context("indices must be an array")?
+                        .iter()
+                        .map(|index| {
+                            index
+                                .as_integer()
+                                .and_then(|value| u64::try_from(value).ok())
+                                .context("indices must be nonnegative integers")
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .transpose()?;
             let stage = files::stage()?;
             let staged = stage.path().join("restored.c");
-            let (count, bytes) = crate::descriptor_dataset::restore_text(
+            let stats = crate::descriptor_dataset::restore_text_with_stats(
                 &input,
                 &header,
                 &staged,
@@ -137,7 +149,7 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
             )?;
             files::publish(&[staged], std::slice::from_ref(&output), true)?;
             Ok(
-                json!({"success": true, "output_file": output, "record_count": count, "output_bytes": bytes}),
+                json!({"success": true, "output_file": output, "record_count": stats.record_count, "output_bytes": stats.output_bytes}),
             )
         }
         "zero-first" => {
@@ -253,10 +265,8 @@ pub(super) fn run(command: &str, s: &Settings) -> Result<Value> {
             Ok(json!({"success": true, "block_count": results.len(), "outputs": results}))
         }
         "interacting" => {
-            use crate::{
-                complete_csf::Parity,
-                interaction::{self, HamiltonianMode, InteractionMethod},
-            };
+            use crate::complete_csf::Parity;
+            use crate::interaction::{self, HamiltonianMode, InteractionMethod};
             let reference = s.path("reference")?;
             let candidates = s.path("candidates")?;
             let output = s.output("output", Some(Path::new("interacting_desc.parquet")))?;

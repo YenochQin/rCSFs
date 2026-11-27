@@ -6,25 +6,33 @@ use std::path::{Path, PathBuf};
 
 use crate::configuration_generation::Subshell;
 use crate::descriptor_dataset::{
-    DatasetHeader, DatasetStats, DatasetWriter, DescriptorRows, header_path, output_identity,
+    DatasetHeader, DatasetStats, DatasetWriter, DescriptorRow, DescriptorRows, header_path,
+    output_identity,
 };
 use crate::descriptor_schema::{empty_slot, row_symmetry};
 
+/// One requested active-space filter and its destination.
 #[derive(Debug, Clone)]
 pub struct ActiveSpaceTarget {
+    /// Maximum nonrelativistic orbital for each included `l`, such as `5s,5p,4d`.
     pub maximum_orbitals: String,
+    /// Path of the output descriptor Parquet file.
     pub output: PathBuf,
 }
 
 /// Merge orbital sequences without changing any input's relative coupling order.
-pub(crate) fn common_header(headers: &[DatasetHeader]) -> Result<DatasetHeader> {
-    let mut header = headers.first().context("no input datasets")?.clone();
-    for other in &headers[1..] {
+pub(crate) fn common_header<'header>(
+    mut headers: impl Iterator<Item = &'header DatasetHeader> + Clone,
+) -> Result<DatasetHeader> {
+    let mut sources = headers.clone();
+    let first = sources.next().context("no input datasets")?;
+    let mut header = first.clone();
+    for other in sources {
         header.add_truncations_from(other)?;
     }
     let mut labels = Vec::<String>::new();
     let mut edges = HashSet::<(String, String)>::new();
-    for source in headers {
+    for source in headers.clone() {
         ensure!(
             source.core == header.core,
             "closed-core orbital tables differ"
@@ -48,7 +56,7 @@ pub(crate) fn common_header(headers: &[DatasetHeader]) -> Result<DatasetHeader> 
         edges.retain(|(before, _)| before != &label);
         ordered.push(label);
     }
-    if let Some(source) = headers.iter().find(|source| source.peel == ordered) {
+    if let Some(source) = headers.find(|source| source.peel == ordered) {
         header.lines[3].clone_from(&source.lines[3]);
     } else {
         header.lines[3] = ordered.join("  ");
@@ -84,8 +92,7 @@ pub(crate) fn remap(row: &[i8], indices: &[usize], width: usize) -> Vec<i8> {
         .peekable();
     let mut cumulative = 1;
     for index in 0..(width - 2) / 4 {
-        if source.peek().is_some_and(|(_, target)| **target == index) {
-            let (slot, _) = source.next().expect("source slot is present");
+        if let Some((slot, _)) = source.next_if(|(_, target)| **target == index) {
             mapped.extend_from_slice(slot);
             cumulative = slot[3];
         } else {
@@ -97,6 +104,7 @@ pub(crate) fn remap(row: &[i8], indices: &[usize], width: usize) -> Vec<i8> {
     mapped
 }
 
+/// Append descriptor datasets in input order, preserving explicit block boundaries.
 pub fn merge(
     inputs: &[(PathBuf, PathBuf)],
     output: &Path,
@@ -105,15 +113,15 @@ pub fn merge(
     ensure!(!inputs.is_empty(), "no input datasets");
     let headers = inputs
         .iter()
-        .map(|(data, header)| Ok(DescriptorRows::open(data, header)?.header))
+        .map(|(data, header)| Ok(DescriptorRows::open(data, header)?.into_header()))
         .collect::<Result<Vec<_>>>()?;
-    let common = common_header(&headers)?;
+    let common = common_header(headers.iter())?;
     let width = common.layout().row_len();
     let input_paths = inputs
         .iter()
         .flat_map(|(a, b)| [a.as_path(), b.as_path()])
         .collect::<Vec<_>>();
-    let mut writer = DatasetWriter::new(common.clone(), output, output_header, &input_paths)?;
+    let mut writer = DatasetWriter::try_new(common, output, output_header, &input_paths)?;
     let counts = headers
         .iter()
         .map(DatasetHeader::zero_order_counts)
@@ -121,10 +129,13 @@ pub fn merge(
         .map(|blocks| blocks.into_iter().flatten().collect::<Vec<_>>());
     let mut block_offset = 0;
     for ((input, header_path), header) in inputs.iter().zip(&headers) {
-        let indices = mapping(&header.peel, &common.peel)?;
+        let indices = mapping(&header.peel, writer.peel_subshells())?;
         let mut rows = DescriptorRows::open(input, header_path)?;
-        while let Some((_, block, row)) = rows.next_row()? {
-            writer.push(&remap(&row, &indices, width), block_offset + block)?;
+        while let Some(row) = rows.next_descriptor_row()? {
+            writer.push(
+                &remap(&row.values, &indices, width),
+                block_offset + row.block_index,
+            )?;
         }
         block_offset += header.block_lengths.len();
     }
@@ -133,22 +144,34 @@ pub fn merge(
         .publish()
 }
 
+/// Zero-order and first-order counts for one explicit symmetry block.
 #[derive(Debug, Serialize)]
 pub struct PartitionBlock {
+    /// Zero-based block index shared by both inputs and the output.
     pub block_index: usize,
+    /// Physical total `2J`, without the V3 storage offset of one.
     pub total_two_j: i8,
+    /// Signed parity code, `1` for even and `-1` for odd.
     pub parity: i8,
+    /// Number of reference rows written at the start of the output block.
     pub zero_count: usize,
+    /// Number of full-basis rows appended after omitting exact reference matches.
     pub first_order_count: usize,
 }
 
+/// Input counts and output statistics for a [`zero_first`] run.
 #[derive(Debug, Serialize)]
 pub struct PartitionStats {
+    /// Statistics for the published zero-first dataset.
     #[serde(flatten)]
     pub dataset: DatasetStats,
+    /// Total CSF rows in the reference input.
     pub zero_csf_count: usize,
+    /// Total CSF rows in the full-basis input before excluding reference matches.
     pub full_csf_count: usize,
+    /// Total full-basis rows appended after excluding reference matches in each block.
     pub first_order_count: usize,
+    /// Counts for each explicit symmetry block in output order.
     pub blocks: Vec<PartitionBlock>,
 }
 
@@ -165,27 +188,27 @@ pub fn zero_first(
     let mut zero = DescriptorRows::open(reference, reference_header)?;
     let mut all = DescriptorRows::open(full, full_header)?;
     ensure!(
-        zero.header.block_lengths.len() == all.header.block_lengths.len(),
+        zero.header().block_lengths.len() == all.header().block_lengths.len(),
         "reference/full block counts differ"
     );
     ensure!(
-        zero.header.electron_count == all.header.electron_count,
+        zero.header().electron_count == all.header().electron_count,
         "reference/full electron counts differ"
     );
-    let common = common_header(&[zero.header.clone(), all.header.clone()])?;
-    let zero_map = mapping(&zero.header.peel, &common.peel)?;
-    let full_map = mapping(&all.header.peel, &common.peel)?;
+    let common = common_header([zero.header(), all.header()].into_iter())?;
+    let zero_map = mapping(&zero.header().peel, &common.peel)?;
+    let full_map = mapping(&all.header().peel, &common.peel)?;
     let width = common.layout().row_len();
-    let mut writer = DatasetWriter::new(
+    let mut writer = DatasetWriter::try_new(
         common,
         output,
         output_header,
         &[reference, reference_header, full, full_header],
     )?;
-    let mut blocks = Vec::with_capacity(zero.header.block_lengths.len());
-    for block in 0..zero.header.block_lengths.len() {
-        let zero_count = zero.header.block_lengths[block];
-        let full_count = all.header.block_lengths[block];
+    let mut blocks = Vec::with_capacity(zero.header().block_lengths.len());
+    for block in 0..zero.header().block_lengths.len() {
+        let zero_count = zero.header().block_lengths[block];
+        let full_count = all.header().block_lengths[block];
         let mut reference_rows = HashSet::new();
         for row in zero.read_rows(zero_count) {
             let row = remap(&row?, &zero_map, width);
@@ -215,11 +238,11 @@ pub fn zero_first(
         });
     }
     ensure!(
-        zero.next_row()?.is_none() && all.next_row()?.is_none(),
+        zero.next_descriptor_row()?.is_none() && all.next_descriptor_row()?.is_none(),
         "unconsumed CSF blocks"
     );
-    let zero_csf_count = zero.header.row_count();
-    let full_csf_count = all.header.row_count();
+    let zero_csf_count = zero.header().row_count();
+    let full_csf_count = all.header().row_count();
     let first_order_count = blocks.iter().map(|b| b.first_order_count).sum();
     let counts = blocks
         .iter()
@@ -236,6 +259,8 @@ pub fn zero_first(
 
 /// Resolve a selected basis against a full basis without decoding CSF strings.
 /// Exact occupation, state, cumulative coupling and symmetry identify each CSF.
+/// Each result is the corresponding full-basis ordinal, or `None` for an
+/// unmatched row when `require_all` is false.
 pub fn match_indices(
     full: &Path,
     full_header: &Path,
@@ -245,28 +270,28 @@ pub fn match_indices(
 ) -> Result<Vec<Option<u64>>> {
     let mut pool = DescriptorRows::open(full, full_header)?;
     let mut seed = DescriptorRows::open(selected, selected_header)?;
-    let common = common_header(&[pool.header.clone(), seed.header.clone()])?;
-    let full_map = mapping(&pool.header.peel, &common.peel)?;
-    let seed_map = mapping(&seed.header.peel, &common.peel)?;
+    let common = common_header([pool.header(), seed.header()].into_iter())?;
+    let full_map = mapping(&pool.header().peel, &common.peel)?;
+    let seed_map = mapping(&seed.header().peel, &common.peel)?;
     let width = common.layout().row_len();
     let mut requested = HashMap::<Vec<i8>, usize>::new();
     let mut matched = Vec::new();
-    while let Some((ordinal, _, row)) = seed.next_row()? {
+    while let Some(row) = seed.next_descriptor_row()? {
         ensure!(
             requested
-                .insert(remap(&row, &seed_map, width), ordinal)
+                .insert(remap(&row.values, &seed_map, width), row.ordinal)
                 .is_none(),
             "duplicate selected CSF makes alignment ambiguous"
         );
         matched.push(None);
     }
-    while let Some((ordinal, _, row)) = pool.next_row()? {
-        if let Some(index) = requested.get(&remap(&row, &full_map, width)) {
+    while let Some(row) = pool.next_descriptor_row()? {
+        if let Some(index) = requested.get(&remap(&row.values, &full_map, width)) {
             ensure!(
                 matched[*index].is_none(),
                 "duplicate full-pool CSF makes alignment ambiguous"
             );
-            matched[*index] = Some(u64::try_from(ordinal)?);
+            matched[*index] = Some(u64::try_from(row.ordinal)?);
         }
     }
     if require_all {
@@ -278,6 +303,11 @@ pub fn match_indices(
     Ok(matched)
 }
 
+/// Keep rows whose occupied peel subshells all fit the supplied active space.
+///
+/// Limits are comma- or space-separated nonrelativistic labels, with at most
+/// one maximum `n` per `l`. A limit applies to both relativistic partners.
+/// The closed core and the relative order of surviving rows are preserved.
 pub fn filter_active_space(
     input: &Path,
     input_header: &Path,
@@ -301,7 +331,7 @@ pub fn split_active_spaces(
 ) -> Result<Vec<DatasetStats>> {
     ensure!(!targets.is_empty(), "no active-space targets");
     let mut source = DescriptorRows::open(input, input_header)?;
-    let prefix_ends = source.header.zero_order_ends()?;
+    let prefix_ends = source.header().zero_order_ends()?;
     let mut outputs = HashSet::new();
     let mut prepared = Vec::new();
     for (output, output_header, active_space) in targets {
@@ -325,7 +355,7 @@ pub fn split_active_spaces(
         }
         ensure!(!maxima.is_empty(), "active space is empty");
         let retained = source
-            .header
+            .header()
             .peel
             .iter()
             .map(|label| {
@@ -333,7 +363,7 @@ pub fn split_active_spaces(
                 Ok(maxima.get(&shell.l()).is_some_and(|n| shell.n() <= *n))
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut header = source.header.clone();
+        let mut header = source.header().clone();
         header.peel = header
             .peel
             .into_iter()
@@ -341,11 +371,16 @@ pub fn split_active_spaces(
             .filter_map(|(s, keep)| keep.then_some(s))
             .collect();
         header.lines[3] = header.peel.join("  ");
-        let writer = DatasetWriter::new(header, output, output_header, &[input, input_header])?
+        let writer = DatasetWriter::try_new(header, output, output_header, &[input, input_header])?
             .with_batch_rows(8192 / targets.len());
         prepared.push((retained, writer, BTreeMap::<usize, usize>::new()));
     }
-    while let Some((ordinal, block, row)) = source.next_row()? {
+    while let Some(DescriptorRow {
+        ordinal,
+        block_index: block,
+        values: row,
+    }) = source.next_descriptor_row()?
+    {
         for (retained, writer, counts) in &mut prepared {
             if retained
                 .iter()
@@ -391,7 +426,7 @@ pub fn split_blocks(
         "invalid output prefix"
     );
     let mut source = DescriptorRows::open(input, input_header)?;
-    let header = source.header.clone();
+    let header = source.header().clone();
     let zero_order_counts = header.zero_order_counts()?;
     let mut results = Vec::with_capacity(header.block_lengths.len());
     for (block, &length) in header.block_lengths.iter().enumerate() {
@@ -400,7 +435,7 @@ pub fn split_blocks(
         let (j, parity) = row_symmetry(&first);
         let p = if parity == 1 { "even" } else { "odd" };
         let path = directory.join(format!("{prefix}_b{block:03}_{j}_{p}_desc.parquet"));
-        let mut writer = DatasetWriter::new(
+        let mut writer = DatasetWriter::try_new(
             header.clone(),
             &path,
             &header_path(&path)?,
@@ -416,6 +451,9 @@ pub fn split_blocks(
             .map(|counts| std::slice::from_ref(&counts[block]));
         results.push(writer.prepare_with_zero_order_counts(counts)?);
     }
-    ensure!(source.next_row()?.is_none(), "unconsumed CSF blocks");
+    ensure!(
+        source.next_descriptor_row()?.is_none(),
+        "unconsumed CSF blocks"
+    );
     crate::descriptor_dataset::PreparedDataset::publish_all(results)
 }

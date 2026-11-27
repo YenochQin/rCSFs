@@ -7,12 +7,19 @@ use std::path::Path;
 /// Runtime-independent Parquet metadata shared by Python and the native CLI.
 #[derive(Debug, Serialize)]
 pub struct ParquetInfo {
+    /// Input path rendered as UTF-8, with invalid byte sequences replaced.
     pub file_path: String,
+    /// Total size of the Parquet file in bytes.
     pub file_size: u64,
+    /// Row count recorded in the Parquet footer.
     pub num_rows: i64,
+    /// Number of top-level fields in the Parquet schema.
     pub num_columns: usize,
+    /// Compression codec of the first column in the first row group, or `Unknown`.
     pub compression: String,
+    /// Parquet writer identification from the footer, or `Unknown` when absent.
     pub created_by: String,
+    /// Footer metadata keyed by entry name. `None` represents a key with no value.
     pub key_value_metadata: std::collections::BTreeMap<String, Option<String>>,
 }
 

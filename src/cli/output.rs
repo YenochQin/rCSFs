@@ -1,6 +1,8 @@
 //! Human summaries are deliberately separate from the full JSON result contract.
 use serde_json::Value;
-use std::{fmt::Write, fs, path::Path};
+use std::fmt::Write;
+use std::fs;
+use std::path::Path;
 
 const REPORT_WIDTH: usize = 72;
 
@@ -32,12 +34,12 @@ pub(super) fn size(bytes: u64) -> String {
 }
 
 fn field(out: &mut String, label: &str, value: impl std::fmt::Display) {
-    writeln!(out, "  {label:<23} {value}").unwrap();
+    writeln!(out, "  {label:<23} {value}").expect("writing to a String is infallible");
 }
 
 fn section(out: &mut String, title: &str) {
-    writeln!(out, "\n  {title}").unwrap();
-    writeln!(out, "  {}", "-".repeat(REPORT_WIDTH - 2)).unwrap();
+    writeln!(out, "\n  {title}").expect("writing to a String is infallible");
+    writeln!(out, "  {}", "-".repeat(REPORT_WIDTH - 2)).expect("writing to a String is infallible");
 }
 
 fn number(out: &mut String, stats: &Value, key: &str, label: &str) {
@@ -74,9 +76,10 @@ pub(super) fn summary(command: &str, stats: &Value, elapsed: f64) -> String {
         "completed"
     };
     // Each result starts one blank line after the log notice or previous result.
-    writeln!(out, "\n{}", "=".repeat(REPORT_WIDTH)).unwrap();
-    writeln!(out, "{command}: {status} ({elapsed:.2} s)").unwrap();
-    writeln!(out, "{}", "-".repeat(REPORT_WIDTH)).unwrap();
+    writeln!(out, "\n{}", "=".repeat(REPORT_WIDTH)).expect("writing to a String is infallible");
+    writeln!(out, "{command}: {status} ({elapsed:.2} s)")
+        .expect("writing to a String is infallible");
+    writeln!(out, "{}", "-".repeat(REPORT_WIDTH)).expect("writing to a String is infallible");
     details(&mut out, stats);
     out
 }
@@ -141,14 +144,17 @@ fn details(out: &mut String, stats: &Value) {
         .as_array()
         .filter(|blocks| !blocks.is_empty())
     {
-        writeln!(out, "\n  {:<16} {:>18}", "J / parity", "CSFs").unwrap();
-        writeln!(out, "  {}+{}", "-".repeat(16), "-".repeat(18)).unwrap();
+        writeln!(out, "\n  {:<16} {:>18}", "J / parity", "CSFs")
+            .expect("writing to a String is infallible");
+        writeln!(out, "  {}+{}", "-".repeat(16), "-".repeat(18))
+            .expect("writing to a String is infallible");
         for block in blocks {
             let count_value = block["record_count"]
                 .as_u64()
                 .or_else(|| block["output_count"].as_u64());
             if let (Some(label), Some(value)) = (symmetry(block), count_value) {
-                writeln!(out, "  {label:<16} {:>18}", count(value)).unwrap();
+                writeln!(out, "  {label:<16} {:>18}", count(value))
+                    .expect("writing to a String is infallible");
             }
         }
     }
@@ -183,7 +189,7 @@ fn details(out: &mut String, stats: &Value) {
         section(out, "Split outputs");
         for (index, item) in outputs.iter().enumerate() {
             if index > 0 {
-                writeln!(out).unwrap();
+                writeln!(out).expect("writing to a String is infallible");
             }
             let label = symmetry(item)
                 .or_else(|| item["maximum_orbitals"].as_str().map(str::to_owned))

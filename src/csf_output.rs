@@ -68,8 +68,7 @@ pub(crate) mod descriptor {
         ]);
         Ok(WriterProperties::builder()
             .set_compression(
-                crate::csfs_descriptor::parquet_batch::parse_compression(None)
-                    .expect("default compression is valid"),
+                crate::parquet_compression::parse(None).expect("default compression is valid"),
             )
             .set_dictionary_enabled(true)
             .set_max_row_group_row_count(Some(ROW_GROUP_ROWS))

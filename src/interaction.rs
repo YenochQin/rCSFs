@@ -20,6 +20,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::str::FromStr;
 
 /// Hamiltonian requested by the caller.
 ///
@@ -28,11 +29,15 @@ use std::path::Path;
 /// lose the caller's physical-model choice.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum HamiltonianMode {
+    /// Request the Dirac–Coulomb Hamiltonian.
     DiracCoulomb,
+    /// Request the Dirac–Coulomb Hamiltonian with the Breit interaction.
     DiracCoulombBreit,
 }
 
 impl HamiltonianMode {
+    /// Canonical option string accepted by [`Self::parse`].
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DiracCoulomb => "dirac_coulomb",
@@ -42,6 +47,14 @@ impl HamiltonianMode {
 
     /// Decode the public option spelling accepted at API boundaries.
     pub fn parse(value: &str) -> Result<Self> {
+        value.parse()
+    }
+}
+
+impl FromStr for HamiltonianMode {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
         match value {
             "dirac_coulomb" => Ok(Self::DiracCoulomb),
             "dirac_coulomb_breit" => Ok(Self::DiracCoulombBreit),
@@ -63,11 +76,15 @@ impl fmt::Display for HamiltonianMode {
 /// The explicit variant prevents this approximation from being mistaken for
 /// a future exact `rcsfinteract` implementation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
 pub enum InteractionMethod {
+    /// Use occupation differences to bound which CSFs may interact.
     StructuralUpperBound,
 }
 
 impl InteractionMethod {
+    /// Canonical option string accepted by [`Self::parse`].
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::StructuralUpperBound => "structural_upper_bound",
@@ -76,6 +93,14 @@ impl InteractionMethod {
 
     /// Decode the public option spelling accepted at API boundaries.
     pub fn parse(value: &str) -> Result<Self> {
+        value.parse()
+    }
+}
+
+impl FromStr for InteractionMethod {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
         match value {
             "structural_upper_bound" => Ok(Self::StructuralUpperBound),
             other => anyhow::bail!(
@@ -96,13 +121,21 @@ impl fmt::Display for InteractionMethod {
 pub struct InteractionBlockStats {
     /// Zero-based block index in both input files.
     pub block_index: usize,
+    /// Twice the total angular momentum of all rows in the block.
     pub total_two_j: u16,
+    /// Parity of all rows in the block.
     pub parity: Parity,
+    /// Reference input rows, all written at the start of the output block.
     pub reference_count: usize,
+    /// Candidate input rows before selection.
     pub candidate_count: usize,
+    /// Candidate rows omitted because an identical reference CSF is already present.
     pub exact_reference_skipped: usize,
+    /// Candidate rows appended after passing the occupation bound.
     pub selected_count: usize,
+    /// Candidate rows excluded by the electron-count or occupation checks.
     pub rejected_count: usize,
+    /// Output rows, the sum of reference and selected candidate rows in this block.
     pub output_count: usize,
 }
 
@@ -112,16 +145,27 @@ pub struct InteractionStats {
     /// `false`: structural selection is a conservative upper bound, not an
     /// exact Hamiltonian matrix-element calculation.
     pub exact: bool,
+    /// Hamiltonian requested by the caller and recorded for provenance.
     pub mode: HamiltonianMode,
+    /// Selection method used to decide which candidate rows to append.
     pub method: InteractionMethod,
+    /// Number of aligned symmetry blocks processed.
     pub block_count: usize,
+    /// Total reference rows written across the blocks.
     pub reference_count: usize,
+    /// Total candidate input rows across the blocks.
     pub candidate_count: usize,
+    /// Total candidates omitted because they matched a reference CSF exactly.
     pub exact_reference_skipped: usize,
+    /// Total candidates retained in addition to the reference rows.
     pub selected_count: usize,
+    /// Total candidates that failed the electron-count or occupation checks.
     pub rejected_count: usize,
+    /// Total output rows, including the reference rows.
     pub output_count: usize,
+    /// Published Parquet file size in bytes, excluding the TOML sidecar.
     pub output_bytes: u64,
+    /// Per-block counts in the explicit input and output block order.
     pub blocks: Vec<InteractionBlockStats>,
 }
 
@@ -196,28 +240,31 @@ pub fn select_interacting_csfs(
     let mut reference = DescriptorRows::open(reference_path, &reference_header)?;
     let mut candidates = DescriptorRows::open(candidates_path, &candidate_header)?;
     ensure!(
-        reference.header.lines[1] == candidates.header.lines[1],
+        reference.header().lines[1] == candidates.header().lines[1],
         "core header mismatch: reference={:?}, candidates={:?}",
-        reference.header.lines[1],
-        candidates.header.lines[1]
+        reference.header().lines[1],
+        candidates.header().lines[1]
     );
     ensure!(
-        candidates.header.peel.starts_with(&reference.header.peel),
+        candidates
+            .header()
+            .peel
+            .starts_with(&reference.header().peel),
         "reference peel subshells must be a prefix of candidate peel subshells"
     );
-    let block_count = reference.header.block_lengths.len();
+    let block_count = reference.header().block_lengths.len();
     ensure!(
-        block_count == candidates.header.block_lengths.len(),
+        block_count == candidates.header().block_lengths.len(),
         "block count mismatch: reference={} candidates={}",
         block_count,
-        candidates.header.block_lengths.len()
+        candidates.header().block_lengths.len()
     );
 
-    let indices = (0..reference.header.peel.len()).collect::<Vec<_>>();
-    let width = candidates.header.layout().row_len();
-    let mut header = candidates.header.clone();
-    header.add_truncations_from(&reference.header)?;
-    header.electron_count = reference.header.electron_count;
+    let indices = (0..reference.header().peel.len()).collect::<Vec<_>>();
+    let width = candidates.header().layout().row_len();
+    let mut header = candidates.header().clone();
+    header.add_truncations_from(reference.header())?;
+    header.electron_count = reference.header().electron_count;
 
     let parent = output_path
         .parent()
@@ -230,7 +277,7 @@ pub fn select_interacting_csfs(
         .path()
         .join(output_path.file_name().context("missing output filename")?);
     let staged_header = header_path(&staged)?;
-    let mut writer = DatasetWriter::new(header, &staged, &staged_header, &[])?;
+    let mut writer = DatasetWriter::try_new(header, &staged, &staged_header, &[])?;
     let worker_pool = num_workers
         .map(|workers| ThreadPoolBuilder::new().num_threads(workers).build())
         .transpose()
@@ -238,8 +285,8 @@ pub fn select_interacting_csfs(
     let mut block_stats = Vec::with_capacity(block_count);
 
     for block_index in 0..block_count {
-        let reference_count = reference.header.block_lengths[block_index];
-        let candidate_count = candidates.header.block_lengths[block_index];
+        let reference_count = reference.header().block_lengths[block_index];
+        let candidate_count = candidates.header().block_lengths[block_index];
         let mut exact_references = HashSet::new();
         for row in reference.read_rows(reference_count) {
             let row = remap(&row?, &indices, width);
@@ -275,7 +322,7 @@ pub fn select_interacting_csfs(
             );
 
             // The readers validate a constant electron count per dataset.
-            if reference.header.electron_count != candidates.header.electron_count {
+            if reference.header().electron_count != candidates.header().electron_count {
                 block.rejected_count += count;
                 continue;
             }
@@ -308,7 +355,7 @@ pub fn select_interacting_csfs(
         block_stats.push(block);
     }
     ensure!(
-        reference.next_row()?.is_none() && candidates.next_row()?.is_none(),
+        reference.next_descriptor_row()?.is_none() && candidates.next_descriptor_row()?.is_none(),
         "unconsumed CSF blocks"
     );
 

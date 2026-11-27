@@ -70,10 +70,14 @@ pub(super) fn enumerated_descriptor_basis(
     Ok((peel, electron_count))
 }
 
+/// Number of CSFs in one total-angular-momentum and parity block.
 #[derive(Debug, serde::Serialize)]
 pub struct GenerationBlockStats {
+    /// Twice the block's total angular momentum.
     pub total_two_j: u16,
+    /// GRASP parity sign, `+` for even or `-` for odd.
     pub parity: &'static str,
+    /// Number of CSF records in this block.
     pub record_count: usize,
 }
 
@@ -105,9 +109,13 @@ fn memory_j_value_summary(chunks: &[CompleteCsfFile]) -> Vec<GenerationBlockStat
 
 /// Statistics from ordering, merging and writing already-generated CSF chunks.
 pub struct WriteStats {
+    /// Number of input CSF records written across all output blocks.
     pub record_count: usize,
+    /// Number of output blocks after grouping the chunks by total angular momentum and parity.
     pub block_count: usize,
+    /// Size of the output Parquet file in bytes, excluding its TOML sidecar.
     pub output_bytes: u64,
+    /// Number of descriptor rows published. A successful V3 write returns `Some(record_count)`.
     pub descriptor_count: Option<usize>,
 }
 
@@ -184,10 +192,11 @@ fn write_generated_csfs_with_peel(
                 DatasetHeader::from_lines(lines)
             })
             .collect::<Result<Vec<_>>>()?;
-        destination = common_header(&tables)?;
+        destination = common_header(tables.iter())?;
     }
     let header_output = header_path(output_path)?;
-    let mut writer = DatasetWriter::new(destination.clone(), output_path, &header_output, &[])?;
+    let output_width = destination.layout().row_len();
+    let mut writer = DatasetWriter::try_new(destination, output_path, &header_output, &[])?;
     for (index, block_refs) in order.values().enumerate() {
         for &(chunk_index, block_index) in block_refs {
             let chunk = &chunks[chunk_index];
@@ -198,13 +207,10 @@ fn write_generated_csfs_with_peel(
                 .context("block range overflow")?;
             let layout = DescriptorLayout::new(DescriptorVersion::V3, chunk.subshells.len());
             let mut row = vec![0; layout.row_len()];
-            let indices = mapping(&chunk.subshells, &destination.peel)?;
+            let indices = mapping(&chunk.subshells, writer.peel_subshells())?;
             for record in &chunk.records[start..end] {
                 encode(chunk, record, &mut row)?;
-                writer.push(
-                    &remap(&row, &indices, destination.layout().row_len()),
-                    index,
-                )?;
+                writer.push(&remap(&row, &indices, output_width), index)?;
             }
         }
     }
@@ -220,20 +226,29 @@ fn write_generated_csfs_with_peel(
 
 /// Statistics for a full transcript-driven generation run.
 pub struct TranscriptGenerationStats {
+    /// Number of distinct relativistic occupations enumerated before angular coupling.
     pub unique_occupations: usize,
+    /// Total CSFs written as descriptor rows.
     pub record_count: usize,
+    /// Number of total-angular-momentum and parity blocks in the output.
     pub block_count: usize,
+    /// Parquet file size in bytes, excluding the TOML sidecar.
     pub output_bytes: u64,
+    /// Descriptor rows written. Successful transcript generation publishes `Some(record_count)`.
     pub descriptor_count: Option<usize>,
+    /// Per-block counts in ascending total angular momentum, with even parity first at equal `J`.
     pub blocks: Vec<GenerationBlockStats>,
 }
 
 /// Parse an `rcsfgenerate.log`-format transcript, enumerate and generate the
-/// resulting CSFs, and write them (and optionally their descriptors) to disk.
+/// resulting CSFs, and publish a V3 Parquet/TOML descriptor pair.
 ///
 /// `transcript` is consumed purely in memory: this is the single entry point
 /// backing `rcsfs.generate_csfs_from_transcript`, so an interactive caller
 /// never needs to write its collected answers to a transcript file on disk.
+///
+/// Parsing errors from [`ExcitationRequest::from_transcript`] are returned
+/// before generation or publication starts.
 pub fn generate_csfs_from_transcript(
     transcript: &str,
     output_path: &Path,

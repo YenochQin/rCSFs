@@ -1,17 +1,16 @@
 //! Generation orchestration; all CSF algorithms and capacity models remain shared.
-use super::{arguments::Settings, files};
-use crate::configuration_generation::{
-    self,
-    csf_generation::{ArtifactKind, disk_csf_generation_pipeline as disk},
-    shared_generation::GenerationOptions,
+use super::arguments::Settings;
+use super::files;
+use crate::configuration_generation;
+use crate::configuration_generation::csf_generation::{
+    ArtifactKind, disk_csf_generation_pipeline as disk,
 };
+use crate::configuration_generation::shared_generation::GenerationOptions;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value as Json, json};
-use std::{
-    fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use toml::{Table, Value};
 
 pub(super) const MODEL_KEYS: &[&str] = &[
@@ -119,16 +118,18 @@ fn interactive() -> Result<Table> {
         if line.is_empty() || line == "*" {
             break;
         }
+        configuration_generation::ReferenceConfiguration::from_spectroscopic(&line)?;
         references.push(Value::String(line));
         if references.len() == 100 {
             break;
         }
     }
     model.insert("reference_configuration".into(), Value::Array(references));
-    model.insert(
-        "active_space".into(),
-        prompt("Active orbitals (e.g. 5s,4p,3d): ")?.into(),
-    );
+    let active_space = prompt("Active orbitals (e.g. 5s,4p,3d): ")?;
+    for label in active_space.split(',') {
+        label.trim().parse::<configuration_generation::Orbital>()?;
+    }
+    model.insert("active_space".into(), active_space.into());
     let range = prompt("Resulting 2*J-number? lower,higher: ")?;
     let numbers = range
         .split([',', ' '])

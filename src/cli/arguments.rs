@@ -1,6 +1,7 @@
 //! One command schema for help, CLI parsing and TOML validation.
 use anyhow::{Context, Result, bail, ensure};
-use clap::{Arg, ArgAction, ArgMatches, Command, parser::ValueSource};
+use clap::parser::ValueSource;
+use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::path::{Path, PathBuf};
 use toml::{Table, Value};
 
@@ -19,7 +20,7 @@ pub(super) struct Field {
     pub kind: Kind,
     pub help: &'static str,
 }
-use Kind::*;
+use Kind::{Flag, Number, Numbers, Spaces, Text};
 macro_rules! field {
     ($key:literal, $long:expr, $kind:ident, $help:literal) => {
         Field {
@@ -289,13 +290,14 @@ pub(super) fn overrides(command: &str, matches: &ArgMatches) -> Result<Table> {
                 format!("{} must be an integer", f.key)
             })?))
         };
+        let missing = || format!("missing command-line value for {}", f.key);
         let value = match f.kind {
             Flag => Value::Boolean(f.key != "copy_w"),
-            Number => number(matches.get_one::<String>(f.key).unwrap())?,
+            Number => number(matches.get_one::<String>(f.key).with_context(missing)?)?,
             Spaces => Value::Array(
                 matches
                     .get_many::<String>(f.key)
-                    .unwrap()
+                    .with_context(missing)?
                     .cloned()
                     .map(Value::String)
                     .collect(),
@@ -303,11 +305,16 @@ pub(super) fn overrides(command: &str, matches: &ArgMatches) -> Result<Table> {
             Numbers => Value::Array(
                 matches
                     .get_many::<String>(f.key)
-                    .unwrap()
+                    .with_context(missing)?
                     .map(|s| number(s))
                     .collect::<Result<_>>()?,
             ),
-            Text => Value::String(matches.get_one::<String>(f.key).unwrap().clone()),
+            Text => Value::String(
+                matches
+                    .get_one::<String>(f.key)
+                    .with_context(missing)?
+                    .clone(),
+            ),
         };
         table.insert(f.key.into(), value);
     }

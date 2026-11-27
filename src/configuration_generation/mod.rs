@@ -1,6 +1,7 @@
 //! Complete CSF generation and its occupation and angular-coupling algorithms.
 pub mod csf_generation;
 pub mod shared_generation;
+pub use crate::orbital_label::MAX_PRINCIPAL_QUANTUM_NUMBER;
 
 // Stable public Rust interface. New callers may use the explicit submodules.
 pub use csf_generation::{

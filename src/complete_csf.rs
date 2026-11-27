@@ -1,8 +1,9 @@
 //! Lossless integer representation of GRASP CSF files.
 //!
-//! The ML descriptor intentionally discards some state information. This module
-//! keeps every integer needed to reproduce the three fixed-width CSF lines,
-//! including optional seniority labels and sparse intermediate couplings.
+//! V3 descriptors encode the complete physical coupling chain. This module
+//! preserves which state and coupling values were printed in the three
+//! fixed-width GRASP text lines, including optional seniority labels and sparse
+//! intermediate couplings.
 //!
 //! Parsing accepts only the spellings the GRASP writers emit, so parsing and
 //! formatting are mutually inverse and a successful round-trip is
@@ -15,6 +16,7 @@
 //! leading intermediate couplings, so consumers needing a dense chain must
 //! reconstruct the suppressed prefix themselves.
 
+use crate::orbital_label;
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::HashMap;
 use std::fs::File;
@@ -40,9 +42,12 @@ const HEADER_LABELS: [(usize, &str); 3] = [
     (4, "CSF(s):"),
 ];
 
+/// Parity of a configuration state function.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Parity {
+    /// Even parity, written as `+` in GRASP text.
     Even,
+    /// Odd parity, written as `-` in GRASP text.
     Odd,
 }
 
@@ -63,9 +68,12 @@ impl Parity {
     }
 }
 
+/// State printed for an occupied subshell in the second CSF line.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SubshellState {
+    /// Twice the subshell state's angular momentum.
     pub two_j: u16,
+    /// Optional GRASP seniority label. V3 descriptors store physical seniority instead.
     pub seniority: Option<u8>,
 }
 
@@ -80,10 +88,14 @@ pub(crate) fn prints_intermediate_coupling(
     print
 }
 
+/// One nonzero occupation in a record's ordered peel subshells.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OccupiedSubshell {
+    /// Zero-based index into [`CompleteCsfFile::subshells`].
     pub subshell_index: u16,
+    /// Number of electrons in this relativistic subshell.
     pub occupation: u8,
+    /// Printed state when present. A blank GRASP state field is represented by `None`.
     pub state: Option<SubshellState>,
 }
 
@@ -96,34 +108,56 @@ pub struct OccupiedSubshell {
 pub struct IntermediateCoupling {
     /// Zero-based 9-character field boundary. The first printable boundary is 2.
     pub boundary: u16,
+    /// Twice the cumulative angular momentum at the boundary, conventionally `2K`.
     pub two_j: u16,
 }
 
+/// One CSF with ranges into its owning file's occupation and coupling arrays.
+///
+/// Use [`CompleteCsfFile::occupied`] and [`CompleteCsfFile::couplings`] to read
+/// those ranges in the file that owns this record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CsfRecord {
     occupied_start: u64,
     occupied_len: u16,
     coupling_start: u64,
     coupling_len: u16,
+    /// Twice the total angular momentum of the CSF.
     pub total_two_j: u16,
+    /// Total parity of the CSF.
     pub parity: Parity,
 }
 
+/// One contiguous block of records with the same total angular momentum and parity.
+///
+/// A separator starts a distinct block even when the preceding block has the
+/// same symmetry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SymmetryBlock {
+    /// Zero-based first record index in [`CompleteCsfFile::records`].
     pub record_start: u64,
+    /// Number of consecutive records in the block.
     pub record_len: u64,
+    /// Twice the total angular momentum shared by the block's records.
     pub total_two_j: u16,
+    /// Parity shared by the block's records.
     pub parity: Parity,
 }
 
+/// A GRASP text header, its CSF records, and the data those records reference.
 #[derive(Debug)]
 pub struct CompleteCsfFile {
+    /// The five header lines in file order, without line terminators.
     pub header_lines: [String; HEADER_LINE_COUNT],
+    /// Peel subshell labels in header order, indexed by [`OccupiedSubshell::subshell_index`].
     pub subshells: Vec<String>,
+    /// CSF records in file order across all blocks.
     pub records: Vec<CsfRecord>,
+    /// Shared storage of the occupied subshell ranges referenced by the records.
     pub occupied_subshells: Vec<OccupiedSubshell>,
+    /// Shared storage of the sparse, explicitly printed intermediate couplings.
     pub intermediate_couplings: Vec<IntermediateCoupling>,
+    /// Explicit symmetry blocks in file order.
     pub blocks: Vec<SymmetryBlock>,
     // Aligned with the occupied arena for records emitted by the generator.
     generated_cumulative: Vec<u16>,
@@ -144,6 +178,9 @@ impl PartialEq for CompleteCsfFile {
 impl Eq for CompleteCsfFile {}
 
 impl CompleteCsfFile {
+    /// Open and parse a canonical GRASP CSF text file.
+    ///
+    /// I/O and parsing errors include the input path.
     pub fn parse_path(path: &Path) -> Result<Self> {
         let file = File::open(path)
             .with_context(|| format!("failed to open CSF file {}", path.display()))?;
@@ -151,6 +188,10 @@ impl CompleteCsfFile {
             .with_context(|| format!("failed to parse CSF file {}", path.display()))
     }
 
+    /// Parse the canonical fixed-width GRASP format from a buffered byte stream.
+    ///
+    /// Returns an error for malformed headers or records, incomplete blocks,
+    /// or lines without a single LF terminator.
     pub fn parse_reader(mut reader: impl BufRead) -> Result<Self> {
         // Keep line terminators visible: `BufRead::lines` would silently normalize
         // CRLF and a missing final LF, violating the lossless contract.
@@ -184,6 +225,10 @@ impl CompleteCsfFile {
             .try_into()
             .expect("exactly five header lines were collected");
         validate_header_labels(&header_lines)?;
+        for label in header_lines[1].split_ascii_whitespace() {
+            orbital_label::parse_subshell(label)
+                .with_context(|| format!("invalid core subshell {label:?}"))?;
+        }
         let subshells = parse_peel_subshells(&header_lines[3])?;
         let has_core = !header_lines[1].trim().is_empty();
         ensure!(
@@ -268,6 +313,9 @@ impl CompleteCsfFile {
         })
     }
 
+    /// Create or truncate a file and write canonical GRASP text to it.
+    ///
+    /// See [`Self::write_to`] for validation and formatting.
     pub fn write_path(&self, path: &Path) -> Result<()> {
         let file = File::create(path)
             .with_context(|| format!("failed to create CSF file {}", path.display()))?;
@@ -275,6 +323,9 @@ impl CompleteCsfFile {
             .with_context(|| format!("failed to write CSF file {}", path.display()))
     }
 
+    /// Validate and write the header, records and explicit block separators, then flush.
+    ///
+    /// Returns an error for an empty basis, invalid record or block layout, or an I/O failure.
     pub fn write_to(&self, mut writer: impl Write) -> Result<()> {
         ensure!(!self.records.is_empty(), "cannot write an empty CSF list");
         self.validate_layout()?;
@@ -428,6 +479,9 @@ impl CompleteCsfFile {
             + header_bytes
     }
 
+    /// Borrow the occupied peel subshells of a record owned by this file, in coupling order.
+    ///
+    /// Returns an error if the record's occupation range is invalid.
     pub fn occupied(&self, record: &CsfRecord) -> Result<&[OccupiedSubshell]> {
         checked_slice(
             &self.occupied_subshells,
@@ -735,6 +789,8 @@ fn parse_peel_subshells(line: &str) -> Result<Vec<String>> {
     );
     let mut seen = HashMap::with_capacity(subshells.len());
     for label in &subshells {
+        orbital_label::parse_subshell(label)
+            .with_context(|| format!("invalid peel subshell {label:?}"))?;
         ensure!(
             label.len() <= 5,
             "subshell label {label:?} exceeds five characters"

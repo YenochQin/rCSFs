@@ -13,35 +13,56 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use super::{ResourceBudget, ResourcePermit, Subshell, SubshellOccupation};
+use crate::orbital_label::{self, MAX_PRINCIPAL_QUANTUM_NUMBER, ORBITAL_LETTERS};
 use std::mem::size_of;
-
-const ORBITAL_LETTERS: &[u8] = b"spdfghiklmn";
 
 /// A nonrelativistic `nl` orbital.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Orbital {
-    pub n: u8,
-    pub l: u8,
+    n: u8,
+    l: u8,
 }
 
 impl Orbital {
+    /// Create an orbital through the established constructor.
+    ///
+    /// See [`Self::try_new`] for the allowed quantum numbers.
     pub fn new(n: u8, l: u8) -> Result<Self> {
+        Self::try_new(n, l)
+    }
+
+    /// Create a nonrelativistic orbital within rCSFs' supported generation range.
+    pub fn try_new(n: u8, l: u8) -> Result<Self> {
         ensure!(
-            (1..=15).contains(&n),
-            "principal quantum number must be 1..=15"
+            (1..=MAX_PRINCIPAL_QUANTUM_NUMBER).contains(&n),
+            "principal quantum number must be 1..={MAX_PRINCIPAL_QUANTUM_NUMBER}"
         );
         ensure!(
             l < n && l <= 10,
-            "orbital angular momentum must satisfy 0 <= l < n <= 15"
+            "orbital angular momentum must satisfy l < n and l <= 10"
         );
         Ok(Self { n, l })
     }
 
+    /// Principal quantum number within the generator's supported range.
+    #[must_use]
+    pub fn n(self) -> u8 {
+        self.n
+    }
+
+    /// Orbital angular momentum, with `0 <= l < n`.
+    #[must_use]
+    pub fn l(self) -> u8 {
+        self.l
+    }
+
+    /// Format the orbital as its principal quantum number followed by its orbital letter.
+    #[must_use]
     pub fn label(self) -> String {
         format!(
             "{}{}",
             self.n,
-            char::from(ORBITAL_LETTERS[usize::from(self.l)])
+            char::from(ORBITAL_LETTERS.as_bytes()[usize::from(self.l)])
         )
     }
 
@@ -54,19 +75,14 @@ impl FromStr for Orbital {
     type Err = anyhow::Error;
 
     fn from_str(value: &str) -> Result<Self> {
-        ensure!(
-            value.len() >= 2 && value.is_ascii(),
-            "invalid orbital {value:?}"
-        );
-        let (n, letter) = value.split_at(value.len() - 1);
-        let l = ORBITAL_LETTERS
-            .iter()
-            .position(|&item| item == letter.as_bytes()[0])
-            .with_context(|| format!("invalid orbital letter in {value:?}"))?;
-        let n = n
-            .parse::<u8>()
-            .with_context(|| format!("invalid orbital {value:?}"))?;
-        Self::new(n, u8::try_from(l)?)
+        let (n, l) = orbital_label::parse_nl(value)?;
+        Self::try_new(
+            u8::try_from(n).with_context(|| {
+                format!("orbital n must be in 1..={MAX_PRINCIPAL_QUANTUM_NUMBER}")
+            })?,
+            l,
+        )
+        .with_context(|| format!("invalid generator orbital {value:?}"))
     }
 }
 
@@ -85,41 +101,55 @@ pub enum OccupationMode {
     Double,
 }
 
+/// Initial population and excitation rule for one nonrelativistic reference shell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReferenceSubshell {
+    /// Nonrelativistic shell shared by both relativistic partners, where applicable.
     pub orbital: Orbital,
+    /// Total reference electrons in the shell before splitting into relativistic partners.
     pub electrons: u8,
+    /// Allowed occupation changes when generating configurations from this reference.
     pub mode: OccupationMode,
 }
 
 /// One reference configuration from the `rcsfgenerate` input.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceConfiguration {
+    /// Reference shell specifications in input order.
     pub shells: Vec<ReferenceSubshell>,
 }
 
 impl ReferenceConfiguration {
+    /// Parse adjacent `nl(electrons,selector)` entries, such as `3s(2,i)3p(1,*)`.
+    ///
+    /// Selectors `i`, `c`, `*`, and `d` select inactive, closed, active, and
+    /// pair transfer modes. An integer sets the minimum occupation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed entries, non-ASCII orbital letters,
+    /// duplicate shells, or populations exceeding the shell capacity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use _rcsfs::configuration_generation::{OccupationMode, ReferenceConfiguration};
+    ///
+    /// let reference = ReferenceConfiguration::from_spectroscopic("3s(2,i)3p(1,*)")?;
+    /// assert_eq!(reference.shells[1].electrons, 1);
+    /// assert_eq!(reference.shells[1].mode, OccupationMode::Active);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn from_spectroscopic(value: &str) -> Result<Self> {
         let mut shells = Vec::new();
         let bytes = value.as_bytes();
         let mut index = 0;
         while index < bytes.len() {
-            let start = index;
-            while index < bytes.len() && bytes[index].is_ascii_digit() {
-                index += 1;
-            }
-            ensure!(
-                index > start && index < bytes.len(),
-                "invalid configuration near {value:?}"
-            );
-            let letter_start = index;
-            index += 1;
-            let orbital = value[start..index].parse::<Orbital>()?;
-            ensure!(
-                index < bytes.len() && bytes[index] == b'(',
-                "missing occupation in {value:?}"
-            );
-            index += 1;
+            let (label, _) = value[index..]
+                .split_once('(')
+                .with_context(|| format!("missing occupation in {value:?}"))?;
+            let orbital = label.parse::<Orbital>()?;
+            index += label.len() + 1;
             let occupation_start = index;
             while index < bytes.len() && bytes[index].is_ascii_digit() {
                 index += 1;
@@ -164,7 +194,6 @@ impl ReferenceConfiguration {
                 "duplicate orbital {} in configuration",
                 orbital.label()
             );
-            let _ = letter_start;
             shells.push(ReferenceSubshell {
                 orbital,
                 electrons,
@@ -181,16 +210,32 @@ impl ReferenceConfiguration {
 pub struct ExcitationRequest {
     /// Low-level jjgen core selector, after transcript normalization.
     pub core: u8,
-    /// Highest active n per l. Transcript normalization may include the
-    /// wrapper's 3f sentinel (n == l); it never becomes a physical subshell.
+    /// Highest principal quantum number per angular symmetry in the orbital walk.
+    /// Closed-core subshells inside these limits remain excluded from excitations.
     pub active_orbitals: Vec<Orbital>,
+    /// Reference configurations in input-list order, including any core shells
+    /// inserted during transcript normalization.
     pub references: Vec<ReferenceConfiguration>,
+    /// Inclusive lower bound on twice the total angular momentum of generated CSFs.
     pub min_two_j: u16,
+    /// Inclusive upper bound on twice the total angular momentum of generated CSFs.
     pub max_two_j: u16,
+    /// Maximum number of electrons moved between nonrelativistic shells per reference.
     pub max_excitations: u8,
 }
 
 impl ExcitationRequest {
+    /// Parse one new-list `rcsfgenerate` transcript using default orbital order (`*`).
+    ///
+    /// Applies the wrapper's core and active-orbital conventions. A negative
+    /// excitation limit enables pair transfers for otherwise unspecified active
+    /// shells and uses the absolute value as the electron limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an incomplete transcript, a malformed reference
+    /// configuration, unsupported orbital ordering, or a request to continue
+    /// with another list.
     pub fn from_transcript(input: &str) -> Result<Self> {
         let lines = input.lines().map(str::trim_end).collect::<Vec<_>>();
         let order = lines
@@ -243,50 +288,40 @@ impl ExcitationRequest {
             (6, "5g") => "6s,5g",
             _ => active_line,
         };
-        // The wrapper inserts the nonphysical limit 3f to include closed 4f
-        // in the input walk, without opening any correlation f orbitals.
-        // Store this sentinel only for the core-6 rewrite; Orbital::new stays strict.
         let mut active_orbitals = active_line
             .split(',')
-            .map(|value| {
-                if core == 6 && value.trim() == "3f" {
-                    Ok(Orbital { n: 3, l: 3 })
-                } else {
-                    value.trim().parse()
-                }
-            })
+            .map(|label| label.trim().parse())
             .collect::<Result<Vec<Orbital>>>()?;
-        if core == 6 && !active_orbitals.iter().any(|orbital| orbital.l == 3) {
-            let index = active_orbitals
+        // The wrapper walks through closed 4f when its implicit f limit lands
+        // after a final d limit. Use the closed shell itself as the upper bound.
+        if core == 6
+            && !active_orbitals.iter().any(|orbital| orbital.l == 3)
+            && active_orbitals
                 .iter()
                 .position(|orbital| orbital.l == 2)
-                .map_or(0, |index| index + 1);
-            active_orbitals.insert(index, Orbital { n: 3, l: 3 });
+                .is_some_and(|index| index + 1 == active_orbitals.len())
+        {
+            active_orbitals.push(Orbital { n: 4, l: 3 });
         }
-        let last_l = active_orbitals.last().map_or(0, |orbital| orbital.l);
+        let last_l = active_orbitals
+            .last()
+            .context("active orbital list cannot be empty")?
+            .l;
         ensure!(
-            active_orbitals
-                .iter()
-                .all(|orbital| orbital.l <= last_l
-                    || (core == 6 && *orbital == Orbital { n: 3, l: 3 })),
+            active_orbitals.iter().all(|orbital| orbital.l <= last_l),
             "active orbital limits must end with their highest l symmetry"
         );
         // rcsfexcitation uses the LAST listed l, raised to the predefined
         // core's lmax, rather than the maximum listed l. Its inserted 3f can
         // therefore be ignored (e.g. core 6 with 7s); in that case it also
         // omits the injected closed 4f. Preserve this upstream behavior.
-        if core == 6 && active_orbitals.last().is_some_and(|orbital| orbital.l < 3) {
-            active_orbitals.retain(|orbital| !(orbital.n == 3 && orbital.l == 3));
+        if core == 6 && last_l < 3 {
             for reference in &mut references {
                 reference
                     .shells
                     .retain(|shell| shell.orbital != Orbital { n: 4, l: 3 });
             }
         }
-        ensure!(
-            !active_orbitals.is_empty(),
-            "active orbital list cannot be empty"
-        );
         index += 1;
         let j_range = lines
             .get(index)
@@ -318,12 +353,12 @@ impl ExcitationRequest {
                 .iter()
                 .map(|orbital| orbital.n)
                 .max()
-                .unwrap();
+                .context("active orbital list cannot be empty")?;
             let max_l = active_orbitals
                 .iter()
                 .map(|orbital| orbital.l)
                 .max()
-                .unwrap();
+                .context("active orbital list cannot be empty")?;
             let predefined = predefined_core(if core >= 5 { core - 1 } else { core })?;
             for reference in &mut references {
                 for orbital in slot_list(max_n, max_l) {
@@ -378,11 +413,19 @@ impl ExcitationRequest {
 /// A relativistic occupation task passed to [`super::generate_csfs`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EnumeratedConfiguration {
+    /// Nonzero peel occupations in the order used for relativistic coupling.
     pub occupations: Vec<SubshellOccupation>,
     key: Vec<(u8, u8, u8)>,
 }
 
 impl EnumeratedConfiguration {
+    /// Borrow the key used to sort and deduplicate the enumerated occupations.
+    ///
+    /// Each slot stores `(total, upper, lower)` for a nonrelativistic shell in
+    /// the enumeration order. The partners are `j = l + 1/2` and `j = l - 1/2`
+    /// for `l > 0`. For a peel s shell, the sole population is stored in
+    /// `lower`. Closed-core slots keep the total with both partner counts zero.
+    #[must_use]
     pub fn key(&self) -> &[(u8, u8, u8)] {
         &self.key
     }
@@ -391,8 +434,11 @@ impl EnumeratedConfiguration {
 /// Result of BLANDA-style enumeration and multi-reference merge.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EnumeratedOccupations {
+    /// Fully occupied relativistic subshells assigned to the closed core.
     pub core_subshells: Vec<Subshell>,
+    /// Non-core relativistic subshells allowed by the active orbital limits.
     pub active_subshells: Vec<Subshell>,
+    /// Unique occupation configurations merged across the input references.
     pub configurations: Vec<EnumeratedConfiguration>,
 }
 
@@ -863,14 +909,14 @@ fn split_branches(
         if field.orbital.l == 0 {
             if lower > 0 {
                 next.push(SubshellOccupation {
-                    subshell: Subshell::new(field.orbital.n, -1).expect("validated orbital"),
+                    subshell: Subshell::try_new(field.orbital.n, -1).expect("validated orbital"),
                     electrons: lower,
                 });
             }
         } else {
-            let lower_subshell =
-                Subshell::new(field.orbital.n, field.orbital.l as i8).expect("validated orbital");
-            let upper_subshell = Subshell::new(field.orbital.n, -(field.orbital.l as i8) - 1)
+            let lower_subshell = Subshell::try_new(field.orbital.n, field.orbital.l as i8)
+                .expect("validated orbital");
+            let upper_subshell = Subshell::try_new(field.orbital.n, -(field.orbital.l as i8) - 1)
                 .expect("validated orbital");
             if lower > 0 {
                 next.push(SubshellOccupation {
@@ -902,11 +948,11 @@ fn split_branches(
 
 fn relativistic_partners(orbital: Orbital) -> Vec<Subshell> {
     if orbital.l == 0 {
-        return vec![Subshell::new(orbital.n, -1).expect("validated orbital")];
+        return vec![Subshell::try_new(orbital.n, -1).expect("validated orbital")];
     }
     vec![
-        Subshell::new(orbital.n, orbital.l as i8).expect("validated orbital"),
-        Subshell::new(orbital.n, -(orbital.l as i8) - 1).expect("validated orbital"),
+        Subshell::try_new(orbital.n, orbital.l as i8).expect("validated orbital"),
+        Subshell::try_new(orbital.n, -(orbital.l as i8) - 1).expect("validated orbital"),
     ]
 }
 

@@ -12,7 +12,7 @@ fn descriptor_generator_defaults_to_v3_and_matches_integer_records() {
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.csf"),
     )
     .unwrap();
-    let generator = CSFDescriptorGenerator::new(file.subshells.clone());
+    let generator = CSFDescriptorGenerator::try_new(file.subshells.clone()).unwrap();
     assert_eq!(generator.layout().version(), DescriptorVersion::V3);
     assert_eq!(generator.layout().channels_per_subshell(), 4);
     let mut expected = vec![0; generator.layout().row_len()];
@@ -40,7 +40,9 @@ fn descriptor_generator_defaults_to_v3_and_matches_integer_records() {
 fn indexed_restore_keeps_source_blocks_even_when_symmetries_match() {
     let file = CompleteCsfFile::parse_reader(include_bytes!("fixtures/descriptor_v3.c").as_slice())
         .unwrap();
-    let layout = CSFDescriptorGenerator::new(file.subshells.clone()).layout();
+    let layout = CSFDescriptorGenerator::try_new(file.subshells.clone())
+        .unwrap()
+        .layout();
     let rows: Vec<_> = file
         .records
         .iter()
@@ -92,12 +94,23 @@ fn indexed_restore_keeps_source_blocks_even_when_symmetries_match() {
 }
 
 #[test]
+fn encoder_rejects_invalid_peel_slots_at_construction() {
+    for label in ["3δ", "3q", "2d", "2s-", "31s"] {
+        assert!(
+            CSFDescriptorGenerator::try_new(vec!["1s".into(), label.into()]).is_err(),
+            "{label}"
+        );
+    }
+    assert!(CSFDescriptorGenerator::try_new(vec!["2p-".into(), "2p".into()]).is_ok());
+}
+
+#[test]
 fn row_parser_accepts_closed_core_with_or_without_empty_peel_slots() {
     for (peel, expected) in [
         (vec![], vec![1, 1]),
         (vec!["2s".to_owned()], vec![0, 0, 1, 1, 1, 1]),
     ] {
-        let parser = CSFDescriptorGenerator::new(peel);
+        let parser = CSFDescriptorGenerator::try_new(peel).unwrap();
         let mut row = vec![99; expected.len()];
         parser.parse_row_into("", "", "0+", &mut row).unwrap();
         assert_eq!(row, expected);
@@ -121,7 +134,7 @@ fn seniority_keeps_distinct_states_in_a_single_j_block() {
         max_two_j: 4,
     })
     .unwrap();
-    let generator = CSFDescriptorGenerator::new(file.subshells.clone());
+    let generator = CSFDescriptorGenerator::try_new(file.subshells.clone()).unwrap();
     let rows = file
         .records
         .iter()
@@ -138,7 +151,7 @@ fn seniority_keeps_distinct_states_in_a_single_j_block() {
 
 #[test]
 fn descriptor_generator_rejects_non_ascii_and_wrong_buffers() {
-    let generator = CSFDescriptorGenerator::new(vec!["5s".to_owned()]);
+    let generator = CSFDescriptorGenerator::try_new(vec!["5s".to_owned()]).unwrap();
     assert!(
         generator
             .parse_csf("  测试 ( 2)", "", "        0+")

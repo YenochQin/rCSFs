@@ -101,9 +101,9 @@ impl PreparedCounter {
         // step from `2J = 0`, which reproduces `cumulative[0] = selected[0]`.
         let mut ways = vec![0u64; width];
         ways[0] = 1;
-        for index in 0..self.multiplicity.len() {
+        for (index, multiplicity) in self.multiplicity.iter().enumerate() {
             let restricted = prefix.get(index).map(|state| state.two_j);
-            ways = extend_ways(&ways, &self.multiplicity[index], restricted)?;
+            ways = extend_ways(&ways, multiplicity, restricted)?;
         }
         Ok(ways[usize::from(target)])
     }

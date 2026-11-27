@@ -3,11 +3,9 @@ use crate::atomic_output::{
     create_temporary_output, ensure_distinct_inputs, publish_staged_outputs,
 };
 use anyhow::{Context, Result, ensure};
-use std::{
-    fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
+use std::fs;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 pub(super) fn resolved(path: &Path) -> Result<PathBuf> {
     if path.exists() {

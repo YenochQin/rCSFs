@@ -18,6 +18,7 @@ from ._types import (
 
 __version__: str
 DESCRIPTOR_VERSION: int
+MAX_PRINCIPAL_QUANTUM_NUMBER: int
 
 def seniority_to_printed_v(
     two_j: int,

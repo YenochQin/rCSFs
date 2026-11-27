@@ -51,12 +51,12 @@ fn zero_first_preserves_each_block_and_appends_ordered_complement() {
                 .all(|b| (b.zero_count, b.first_order_count) == counts)
         );
         let mut rows = DescriptorRows::open(&output, &header).unwrap();
-        let block_info = &rows.header.document["block_info"];
+        let block_info = &rows.header().document["block_info"];
         for count in block_info["zero_order_counts"].as_array().unwrap() {
             assert_eq!(count.as_integer(), Some(counts.0 as i64));
         }
         assert_eq!(block_info["zero_order_counts"].as_array().unwrap().len(), 2);
-        assert_eq!(rows.header.peel, ["2s", "3s", "4s"]);
+        assert_eq!(rows.header().peel, ["2s", "3s", "4s"]);
         for block in 0..2 {
             for &n in &expected {
                 let (_, actual_block, row) = rows.next_row().unwrap().unwrap();

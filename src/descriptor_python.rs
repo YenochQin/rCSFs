@@ -12,7 +12,7 @@ use pyo3_arrow::PyRecordBatchReader;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::descriptor_dataset::{self as dataset, DescriptorRows};
+use crate::descriptor_dataset::{self as dataset, DescriptorRow, DescriptorRows};
 use crate::descriptor_operations as operations;
 use crate::descriptor_v3::decode_v3_into;
 
@@ -57,7 +57,7 @@ fn read_zero_order_counts(
     let header = companion(&input_path, header_path)?;
     py.detach(|| {
         DescriptorRows::open(Path::new(&input_path), &header)?
-            .header
+            .header()
             .zero_order_counts()
     })
     .map_err(io_error)
@@ -76,16 +76,21 @@ fn read_csfs_arrow(
     let (header, batch) = py
         .detach(|| -> anyhow::Result<_> {
             let mut reader = DescriptorRows::open(Path::new(&input_path), &header_path)?;
-            let layout = reader.header.layout();
+            let layout = reader.header().layout();
             let mut columns = vec![Vec::<i8>::new(); layout.row_len()];
             let mut indices = Vec::new();
             let mut blocks = Vec::new();
             let mut signatures = ListBuilder::new(Int32Builder::new());
             let (mut occupied, mut couplings) = (Vec::new(), Vec::new());
-            while let Some((ordinal, block, row)) = reader.next_row()? {
+            while let Some(DescriptorRow {
+                ordinal,
+                block_index,
+                values: row,
+            }) = reader.next_descriptor_row()?
+            {
                 indices.push(u64::try_from(ordinal)?);
                 if include_block_id {
-                    blocks.push(u32::try_from(block)?);
+                    blocks.push(u32::try_from(block_index)?);
                 }
                 for (column, value) in columns.iter_mut().zip(&row) {
                     column.push(*value);
@@ -94,7 +99,7 @@ fn read_csfs_arrow(
                     let (total_two_j, _) = decode_v3_into(
                         &row,
                         layout,
-                        &reader.header.peel,
+                        &reader.header().peel,
                         &mut occupied,
                         &mut couplings,
                     )?;
@@ -104,14 +109,10 @@ fn read_csfs_arrow(
                         .enumerate()
                         .take(occupied.len().saturating_sub(1))
                     {
-                        let two_j = if printed_couplings
-                            .peek()
-                            .is_some_and(|step| usize::from(step.boundary) == index + 1)
+                        let two_j = if let Some(step) = printed_couplings
+                            .next_if(|step| usize::from(step.boundary) == index + 1)
                         {
-                            printed_couplings
-                                .next()
-                                .expect("printed coupling was present")
-                                .two_j
+                            step.two_j
                         } else {
                             shell.state.map_or(0, |state| state.two_j)
                         };
@@ -148,7 +149,7 @@ fn read_csfs_arrow(
                 )));
                 arrays.push(Arc::new(array));
             }
-            let header = reader.header.document;
+            let header = reader.into_header().document;
             Ok((
                 header,
                 RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)?,
@@ -251,9 +252,9 @@ fn restore_csfs_from_descriptors(
     output: String,
     indices: Option<Vec<u64>>,
 ) -> PyResult<Py<PyAny>> {
-    let (record_count, output_bytes) = py
+    let stats = py
         .detach(|| {
-            dataset::restore_text(
+            dataset::restore_text_with_stats(
                 Path::new(&descriptor_parquet),
                 Path::new(&header_path),
                 Path::new(&output),
@@ -263,7 +264,7 @@ fn restore_csfs_from_descriptors(
         .map_err(io_error)?;
     python_value(
         py,
-        &json!({"success":true,"output_file":output,"record_count":record_count,"output_bytes":output_bytes}),
+        &json!({"success":true,"output_file":output,"record_count":stats.record_count,"output_bytes":stats.output_bytes}),
     )
 }
 
@@ -359,10 +360,9 @@ fn generate_csfs_from_transcript(
     allow_unchecked_space: bool,
     scratch_dir: Option<PathBuf>,
 ) -> PyResult<Py<PyAny>> {
-    use crate::configuration_generation::{
-        self, csf_generation::disk_csf_generation_pipeline as disk,
-        shared_generation::GenerationOptions,
-    };
+    use crate::configuration_generation;
+    use crate::configuration_generation::csf_generation::disk_csf_generation_pipeline as disk;
+    use crate::configuration_generation::shared_generation::GenerationOptions;
     let texts = if let Ok(text) = transcript.extract::<String>() {
         vec![text]
     } else {

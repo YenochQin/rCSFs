@@ -24,6 +24,7 @@ pub struct TemporaryOutput {
 
 impl TemporaryOutput {
     /// Path of the temporary file.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

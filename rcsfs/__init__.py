@@ -31,6 +31,7 @@ from ._types import (
 
 __version__ = _native.__version__
 DESCRIPTOR_VERSION = _native.DESCRIPTOR_VERSION
+MAX_PRINCIPAL_QUANTUM_NUMBER = _native.MAX_PRINCIPAL_QUANTUM_NUMBER
 
 
 def descriptor_header_path(path: str | Path) -> Path:
@@ -299,6 +300,7 @@ def select_interacting_csfs(
 
 __all__ = [
     "DESCRIPTOR_VERSION",
+    "MAX_PRINCIPAL_QUANTUM_NUMBER",
     "CsfDatasetSplitStats",
     "CsfDatasetStats",
     "CsfGenerationEstimate",

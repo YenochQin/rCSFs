@@ -4,7 +4,7 @@
 
 ---
 
-## 未发布
+## [4.2.0] — 待发布
 
 - CSF 生成与 V3 描述符处理支持主量子数 `1 ≤ n ≤ 30`，Python 接口通过
   `rcsfs.MAX_PRINCIPAL_QUANTUM_NUMBER` 提供上限。
